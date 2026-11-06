@@ -103,7 +103,7 @@ test("删除、同文恢复和创建保持重逢本组，漫游同步独立 occu
 	assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["old", "same"]);
 	assert.equal(h.shuffle.getSnapshot().stats?.memoCount, 2);
 	const snapshot = (await h.trash.store.query()).items[0]!;
-	await h.trash.restore(snapshot.snapshotId);
+	await h.trash.restore(snapshot);
 	assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["old", "same"]);
 	assert.deepEqual(h.shuffle.getSnapshot().memos.map(memo => memo.contentSnapshot), ["old", "same", "same"]);
 	assert.equal(new Set(h.shuffle.getSnapshot().memos.map(memo => memo.id)).size, 3);

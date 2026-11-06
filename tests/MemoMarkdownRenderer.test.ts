@@ -27,6 +27,8 @@ test("复用未变卡片时，迟到的 Markdown 将任务绑定到已确认的�
 		renderer.queueMemoMarkdown(memo, content.asHtml(), 0, "normal", memo.contentSnapshot, "card-flow");
 		await waitFor(() => started);
 		renderer.retainCard({ querySelectorAll: () => [content.asHtml()] } as unknown as HTMLElement, { ...memo, id: "current" });
+		// 正文已转移到新卡片，释放旧卡片不能按旧 Memo 身份取消它。
+		renderer.releaseCard({ contains: () => false } as unknown as HTMLElement, "card-flow");
 		renderer.queueMemoMarkdown({ ...memo, id: "stale" }, content.asHtml(), -1, "normal", memo.contentSnapshot, "card-flow");
 		gate.resolve();
 		await waitFor(() => content.findAll("input").some(input => input.getAttr("data-knomo-memo-id") === "current"));
@@ -489,6 +491,44 @@ test("两个卡片表面保留运行中请求、最新 pending 和搜索版本�
 
 function setDomGlobals(): void {
 	(globalThis as unknown as { HTMLElement: typeof TestElement }).HTMLElement = TestElement;
+}
+
+for (const surface of ["card-flow", "mobile-search", "relations"] as const) {
+	for (const fail of [false, true]) {
+		test(`${surface} 单卡片释放取消排队和运行中请求（失败晚到：${fail}）`, async () => {
+			await ensureObsidianStub();
+			const { MarkdownRenderer } = await import("obsidian");
+			const { MemoMarkdownRenderer } = await import("../src/ui/MemoMarkdownRenderer");
+			setDomGlobals();
+			const original = MarkdownRenderer.render, gate = deferred<void>();
+			const calls: string[] = [], components: TestComponent[] = [];
+			MarkdownRenderer.render = async (_app, text, target) => {
+				calls.push(text); target.createSpan({ text });
+				if (text === "running") { await gate.promise; if (fail) throw new Error("late failure"); }
+			};
+			const renderer = new MemoMarkdownRenderer({ app: {} as never,
+				createComponent: () => { const c = new TestComponent(); components.push(c); return c as never; },
+				getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1 });
+			const running = new TestElement("div", { text: "confirmed" }), queued = new TestElement("div");
+			const survivor = new TestElement("div");
+			const card = { contains: (el: HTMLElement) => el === running.asHtml() || el === queued.asHtml() } as HTMLElement;
+			try {
+				renderer.queueMemoMarkdown(makeMemo(), running.asHtml(), 0, "normal", "running", surface);
+				renderer.queueSourceReferenceMarkdown(queued.asHtml(), "queued", "Daily/a.md", 0, surface);
+				renderer.queueMemoMarkdown(makeMemo(), survivor.asHtml(), 0, "normal", "survivor", surface);
+				renderer.releaseCard(card, surface); renderer.releaseCard(card, surface);
+				assert.equal(components[0].unloadCalls, 1, "运行中组件立即释放");
+				assert.deepEqual(calls, ["running"], "释放不能提前回收实际并发名额");
+				gate.resolve();
+				await waitFor(() => survivor.getText() === "survivor");
+				assert.deepEqual(calls, ["running", "survivor"]);
+				assert.equal(running.getText(), "confirmed");
+				assert.equal(components[0].unloadCalls, 1);
+				renderer.clear(surface);
+				assert.ok(components.every(c => c.unloadCalls === 1));
+			} finally { gate.resolve(); renderer.clear(surface); MarkdownRenderer.render = original; }
+		});
+	}
 }
 
 interface CreateElementOptions {

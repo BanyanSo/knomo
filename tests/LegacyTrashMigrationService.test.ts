@@ -230,7 +230,7 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 		getDailyFileForDate: async () => { throw new Error("Original Daily should be used."); },
 		updateCatalogPartition: async () => undefined, refreshCatalogPaths: async () => undefined,
 	});
-	assert.equal((await trash.restore(snapshots[0]!.snapshotId)).state, "restored");
+	assert.equal((await trash.restore(snapshots[0]!)).state, "restored");
 	await f.store.remove(snapshots[1]!);
 	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
 	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");

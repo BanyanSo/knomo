@@ -390,6 +390,7 @@ export const zhCN = {
 	"trash.writeUnconfirmed": "Daily 修改尚未确认，恢复副本已保留。请先核对 Daily，再决定是否重试。",
 	"trash.cleanupRetryOnly": "本次会话中重试仅清理恢复副本。",
 	"trash.restoredCleanupError": "正文已恢复，恢复副本未清理：{{error}}",
+	"trash.restoreSnapshotError": "无法核对选中的恢复副本，请刷新回收站后重试：{{error}}",
 	"trash.restoring": "恢复中",
 	"trash.purge": "永久清理",
 	"trash.clear": "清空回收站",

@@ -7,6 +7,44 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 const PATH = "Daily/2026-09-08.md";
 const BODY = "## Memos\n- 10:30 same memo\n- 10:30 same memo\n";
 
+for (const field of ["snapshotId", "deletedAt", "sourcePath", "logicalDate", "section", "rawBlock"] as const) {
+test(`首次 restore 核对选中快照的 ${field}，不创建 Daily`, async () => {
+	const f = await fixture();
+	const deleted = await f.service.delete(f.initial[0]!);
+	const selected = await f.store.read(deleted.snapshotId);
+	const collection = JSON.parse(f.vault.read("Knomo/knomo-trash.json")!);
+	collection.items[0][field] = { snapshotId: "replacement", deletedAt: "2026-09-09T00:00:00.000Z",
+		sourcePath: "Daily/2026-09-09.md", logicalDate: "2026-09-09", section: "## Other", rawBlock: "- 10:30 replaced copy" }[field];
+	f.vault.replace("Knomo/knomo-trash.json", JSON.stringify(collection));
+	f.vault.remove(PATH);
+	f.options.getOriginalDailyFile = async () => null;
+	await assert.rejects(() => f.service.restore(selected), /snapshot changed|snapshot unavailable/u);
+	assert.equal(f.vault.read("NewDaily/2026-09-08.md"), null);
+	assert.equal(JSON.parse(f.vault.read("Knomo/knomo-trash.json")!).items.length, 1);
+});
+}
+
+for (const changeDisk of [false, true]) {
+	test(`restore 排队前复制选中快照，排队期间磁盘变化：${changeDisk}`, async () => {
+		const f = await fixture();
+		const deleted = await f.service.delete(f.initial[0]!);
+		const selected = await f.store.read(deleted.snapshotId);
+		const gate = promiseGate();
+		const blocking = f.store.runExclusive(async () => gate.promise);
+		const restoring = f.service.restore(selected);
+		selected.rawBlock = "- 10:30 caller mutation";
+		if (changeDisk) {
+			const collection = JSON.parse(f.vault.read("Knomo/knomo-trash.json")!);
+			collection.items[0].rawBlock = "- 10:30 disk mutation";
+			f.vault.replace("Knomo/knomo-trash.json", JSON.stringify(collection));
+		}
+		const before = f.vault.read(PATH);
+		const result = changeDisk ? assert.rejects(restoring, /snapshot changed/u) : restoring;
+		gate.resolve(); await blocking; await result;
+		assert.equal(f.vault.read(PATH), changeDisk ? before : BODY);
+	});
+}
+
 test("生产 runtime 取消后拒绝提交已准备的删除，保留快照且不改 Daily", async () => {
 	const f = await fixture();
 	await f.store.query();
@@ -44,8 +82,8 @@ test("snapshot-first 删除同文 occurrence，独立 ID、独立 restore/purge�
 	const snapshots = (await f.store.query()).items;
 	assert.equal(snapshots.length, 2);
 	assert.equal(snapshots[0]!.rawBlock, snapshots[1]!.rawBlock);
-	await f.service.restore(first.snapshotId);
-	await f.service.restore(second.snapshotId);
+	await f.service.restore(snapshots.find(s => s.snapshotId === first.snapshotId)!);
+	await f.service.restore(snapshots.find(s => s.snapshotId === second.snapshotId)!);
 	assert.equal((await f.observations()).length, 2);
 	assert.equal(f.vault.read(PATH), BODY);
 	assert.equal((await f.store.query()).items.length, 0);
@@ -60,16 +98,17 @@ test("snapshot-first 删除同文 occurrence，独立 ID、独立 restore/purge�
 test("restore 使用目标 Parser 区间，拒绝不安全结构时保留快照", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete((await f.observations())[0]!);
+	const selectedDeleted = await f.store.read(deleted.snapshotId);
 	const unsafe = "## Memos\n```md\nunfinished\n";
 	f.vault.replace(PATH, unsafe);
 	f.events.length = 0;
-	await assert.rejects(() => f.service.restore(deleted.snapshotId), /Daily was not modified/u);
+	await assert.rejects(() => f.service.restore(selectedDeleted), /Daily was not modified/u);
 	assert.equal(f.vault.read(PATH), unsafe);
 	assert.equal(f.events.includes("daily-process"), false);
 	assert.equal((await f.store.query()).items.length, 1);
 	const safe = "## Memos\n- 08:00 ```js\n  code\n  ```\n  ## Fake\n## Other\n```md\n# Example\n```\n";
 	f.vault.replace(PATH, safe);
-	await f.service.restore(deleted.snapshotId);
+	await f.service.restore(selectedDeleted);
 	assert.equal(f.vault.read(PATH), safe.replace("## Other\n", "- 10:30 same memo\n## Other\n"));
 	assert.equal((await f.store.query()).items.length, 0);
 });
@@ -135,11 +174,12 @@ test("Catalog 失败不回滚 Daily；快照保持独立可查询", async () => 
 test("restore 原路径优先、原路径失效按日期配置追加；不跟踪历史文件移动", async () => {
 	const f = await fixture("## Memos\n- 10:30:27 memo\n  continuation\n");
 	const deleted = await f.service.delete(f.initial[0]!);
+	const selectedDeleted = await f.store.read(deleted.snapshotId);
 	const snapshot = await f.store.read(deleted.snapshotId);
 	assert.equal(snapshot.rawBlock, "- 10:30:27 memo\n  continuation");
 	f.vault.remove(PATH);
 	f.options.getOriginalDailyFile = async () => null;
-	const restored = await f.service.restore(deleted.snapshotId);
+	const restored = await f.service.restore(selectedDeleted);
 	assert.equal(restored.observation?.time, "10:30:27");
 	assert.equal(restored.observation?.sourcePath, "NewDaily/2026-09-08.md");
 	assert.match(f.vault.read("NewDaily/2026-09-08.md")!, /10:30:27 memo\n  continuation/u);
@@ -148,12 +188,13 @@ test("restore 原路径优先、原路径失效按日期配置追加；不跟踪
 test("restore blockId 冲突检查覆盖 Memo 外锚点，损坏 snapshot 不被覆盖或消费", async () => {
 	const f = await fixture("## Memos\n- 10:30 memo ^anchor\n");
 	const deleted = await f.service.delete(f.initial[0]!);
+	const selectedDeleted = await f.store.read(deleted.snapshotId);
 	f.vault.replace(PATH, "ordinary ^anchor\n## Memos\n");
-	await assert.rejects(() => f.service.restore(deleted.snapshotId), /block ID/u);
+	await assert.rejects(() => f.service.restore(selectedDeleted), /block ID/u);
 	assert.ok(await f.store.read(deleted.snapshotId));
 	const snapshot = await f.store.read(deleted.snapshotId);
 	f.vault.replace("Knomo/knomo-trash.json", "broken");
-	await assert.rejects(() => f.service.restore(deleted.snapshotId));
+	await assert.rejects(() => f.service.restore(selectedDeleted));
 	await assert.rejects(() => f.service.purge(snapshot));
 	assert.equal((await f.store.query()).errors.length, 1);
 	assert.equal(f.vault.read("Knomo/knomo-trash.json"), "broken");
@@ -168,14 +209,15 @@ test("restore 以完整 block ID 判断冲突，保留连字符和下划线边�
 		await context.test(`${existing}/${restored}`, async () => {
 			const f = await fixture(`## Memos\n- 10:30 memo ^${restored}\n`);
 			const deleted = await f.service.delete(f.initial[0]!);
+			const selectedDeleted = await f.store.read(deleted.snapshotId);
 			const before = `ordinary ^${existing}\n## Memos\n`;
 			f.vault.replace(PATH, before);
 			if (conflict) {
-				await assert.rejects(() => f.service.restore(deleted.snapshotId), /block ID/u);
+				await assert.rejects(() => f.service.restore(selectedDeleted), /block ID/u);
 				assert.equal(f.vault.read(PATH), before);
 				assert.equal((await f.store.query()).items.length, 1);
 			} else {
-				assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+				assert.equal((await f.service.restore(selectedDeleted)).state, "restored");
 				assert.equal(f.vault.read(PATH), `${before}- 10:30 memo ^${restored}\n`);
 				assert.equal((await f.store.query()).items.length, 0);
 			}
@@ -186,12 +228,13 @@ test("restore 以完整 block ID 判断冲突，保留连字符和下划线边�
 test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追加或旧 Catalog 覆盖", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);
+	const selectedDeleted = await f.store.read(deleted.snapshotId);
 	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
 	f.vault.app.vault.process = async (file, update) => {
 		if (file.path.endsWith(".json")) throw new Error("cleanup failed");
 		return process(file, update);
 	};
-	const restored = await f.service.restore(deleted.snapshotId);
+	const restored = await f.service.restore(selectedDeleted);
 	assert.equal(restored.state, "restored_cleanup_pending");
 	assert.equal(f.service.isRestoreCleanupPending(deleted.snapshotId), true);
 	assert.match(restored.message!, /正文已恢复|Content restored/u);
@@ -199,7 +242,7 @@ test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追
 	f.vault.replace(PATH, `later edit\n${f.vault.read(PATH)}`);
 	const content = f.vault.read(PATH);
 	f.vault.app.vault.process = process;
-	assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+	assert.equal((await f.service.restore(selectedDeleted)).state, "restored");
 	assert.equal(f.service.isRestoreCleanupPending(deleted.snapshotId), false);
 	assert.equal(f.vault.read(PATH), content);
 	assert.equal(f.catalog.length, calls);
@@ -208,6 +251,7 @@ test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追
 test("active editor 更新不当作落盘；未落盘保留 snapshot 且重试不再次追加", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);
+	const selectedDeleted = await f.store.read(deleted.snapshotId);
 	let text = f.vault.read(PATH)!;
 	let transactions = 0;
 	const file = f.vault.app.vault.getAbstractFileByPath(PATH) as TFile;
@@ -215,13 +259,13 @@ test("active editor 更新不当作落盘；未落盘保留 snapshot 且重试�
 		transaction: (change: { changes: Array<{ text: string }> }) => { transactions++; text = change.changes[0]!.text; } };
 	const view = { file, editor };
 	f.vault.app.workspace.getActiveViewOfType = (() => view) as typeof f.vault.app.workspace.getActiveViewOfType;
-	await assert.rejects(() => f.service.restore(deleted.snapshotId));
+	await assert.rejects(() => f.service.restore(selectedDeleted));
 	assert.equal(transactions, 1);
 	assert.equal((await f.store.query()).items.length, 1);
-	await assert.rejects(() => f.service.restore(deleted.snapshotId));
+	await assert.rejects(() => f.service.restore(selectedDeleted));
 	assert.equal(transactions, 1);
 	f.vault.replace(PATH, text);
-	assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+	assert.equal((await f.service.restore(selectedDeleted)).state, "restored");
 	assert.equal(transactions, 1);
 });
 
@@ -251,15 +295,16 @@ test("snapshot ID 冲突不覆盖；可读但内容被改的读回也拒绝删�
 test("restore I/O 已落盘却返回失败时保留副本，当前会话重试只清理", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);
+	const selectedDeleted = await f.store.read(deleted.snapshotId);
 	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
 	let calls = 0;
 	f.vault.app.vault.process = async (file, update) => {
 		if (file.path.endsWith(".json")) return process(file, update);
 		calls++; await process(file, update); throw new Error("uncertain restore");
 	};
-	await assert.rejects(() => f.service.restore(deleted.snapshotId), /after/u);
+	await assert.rejects(() => f.service.restore(selectedDeleted), /after/u);
 	assert.equal((await f.store.query()).items.length, 1);
-	assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+	assert.equal((await f.service.restore(selectedDeleted)).state, "restored");
 	assert.equal(calls, 1);
 	assert.equal((await f.observations()).length, 2);
 });
@@ -377,6 +422,7 @@ test("Restore 清理写后抛错和读回失败只重试清理，目录切换与
 		await context.test(failure, async () => {
 			const f = await fixture();
 			const deleted = await f.service.delete(f.initial[0]!);
+			const selectedDeleted = await f.store.read(deleted.snapshotId);
 			const selected = await f.store.read(deleted.snapshotId);
 			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
 			const read = f.vault.app.vault.read.bind(f.vault.app.vault);
@@ -395,7 +441,7 @@ test("Restore 清理写后抛错和读回失败只重试清理，目录切换与
 				if (cleanup && failure === "readback" && file.path.endsWith(".json")) throw new Error("readback failed");
 				return read(file);
 			};
-			assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored_cleanup_pending");
+			assert.equal((await f.service.restore(selectedDeleted)).state, "restored_cleanup_pending");
 			f.vault.app.vault.process = process;
 			f.vault.app.vault.read = read;
 			const daily = f.vault.read(PATH);
@@ -404,7 +450,7 @@ test("Restore 清理写后抛错和读回失败只重试清理，目录切换与
 				await f.store.save(selected);
 				await f.service.clear();
 			}
-			assert.equal((await f.service.restore(deleted.snapshotId)).state, "restored");
+			assert.equal((await f.service.restore(selectedDeleted)).state, "restored");
 			assert.equal(f.vault.read(PATH), daily);
 		});
 	}
@@ -452,7 +498,8 @@ test("独立 Trash 恢复保留完整 raw block 与分钟或秒精度", async (c
    const original = '## Memos\n- ' + time + ' first line\n  continuation\n';
    f.vault.replace(PATH, original);
    const deleted = await f.service.delete((await f.observations())[0]!);
-   await f.service.restore(deleted.snapshotId);
+   const selectedDeleted = await f.store.read(deleted.snapshotId);
+   await f.service.restore(selectedDeleted);
    assert.equal(f.vault.read(PATH), original);
    assert.equal((await f.observations())[0]!.time, time);
   });

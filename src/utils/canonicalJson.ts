@@ -1,5 +1,6 @@
 import { isRecord } from "./object";
 
+// Legacy 摘要保留原有 UTF-16 排序，避免改变既有迁移源的 revision。
 export function canonicalJson(value: unknown): string {
 	return JSON.stringify(toCanonicalValue(value));
 }

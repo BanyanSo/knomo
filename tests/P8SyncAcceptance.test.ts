@@ -90,7 +90,7 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 		await db.reset();
 		assert.equal((await db.read.query({ limit: 10 })).items.length, 3);
 		assert.equal((await db.trashStore.query()).items.length, 1);
-		await db.trash.restore(deleted.snapshotId);
+		await db.trash.restore(await db.trashStore.read(deleted.snapshotId));
 		assert.equal((await db.read.query({ limit: 10, text: "duplicate" })).items.length, 2);
 		assert.equal((await db.trashStore.query()).items.length, 0);
 		assert.equal((await da.trashStore.query()).items.length, 1);

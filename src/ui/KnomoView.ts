@@ -1347,9 +1347,7 @@ export class KnomoView extends ItemView {
 		this.presentationVisibilityReady = true;
 		this.register(this.containerEl.onWindowMigrated(() => this.startLayoutObserver()));
 		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
-		const handleMobileBack = (event: Event): void => this.handleMobileBack(event);
-		this.containerEl.doc.addEventListener("backbutton", handleMobileBack, { capture: true });
-		this.register(() => this.containerEl.doc.removeEventListener("backbutton", handleMobileBack, { capture: true }));
+		this.registerMobileBackHandler();
 		this.startLayoutObserver();
 		this.registerEvent(this.app.vault.on("modify", file => this.checkConfirmedDailyFile(file.path)));
 		this.registerEvent(this.app.vault.on("delete", file => this.checkConfirmedDailyFile(file.path)));
@@ -5508,6 +5506,13 @@ export class KnomoView extends ItemView {
 		this.randomReunionController.cancelPending();
 		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
+	}
+
+	private registerMobileBackHandler(): void {
+		const doc = this.containerEl.doc;
+		const handleMobileBack = (event: Event): void => this.handleMobileBack(event);
+		doc.addEventListener("backbutton", handleMobileBack, { capture: true });
+		this.register(() => doc.removeEventListener("backbutton", handleMobileBack, { capture: true }));
 	}
 
 	private handleMobileBack(event: Event): void {

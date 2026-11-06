@@ -38,6 +38,35 @@ function deferred() {
 // 只推进一个事件循环边界，不依赖任意毫秒延迟。
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
+for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {
+	test(`生产装配的 Monthly 事件在 ${mode} 时保留待协调状态，卸载后不再发布`, async t => {
+		const h = harness(t, mode === "disabled" ? "disabled" : "ready", true);
+		const listeners = new Map<string, (...args: unknown[]) => void>();
+		const start = Monthly.prototype.start;
+		t.mock.method(Monthly.prototype, "start", function (this: InstanceType<typeof Monthly>, owner: import("obsidian").Component) {
+			const vault = h.plugin.app.vault, on = vault.on;
+			vault.on = ((name: string, callback: (...args: unknown[]) => void) => {
+				listeners.set(name, callback); return on.call(vault, name as never, callback as never);
+			}) as never;
+			try { start.call(this, owner); } finally { vault.on = on; }
+		});
+		if (mode === "settings-failed") h.plugin.loadData = async () => { throw new Error("settings unreadable"); };
+		const loading = h.plugin.onload(); h.release(); await loading;
+		const runtime = h.plugin as unknown as { monthlyProjectionCoordinator: InstanceType<typeof Monthly> };
+		const monthly = runtime.monthlyProjectionCoordinator;
+		const { TFile } = await import("obsidian");
+		const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md" });
+		for (const event of ["create", "modify", "delete", "rename"]) listeners.get(event)!(file, "Daily/2026-09-13.md");
+		await turn();
+		assert.equal(monthly.getProjectionState(), "stale");
+		assert.ok((monthly as unknown as { reconciliationVersion: number }).reconciliationVersion >= 4);
+		const version = (monthly as unknown as { reconciliationVersion: number }).reconciliationVersion;
+		h.plugin.unload();
+		listeners.get("modify")!(file); await turn();
+		assert.equal((monthly as unknown as { reconciliationVersion: number }).reconciliationVersion, version);
+	});
+}
+
 test("启动读取旧迁移 completion 挂起时，生产命令仍可提交 Daily 编辑", async t => {
 	const h = harness(t, "ready", true);
 	const loading = h.plugin.onload();

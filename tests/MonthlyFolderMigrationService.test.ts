@@ -132,11 +132,11 @@ test("Monthly 实际搬迁保留同一会话 Restore cleanupOnly，重试不会�
 	});
 	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
 	f.vault.app.vault.process = async (file, update) => { if (file.path === OLD) throw new Error("cleanup failed"); return process(file, update); };
-	assert.equal((await trash.restore("s1")).state, "restored_cleanup_pending");
+	assert.equal((await trash.restore(await store.read("s1"))).state, "restored_cleanup_pending");
 	f.vault.app.vault.process = process;
 	const restored = f.vault.read("Daily/2026-09-09.md");
 	assert.equal((await f.service.migrateMonthlyMemoFolder("New")).trashError, undefined);
-	assert.equal((await trash.restore("s1")).state, "restored");
+	assert.equal((await trash.restore(await store.read("s1"))).state, "restored");
 	assert.equal(f.vault.read("Daily/2026-09-09.md"), restored);
 	assert.equal((await store.query()).items.length, 0);
 });

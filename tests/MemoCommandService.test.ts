@@ -13,7 +13,7 @@ const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
 after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
-test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失败不误报成功", async t => {
+test("生产 Trash 接线保留原句柄，核对选中快照；恢复清理失败不误报成功", async t => {
 	await ensureObsidianStub();
 	const { MemoCommandService } = await import("../src/services/MemoCommandService");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -51,7 +51,7 @@ test("生产 Trash 接线保留原句柄，snapshotId 寻址；恢复清理失�
 	assert.equal((await command.restore(deleted.items[0]!)).status, "saved");
 	await command.purge(deleted.items[1]!);
 	await command.clearTrash();
-	assert.deepEqual(calls.slice(1), ["s1", "s1", (await trash.store.query()).items[1], "clear"]);
+	assert.deepEqual(calls.slice(1), [(await trash.store.query()).items[0], (await trash.store.query()).items[0], (await trash.store.query()).items[1], "clear"]);
 });
 
 test("普通命令不访问 Identity，并将最初 observation handle 原样交给写入网关", async t => {

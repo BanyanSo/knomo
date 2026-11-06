@@ -3,6 +3,22 @@ import assert from "node:assert/strict";
 
 import { MarkdownRenderQueue } from "../src/ui/MarkdownRenderQueue";
 
+test("移除指定目标释放待执行帧，重新排队仍可运行", async () => {
+	const frames = new Map<number, () => void>();
+	let id = 0;
+	const target = {} as HTMLElement, calls: string[] = [];
+	const queue = new MarkdownRenderQueue({ concurrency: 1, getGeneration: () => 0,
+		scheduleTask: callback => { frames.set(++id, callback); return id; }, cancelTask: id => { frames.delete(id); } });
+	queue.enqueue("high", 0, async () => { calls.push("removed"); }, target);
+	assert.deepEqual(queue.removeTargets(candidate => candidate === target), [target]);
+	assert.equal(frames.size, 0);
+	queue.enqueue("normal", 0, async () => { calls.push("current"); }, target);
+	[...frames.values()][0]();
+	await Promise.resolve(); await Promise.resolve();
+	assert.deepEqual(calls, ["current"]);
+	queue.clear();
+});
+
 test("runs high priority markdown tasks before queued normal tasks", async () => {
 	let generation = 1;
 	const firstTask = createDeferred();

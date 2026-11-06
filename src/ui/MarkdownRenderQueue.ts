@@ -55,6 +55,23 @@ export class MarkdownRenderQueue {
 		}
 	}
 
+	removeTargets(matches: (target: HTMLElement) => boolean): HTMLElement[] {
+		const removed: HTMLElement[] = [];
+		const retain = (task: MarkdownRenderTask) => {
+			if (task.target === undefined || !matches(task.target)) return true;
+			if (this.pendingTargets.get(task.target) === task) this.pendingTargets.delete(task.target);
+			removed.push(task.target);
+			return false;
+		};
+		this.highPriorityQueue = this.highPriorityQueue.filter(retain);
+		this.normalPriorityQueue = this.normalPriorityQueue.filter(retain);
+		if (this.highPriorityQueue.length === 0 && this.normalPriorityQueue.length === 0 && this.scheduledTask !== null) {
+			this.options.cancelTask?.(this.scheduledTask);
+			this.scheduledTask = null;
+		}
+		return removed;
+	}
+
 	clear(): void {
 		if (this.scheduledTask !== null) this.options.cancelTask?.(this.scheduledTask);
 		this.scheduledTask = null;

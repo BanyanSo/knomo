@@ -193,7 +193,8 @@ export class MemoCommandService {
 	}
 
 	async restore(item: TrashMemoItem): Promise<MemoRestoreResult> {
-		const result = await this.requireTrashService().restore(item.snapshotId);
+		const result = await this.requireTrashService().restore({ snapshotId: item.snapshotId, deletedAt: item.deletedAt,
+			sourcePath: item.sourcePath, logicalDate: item.logicalDate, section: item.section, rawBlock: item.rawBlock });
 		const memo = result.observation === null ? null : await this.findMemoByObservation(result.observation).catch(error => {
 			if (!(error instanceof CatalogDiscoveryInvalidatedError)) logContinuationFailure("restore", "readback", error);
 			return null;

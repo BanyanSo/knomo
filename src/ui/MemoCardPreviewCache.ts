@@ -25,10 +25,6 @@ export class MemoCardPreviewCache {
 		return preview;
 	}
 
-	remove(memoId: string): void {
-		this.entries.delete(memoId);
-	}
-
 	retain(memoIds: ReadonlySet<string>): void {
 		for (const memoId of this.entries.keys()) {
 			if (!memoIds.has(memoId)) {

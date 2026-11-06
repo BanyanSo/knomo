@@ -59,13 +59,6 @@ export class MonthlyProjectionInputBuilder {
 		this.dailyInventory = options.dailyInventory ?? new DailyInventoryIndex();
 	}
 
-	async listPeriods(): Promise<string[]> {
-		return [...new Set([
-			...await this.listDailyPeriods(),
-			...await this.listOwnedMonthlyPeriods(),
-		])].sort();
-	}
-
 	async listDailyPeriods(): Promise<string[]> {
 		await this.ensureDailyInventory();
 		return this.dailyInventory.listPeriods();
@@ -168,8 +161,8 @@ export class MonthlyProjectionInputBuilder {
 		return getMonthlyArchivePath(this.getSettings(), period);
 	}
 
-	async initializeInventory(): Promise<void> {
-		await this.ensureDailyInventory();
+	async initializeInventory(force = false): Promise<void> {
+		await this.ensureDailyInventory(undefined, force);
 	}
 
 	async getConfigurationSnapshot(): Promise<MonthlyProjectionConfigurationSnapshot> {
@@ -205,10 +198,10 @@ export class MonthlyProjectionInputBuilder {
 		return date === null ? [] : [formatDatePart(date).slice(0, 7)];
 	}
 
-	private async ensureDailyInventory(runtime?: CooperativeTaskRuntime): Promise<DailyNotesConfig> {
+	private async ensureDailyInventory(runtime?: CooperativeTaskRuntime, force = false): Promise<DailyNotesConfig> {
 		const dailyConfig = await this.options.getDailyConfig();
 		const scopeKey = buildDailyInventoryScopeKey(dailyConfig);
-		if (this.dailyInventory.hasScope(scopeKey)) return dailyConfig;
+		if (!force && this.dailyInventory.hasScope(scopeKey)) return dailyConfig;
 		const entries: CatalogInventoryEntry[] = [];
 		const yieldController = runtime === undefined ? null : new CooperativeYieldController(runtime);
 		for (const file of this.app.vault.getMarkdownFiles()) {

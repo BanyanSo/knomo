@@ -4,6 +4,29 @@ import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import { RecordStatsViewStateController } from "../src/ui/RecordStatsViewStateController";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("返回监听始终从注册时的 Document 清理，迁移和重复清理不残留", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	for (const migrate of [false, true]) {
+		const original = new EventTarget(), popout = new EventTarget();
+		const cleanups: Array<() => void> = [];
+		let calls = 0;
+		const view = Object.assign(Object.create(KnomoView.prototype), {
+			containerEl: { doc: original }, handleMobileBack: () => { calls++; },
+			register: (cleanup: () => void) => cleanups.push(cleanup),
+		});
+		view.registerMobileBackHandler();
+		original.dispatchEvent(new Event("backbutton"));
+		assert.equal(calls, 1);
+		if (migrate) view.containerEl.doc = popout;
+		cleanups.forEach(cleanup => cleanup());
+		cleanups.forEach(cleanup => cleanup());
+		view.containerEl.doc = original;
+		original.dispatchEvent(new Event("backbutton")); popout.dispatchEvent(new Event("backbutton"));
+		assert.equal(calls, 1);
+	}
+});
+
 test("冷启动与新工作区首次打开始终显示全部笔记，不恢复旧页面、筛选或搜索", async () => {
 	for (const nav of ["all", "things", "review", "random", "shuffleDay", "trash", "time-buoy", "record-stats"]) {
 		for (const beforeOpen of [true, false]) {

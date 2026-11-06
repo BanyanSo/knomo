@@ -45,7 +45,7 @@ export class MemoMarkdownRenderer {
 	private readonly mobileSearchQueue: MarkdownRenderQueue;
 	private readonly relationsQueue: MarkdownRenderQueue;
 	private readonly activeComponents = createSurfaceMap(() => new Map<HTMLElement, Component>());
-	private readonly pendingComponents = createSurfaceMap(() => new Set<Component>());
+	private readonly pendingComponents = createSurfaceMap(() => new Map<Component, HTMLElement>());
 	private readonly latestRequestIds = createSurfaceMap(() => new WeakMap<HTMLElement, number>());
 	private readonly surfaceEpochs = createSurfaceMap(() => 0);
 	private readonly unloadedComponents = new WeakSet<Component>();
@@ -128,8 +128,19 @@ export class MemoMarkdownRenderer {
 	}
 
 	releaseCard(card: HTMLElement, surface: MemoMarkdownSurface): void {
+		const containers = new Set(this.getQueue(surface).removeTargets(container => card.contains(container)));
+		for (const [component, container] of this.pendingComponents[surface]) {
+			if (!card.contains(container)) continue;
+			containers.add(container);
+			this.releasePendingComponent(component, surface);
+		}
 		for (const container of this.activeComponents[surface].keys()) {
-			if (card.contains(container)) this.releaseContainerComponent(container, surface);
+			if (card.contains(container)) containers.add(container);
+		}
+		for (const container of containers) {
+			this.latestRequestIds[surface].delete(container);
+			this.memoBindings.delete(container);
+			this.releaseContainerComponent(container, surface);
 		}
 	}
 
@@ -148,7 +159,7 @@ export class MemoMarkdownRenderer {
 			this.unloadComponent(component);
 		}
 		this.activeComponents[surface].clear();
-		for (const component of this.pendingComponents[surface]) {
+		for (const component of this.pendingComponents[surface].keys()) {
 			this.unloadComponent(component);
 		}
 		this.pendingComponents[surface].clear();
@@ -233,7 +244,7 @@ export class MemoMarkdownRenderer {
 		}
 		const renderTarget = container.createDiv();
 		renderTarget.detach();
-		const component = this.createRenderComponent(surface);
+		const component = this.createRenderComponent(container, surface);
 		let adopted = false;
 		try {
 			await MarkdownRenderer.render(
@@ -283,7 +294,7 @@ export class MemoMarkdownRenderer {
 		}
 		const renderTarget = container.createDiv();
 		renderTarget.detach();
-		const component = this.createRenderComponent(surface);
+		const component = this.createRenderComponent(container, surface);
 		let adopted = false;
 		try {
 			await MarkdownRenderer.render(this.options.app, text, renderTarget, sourcePath, component);
@@ -330,10 +341,10 @@ export class MemoMarkdownRenderer {
 		};
 	}
 
-	private createRenderComponent(surface: MemoMarkdownSurface): Component {
+	private createRenderComponent(container: HTMLElement, surface: MemoMarkdownSurface): Component {
 		const component = this.options.createComponent();
 		component.load();
-		this.pendingComponents[surface].add(component);
+		this.pendingComponents[surface].set(component, container);
 		return component;
 	}
 

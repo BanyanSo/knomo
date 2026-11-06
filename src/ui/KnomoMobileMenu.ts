@@ -103,32 +103,35 @@ export class KnomoMobileMenu {
 			});
 			observer.observe(doc.body, { childList: true, subtree: true });
 			const rect = options.trigger.getBoundingClientRect();
+			const existingBackdrops = new Set(Array.from(doc.querySelectorAll(".suggestion-bg")));
 			menu.showAtPosition({ x: rect.left, y: rect.bottom, width: rect.width }, doc);
 			const menuEl = titleElements.map(title => title.closest<HTMLElement>(".menu")).find(element => element !== null);
 			if (menuEl) {
 				session.element = menuEl;
 				menuEl.classList.add("knomo-mobile-menu", "knomo-mobile-menu-" + options.kind);
-				const backdrop = menuEl.nextElementSibling;
-				if (backdrop instanceof win.HTMLElement && backdrop.matches(".suggestion-bg")) {
-					const dismiss = (): void => {
-						if (this.current !== session) return;
-						dismissed = true;
-						session.finish();
-						menu.hide();
-					};
-					const click = (event: MouseEvent): void => {
-						event.preventDefault();
-						event.stopImmediatePropagation();
-						dismiss();
-					};
-					// 只接管本菜单的蒙版，菜单项及其他弹层不经过全局 click 捕获。
-					backdrop.addEventListener("click", click, true);
-					const releaseTap = registerMobileMenuTap(menuEl, backdrop, dismiss);
-					releaseInteraction = () => {
-						backdrop.removeEventListener("click", click, true);
-						releaseTap();
-					};
-				}
+				// 手机 sheet 的蒙版在菜单之前；只认本次新出现的相邻蒙版，避免接管其他弹层。
+				const backdrop = [menuEl.previousElementSibling, menuEl.nextElementSibling].find(
+					(element): element is HTMLElement => element instanceof win.HTMLElement
+						&& element.matches(".suggestion-bg") && !existingBackdrops.has(element),
+				) ?? null;
+				const dismiss = (): void => {
+					if (this.current !== session) return;
+					dismissed = true;
+					session.finish();
+					menu.hide();
+				};
+				const click = (event: MouseEvent): void => {
+					event.preventDefault();
+					event.stopImmediatePropagation();
+					dismiss();
+				};
+				backdrop?.addEventListener("click", click, true);
+				// 浮动菜单可没有蒙版，菜单项仍须独立接管首次轻触。
+				const releaseTap = registerMobileMenuTap(menuEl, backdrop, dismiss);
+				releaseInteraction = () => {
+					backdrop?.removeEventListener("click", click, true);
+					releaseTap();
+				};
 			}
 		} catch (error) {
 			this.close();

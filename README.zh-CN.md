@@ -775,4 +775,4 @@ persistence、migration、identity、数据安全及跨服务语义修改须先�
 
 [品牌政策](./BRANDING.md)将代码许可与官方身份分开。软件许可允许 fork 和商业使用，但不得造成官方背书的误解。欢迎保留原项目或 [Buy me a coffee](https://www.buymeacoffee.com/banyanso) 链接，这不是许可条件。新贡献的许可见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-开发源码位于[本仓库](https://github.com/BanyanSo/knomo)。每次 GPL 二进制分发都必须明确提供取得完整对应源码的方式。本次许可文件修改尚未实现发行打包与源码交付，正式发布前仍需完成[发行要求](./LICENSING.md#source-and-distribution-release-work-still-required)。
+开发源码位于[本仓库](https://github.com/BanyanSo/knomo)。每次 GPL 二进制分发都必须明确提供取得完整对应源码的方式。

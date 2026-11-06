@@ -775,4 +775,4 @@ Historical MIT grants remain valid: you may continue to use material previously 
 
 The [brand policy](./BRANDING.md) separates code licensing from official identity. Forks and commercial use are allowed under the software license; do not imply official endorsement. A project link or [Buy me a coffee](https://www.buymeacoffee.com/banyanso) link is appreciated, not required. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the license of new contributions.
 
-Development source is available in [this repository](https://github.com/BanyanSo/knomo). Each GPL binary distribution must provide a clearly identified way to obtain its complete Corresponding Source. The current licensing change does not yet implement release packaging or source delivery; see the [remaining release requirements](./LICENSING.md#source-and-distribution-release-work-still-required).
+Development source is available in [this repository](https://github.com/BanyanSo/knomo). Each GPL binary distribution must provide a clearly identified way to obtain its complete Corresponding Source.

@@ -193,7 +193,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
 	const actionKeys: Record<string, TranslationKey> = {
-		"share-image": "share.share", edit: "card.edit", reference: "card.reference", "copy-text": "card.copyText",
+		reference: "card.reference", edit: "card.edit", "share-image": "share.share", "copy-text": "card.copyText",
 		"open-daily": "card.openDaily", "copy-link": "card.copyLink", relations: "relations.title", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");

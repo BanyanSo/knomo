@@ -657,7 +657,7 @@ test("记录统计钻取在分页前处理标签、引用、小时和并列日�
 	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "with-tag", ...range }).query, limit: 50 })).items.map((item) => item.content), ["parent"]);
 	assert.equal((await service.query({ ...buildRecordStatsCatalogQuery({ type: "no-tag", ...range }).query, limit: 50 })).items.length, 3);
 	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "with-image", ...range }).query, limit: 50 })).items.map((item) => item.content), ["image"]);
-	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "tag", ...range, tagKey: "project", tagLabel: "Project" }).query, limit: 50 })).items.map((item) => item.content), ["parent"]);
+	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "tag", ...range, tagKey: "project", tagLabel: "Project" }).query, limit: 50 })).items.map((item) => item.content), []);
 	assert.deepEqual((await service.query({ ...buildRecordStatsCatalogQuery({ type: "hour", ...range, hour: 9 }).query, limit: 50 })).items.map((item) => item.content), ["explicit [[Daily#^abc]]", "parent"]);
 	const references = await service.query({ ...buildRecordStatsCatalogQuery({ type: "references", ...range }).query, limit: 1 });
 	assert.equal(references.nextCursor, null, "统一 evaluator 在分页前判定引用条件，不提供无结果的额外页面");
@@ -690,6 +690,7 @@ test("记录统计从 Daily aggregate 构建，引用计数取当前 Markdown", 
 	assert.equal(prepared?.daily.get("2026-08-02")?.referenceMemoCount, 0);
 	assert.equal(prepared?.daily.get("2026-08-01")?.hourCounts[8], 1);
 	assert.equal(prepared?.daily.get("2026-08-01")?.tagMemoCounts.get("work/project"), 1);
+	assert.equal(prepared?.daily.get("2026-08-01")?.tagMemoCounts.get("work"), undefined);
 	assert.equal(prepared?.tagDisplayNames.get("work/project"), "Work/Project");
 });
 

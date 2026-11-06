@@ -18,6 +18,244 @@ import { InMemoryVault } from "./helpers/InMemoryVault";
 
 const MONTHLY_PATH = "Memos/2026-08.md";
 
+test("历史核验期间的 Catalog settle 共用文件读取，当前月先进入调度", async () => {
+	const fixture = createFixture({
+		"Daily/2026-08-01.md": "- 09:00 current\n",
+		...Object.fromEntries(["01", "02", "03"].map(month => [
+			`Memos/2026-${month}.md`, "<!-- knomo:monthly-archive -->\nprevious\n",
+		])),
+	});
+	const entered = deferred(), release = deferred();
+	const read = fixture.replica.app.vault.readBinary;
+	let historyReads = 0, scheduled = 0;
+	fixture.replica.app.workspace.containerEl.win.setTimeout = (() => ++scheduled) as unknown as typeof window.setTimeout;
+	fixture.replica.app.vault.readBinary = async file => {
+		if (file.path !== "Daily/2026-08-01.md" && file.path !== MONTHLY_PATH && ++historyReads === 1) {
+			entered.resolve(); await release.promise;
+		}
+		return read(file);
+	};
+	const starting = fixture.coordinator.initialize();
+	await entered.promise;
+	const settled = fixture.coordinator.handleCatalogSettled();
+	try {
+		assert.ok(scheduled > 0, "历史核验尚未完成时，当前月已安排调度");
+		assert.deepEqual(await fixture.coordinator.run(true), { projected: 1, failed: 0 });
+		assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /current/u);
+	} finally { release.resolve(); }
+	await Promise.all([starting, settled]);
+	assert.equal(historyReads, 3);
+	assert.equal((fixture.coordinator as unknown as { pendingPeriods: Set<string> }).pendingPeriods.has("2026-08"), false,
+		"扫描期间已校验并提交的当前月沿用本次提交结果");
+});
+
+test("等价配置通知沿用历史核验，同批 settle 可独立触发 Daily fallback", async () => {
+	const fixture = createFixture({
+		"Memos/2026-07.md": "<!-- knomo:monthly-archive -->\nprevious\n",
+		"Daily/2026-06-01.md": "- 09:00 historical\n",
+	}, () => true, { listCatalogPeriods: async () => { throw new Error("Catalog partial"); } });
+	const entered = deferred(), release = deferred();
+	const read = fixture.replica.app.vault.readBinary;
+	let reads = 0;
+	fixture.replica.app.vault.readBinary = async file => {
+		reads++; entered.resolve(); await release.promise; return read(file);
+	};
+	const starting = fixture.coordinator.initialize();
+	await entered.promise;
+	await fixture.coordinator.handleConfigurationChanged();
+	const settled = fixture.coordinator.handleCatalogSettled();
+	release.resolve();
+	await Promise.all([starting, settled]);
+	assert.equal(reads, 1);
+	assert.equal((fixture.coordinator as unknown as { discoveryPending: boolean }).discoveryPending, false);
+	assert.deepEqual(await fixture.coordinator.run(true), { projected: 3, failed: 0 });
+	assert.match(fixture.replica.read("Memos/2026-06.md") ?? "", /historical/u);
+});
+
+for (const change of ["stop", "configuration"] as const) {
+	test(`历史核验在 ${change} 后停止后续旧文件读取`, async () => {
+		const fixture = createFixture(Object.fromEntries(["01", "02", "03"].map(month => [
+			`Memos/2026-${month}.md`, "<!-- knomo:monthly-archive -->\nprevious\n",
+		])));
+		const entered = deferred(), release = deferred();
+		const read = fixture.replica.app.vault.readBinary;
+		let reads = 0;
+		fixture.replica.app.vault.readBinary = async file => {
+			if (++reads === 1) { entered.resolve(); await release.promise; }
+			return read(file);
+		};
+		const starting = fixture.coordinator.initialize();
+		await entered.promise;
+		let changed = Promise.resolve();
+		if (change === "stop") (fixture.coordinator as unknown as { stop(): void }).stop();
+		else {
+			fixture.settings.monthlyDateOrder = "desc";
+			changed = fixture.coordinator.handleConfigurationChanged();
+		}
+		release.resolve();
+		await Promise.all([starting, changed]);
+		assert.equal(reads, change === "stop" ? 1 : 4);
+	});
+}
+
+test("历史核验逐文件让行，失败后可重新读取并完成发现", async () => {
+	let yields = 0, fail = true;
+	const fixture = createFixture({
+		"Memos/2026-07.md": "<!-- knomo:monthly-archive -->\nprevious\n",
+	}, () => true, { yieldControl: async () => { yields++; } });
+	const read = fixture.replica.app.vault.readBinary;
+	fixture.replica.app.vault.readBinary = async file => {
+		if (fail) throw new Error("temporary I/O failure");
+		return read(file);
+	};
+	await fixture.coordinator.initialize();
+	fail = false;
+	await fixture.coordinator.handleCatalogSettled();
+	assert.ok(yields > 0);
+	assert.equal((fixture.coordinator as unknown as { discoveryPending: boolean }).discoveryPending, false);
+});
+
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>(yes => { resolve = yes; });
+	return { promise, resolve };
+}
+
+function startRegisteredEvents(f: ReturnType<typeof createFixture>) {
+	const events = new Map<string, (...args: unknown[]) => void>();
+	const cleanups: Array<() => void> = [];
+	const timers = new Map<number, () => void>();
+	let timerId = 0;
+	f.replica.app.vault.on = ((name: string, callback: (...args: unknown[]) => void) => {
+		events.set(name, callback); return {};
+	}) as never;
+	f.replica.app.workspace.containerEl.win.setTimeout = ((run: () => void) => { timers.set(++timerId, run); return timerId; }) as never;
+	f.replica.app.workspace.containerEl.win.clearTimeout = ((id: number) => timers.delete(id)) as never;
+	f.coordinator.start({ registerEvent() {}, registerDomEvent() {}, register: (cleanup: () => void) => cleanups.push(cleanup) } as never);
+	return { events, timers, stop: () => cleanups.forEach(cleanup => cleanup()),
+		settle: async () => {
+			await new Promise<void>(resolve => setImmediate(resolve));
+			await (f.coordinator as unknown as { running: Promise<unknown> | null }).running?.catch(() => undefined);
+			await new Promise<void>(resolve => setImmediate(resolve));
+		} };
+}
+
+test("Monthly 注册事件在配置暂停期间不读设置，恢复补齐创建和删除的月份", async () => {
+	let allowed = true;
+	const f = createFixture({ "Daily/2026-07-01.md": "- 09:00 removed\n" }, () => allowed);
+	const h = startRegisteredEvents(f);
+	try {
+		await f.coordinator.initialize(); await f.coordinator.run(true);
+		allowed = false;
+		const getPeriod = f.inputBuilder.getMonthlyPeriod.bind(f.inputBuilder);
+		f.inputBuilder.getMonthlyPeriod = () => { throw new Error("settings unavailable"); };
+		const removed = f.replica.app.vault.getAbstractFileByPath("Daily/2026-07-01.md");
+		f.replica.remove("Daily/2026-07-01.md");
+		h.events.get("delete")!(removed);
+		const created = await f.replica.app.vault.create("Daily/2026-06-01.md", "- 09:00 missed creation\n");
+		h.events.get("create")!(created);
+		await h.settle();
+		assert.equal(f.coordinator.getProjectionState(), "stale");
+		assert.equal(f.replica.read("Memos/2026-06.md"), null);
+		allowed = true; f.inputBuilder.getMonthlyPeriod = getPeriod;
+		await f.coordinator.handleConfigurationChanged(); await f.coordinator.run(true);
+		assert.match(f.replica.read("Memos/2026-06.md")!, /missed creation/u);
+		assert.doesNotMatch(f.replica.read("Memos/2026-07.md")!, /removed/u);
+		assert.equal(f.coordinator.getProjectionState(), "ready");
+	} finally { h.stop(); }
+});
+
+for (const failure of ["settings", "checkpoint", "scheduler"] as const) {
+	test(`Monthly 注册事件及定时器接住 ${failure} 失败，恢复后重试`, async () => {
+		const store = new InMemoryMemoCatalogStore();
+		const f = createFixture({ "Daily/2026-08-01.md": "- 09:00 before\n" }, () => true, { checkpointStore: store });
+		const h = startRegisteredEvents(f);
+		try {
+			await f.coordinator.initialize(); await f.coordinator.run(true);
+			const period = f.inputBuilder.getMonthlyPeriod.bind(f.inputBuilder), setMeta = store.setMeta.bind(store);
+			const yieldControl = (f.coordinator as unknown as { yieldControl(): Promise<void> }).yieldControl;
+			f.replica.replace("Daily/2026-08-01.md", "- 09:00 recovered\n");
+			if (failure === "settings") f.inputBuilder.getMonthlyPeriod = () => { throw new Error("settings unreadable"); };
+			else if (failure === "checkpoint") store.setMeta = async () => { throw new Error("checkpoint unavailable"); };
+			else (f.coordinator as unknown as { yieldControl(): Promise<void> }).yieldControl = async () => { throw new Error("scheduler failure"); };
+			h.events.get("modify")!(f.replica.app.vault.getAbstractFileByPath("Daily/2026-08-01.md"));
+			await h.settle();
+			if (failure === "scheduler") { const callback = [...h.timers.values()].at(-1)!; h.timers.clear(); callback(); await h.settle(); }
+			assert.equal(f.coordinator.getProjectionState(), "failed");
+			assert.ok(h.timers.size > 0);
+			f.inputBuilder.getMonthlyPeriod = period; store.setMeta = setMeta;
+			(f.coordinator as unknown as { yieldControl(): Promise<void> }).yieldControl = yieldControl;
+			const callback = [...h.timers.values()].at(-1)!; h.timers.clear(); callback(); await h.settle();
+			assert.equal(f.coordinator.getProjectionState(), "ready");
+			assert.match(f.replica.read(MONTHLY_PATH)!, /recovered/u);
+		} finally { h.stop(); }
+	});
+}
+
+test("Monthly 已注册事件等待期间卸载，晚到失败不发布状态或重试", async () => {
+	const f = createFixture({});
+	const h = startRegisteredEvents(f);
+	let notifications = 0;
+	(f.coordinator as unknown as { options: { onStateChanged: () => void } }).options.onStateChanged = () => { notifications++; };
+	const entered = deferred(), release = deferred();
+	f.inputBuilder.updateDailyFile = async () => { entered.resolve(); await release.promise; throw new Error("late I/O failure"); };
+	const file = await f.replica.app.vault.create("Daily/2026-08-01.md", "- 09:00 memo\n");
+	h.events.get("create")!(file); await entered.promise;
+	h.stop(); release.resolve(); await h.settle();
+	assert.equal(notifications, 0); assert.equal(h.timers.size, 0);
+	assert.equal(f.replica.read(MONTHLY_PATH), null);
+});
+
+for (const stage of ["build", "hash", "process", "readback", "create-readback"] as const) {
+	for (const change of ["rename", "folder", "replace"] as const) {
+		test(`Monthly 在 ${stage} 期间 ${change} 目标后拒绝旧对象并可重试`, async () => {
+			const previous = "<!-- knomo:monthly-archive -->\nprevious\n";
+			const f = createFixture({ "Daily/2026-08-01.md": "- 09:00 current\n",
+				...(stage === "create-readback" ? {} : { [MONTHLY_PATH]: previous }) });
+			await f.coordinator.initialize();
+			const vault = f.replica.app.vault;
+			let changed = false;
+			let movedContent: string | null = null;
+			const movedPath = change === "folder" ? "Moved/2026-08.md" : "Memos/moved.md";
+			const changeTarget = async () => {
+				if (changed) return;
+				changed = true;
+				const file = vault.getAbstractFileByPath(MONTHLY_PATH);
+				assert.ok(file instanceof TFile);
+				movedContent = f.replica.read(MONTHLY_PATH);
+				f.replica.remove(MONTHLY_PATH);
+				if (change === "replace") await vault.create(MONTHLY_PATH, movedContent!);
+				else {
+					await vault.create(movedPath, movedContent!);
+					file.path = movedPath;
+				}
+			};
+			if (stage === "build") {
+				const build = f.inputBuilder.build.bind(f.inputBuilder);
+				f.inputBuilder.build = async (...args) => { const result = await build(...args); await changeTarget(); return result; };
+			} else if (stage === "process") {
+				const process = vault.process;
+				vault.process = async (...args) => { await changeTarget(); return process(...args); };
+			} else {
+				const read = vault.readBinary;
+				let reads = 0;
+				vault.readBinary = async file => {
+					const result = await read(file);
+					if (file.path === MONTHLY_PATH && ++reads === (stage === "readback" ? 2 : 1)) await changeTarget();
+					return result;
+				};
+			}
+			assert.deepEqual(await f.coordinator.run(true), { projected: 0, failed: 0 });
+			assert.equal(changed, true);
+			assert.equal(f.coordinator.getProjectionMetadata("2026-08"), null);
+			assert.equal(f.coordinator.getProjectionState(), "stale");
+			assert.equal(f.replica.read(change === "replace" ? MONTHLY_PATH : movedPath), movedContent);
+			assert.deepEqual(await f.coordinator.run(true), { projected: 1, failed: 0 });
+			assert.match(f.replica.read(MONTHLY_PATH)!, /current/u);
+		});
+	}
+}
+
 for (const stage of ["build", "hash", "process", "folder"] as const) {
 	test(`Monthly 在 ${stage} 等待期间源变化拒绝旧提交，下一轮收敛`, async () => {
 		const dailyPath = "Daily/2026-08-01.md";

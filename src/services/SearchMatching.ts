@@ -1,6 +1,7 @@
 import type { CatalogObservation, CatalogQueryFilter } from "../types/catalog";
 import type { SearchDate } from "../types/search";
 import { normalizeSearchText } from "../utils/searchText";
+import { normalizeTagKey } from "../utils/tags";
 
 export function getCatalogTextTerms(request: CatalogQueryFilter): string[] {
 	return [...new Set([...(request.textTerms ?? []), ...(request.text === undefined ? [] : [request.text])]
@@ -57,6 +58,9 @@ export function getCatalogQueryKey(input: CatalogQueryFilter): string {
 
 export function narrowCatalogQuery(request: CatalogQueryFilter): CatalogQueryFilter {
 	const query = { ...request };
+	const exactTags = [...new Set(query.exactTags?.map(normalizeTagKey).filter(Boolean) ?? [])].sort();
+	if (exactTags.length > 0) query.exactTags = exactTags;
+	else delete query.exactTags;
 	if (query.searchDate?.kind === "range") {
 		query.fromDate = query.fromDate === undefined ? query.searchDate.fromDate : maxDate(query.fromDate, query.searchDate.fromDate);
 		query.toDate = query.toDate === undefined ? query.searchDate.toDate : minDate(query.toDate, query.searchDate.toDate);
@@ -79,7 +83,7 @@ export function narrowCatalogQuery(request: CatalogQueryFilter): CatalogQueryFil
 			&& (query.fromDate === query.excludeDate || !matchesSearchDate(query.fromDate, query.searchDate)
 				|| (query.monthDay !== undefined && query.fromDate.slice(5) !== query.monthDay)
 				|| (query.dayOfMonth !== undefined && query.fromDate.slice(8) !== query.dayOfMonth)))) query.matchNone = true;
-	if (query.hasTag === false && query.tags?.length) query.matchNone = true;
+	if (query.hasTag === false && (query.tags?.length || query.exactTags?.length)) query.matchNone = true;
 	if (query.monthDay !== undefined && query.dayOfMonth !== undefined && query.monthDay.slice(3) !== query.dayOfMonth) query.matchNone = true;
 	if (!query.matchNone && query.fromDate !== undefined && query.toDate !== undefined
 		&& (query.monthDay !== undefined || query.dayOfMonth !== undefined || query.searchDate?.kind === "month-day")
@@ -117,6 +121,9 @@ export function intersectCatalogFilters(left: CatalogQueryFilter, right: Catalog
 	if (left.fromDate !== undefined && right.fromDate !== undefined) result.fromDate = maxDate(left.fromDate, right.fromDate);
 	if (left.toDate !== undefined && right.toDate !== undefined) result.toDate = minDate(left.toDate, right.toDate);
 	if (left.tags && right.tags) result.tags = [...new Set([...left.tags, ...right.tags])];
+	if (left.exactTags !== undefined || right.exactTags !== undefined) {
+		result.exactTags = [...new Set([...(left.exactTags ?? []), ...(right.exactTags ?? [])])];
+	}
 	if (left.logicalDates && right.logicalDates) result.logicalDates = left.logicalDates.filter(date => right.logicalDates!.includes(date));
 	if (left.sourcePaths && right.sourcePaths) result.sourcePaths = left.sourcePaths.filter(source => right.sourcePaths!.includes(source));
 	if (left.observationKeys && right.observationKeys) {

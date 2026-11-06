@@ -308,6 +308,8 @@ test("mobile Composer keeps send reachable when the keyboard reduces the input h
 				const offset = win.KnomoComposerLayoutFixture.calculateMobileComposerDockOffset({ layerBottom: innerHeight, composerDockTop: dockTop, toolbarAnchorInset: inset, targetGap: 4 });
 				layer.style.setProperty("--knomo-mobile-composer-bottom-offset", offset + "px");
 				layer.querySelector<HTMLElement>(".knomo-mobile-composer-content")!.style.transition = "none";
+				// 几何检查针对停靠完成状态；等待真实入场裁切结束后再点击按钮。
+				await Promise.all(layer.querySelector<HTMLElement>(".knomo-mobile-composer-content")!.getAnimations().map(animation => animation.finished));
 			}, dockTop);
 			const send = await page.locator(".knomo-send-button").boundingBox();
 			assert.ok(send);

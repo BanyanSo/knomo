@@ -1,4 +1,5 @@
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
+import { rebindMemoImageOccurrence } from "./KnomoCardImages";
 
 export function getMemoRenderKey(memo: MemoRecord): string {
 	return memo.catalog?.renderKey ?? memo.id;
@@ -46,6 +47,7 @@ export function rebindMemoCard(card: HTMLElement, memo: MemoRecord): void {
 	const previousId = card.getAttribute("data-memo-id");
 	card.setAttribute("data-memo-id", memo.id);
 	card.setAttribute("data-memo-render-key", getMemoRenderKey(memo));
+	rebindMemoImageOccurrence(card, memo);
 	for (const attribute of ["data-memo-id", "data-knomo-memo-id"]) {
 		for (const element of Array.from(card.querySelectorAll(`[${attribute}]`))) {
 			if (element.getAttribute(attribute) === previousId) element.setAttribute(attribute, memo.id);

@@ -7,6 +7,32 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("热启动和显式刷新仅核对文件头，未变化 Daily 不重读正文", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	for (const boot of [0, 1]) {
+		const fixture = await createCoordinatorFixture([{ path: "Journal/2026-08-09.md", content: "- 09:00 kept\n", mtime: 10 }]);
+		const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+			async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+			{ now: () => 1000, fullAuditIntervalMs: 10_000 });
+		t.mock.method(store, "listFiles", async () => { throw new Error("Inventory must not load full file payloads"); });
+		try {
+			coordinator.start(fixture.owner);
+			await coordinator.initialize();
+			await coordinator.waitForIdle();
+			assert.equal(fixture.readCount(), boot === 0 ? 1 : 0);
+			const before = fixture.readCount();
+			assert.equal((await coordinator.refreshLocalCatalog()).failed, 0);
+			assert.equal(fixture.readCount(), before);
+			assert.equal((await store.query({ limit: 5 })).items[0]?.content, "kept");
+		} finally { fixture.unload(); }
+	}
+});
+
 test("索引准备分片期间修改、直接提交和卸载不会发布旧分区", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -121,6 +147,176 @@ test("搜索旧缓存自动更新未编辑 Daily 的 token，内存和 IndexedDB
 		request.onsuccess = () => resolve();
 		request.onerror = () => reject(request.error);
 	});
+});
+
+test("历史关系锚点旧缓存自动刷新未编辑 Daily，重启后复用新分区", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator, CATALOG_CHECKPOINT_META_KEY } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser, CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService, buildCatalogPartition } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const { hashText } = await import("../src/utils/hash");
+	const databaseName = `relation-anchor-upgrade-${Date.now()}`;
+	const oldVersions = [15, 16];
+	const files = [
+		{ path: "Journal/2026-08-09.md", content: "- 10:00 first\n  last ^memo\n  - child ^child\n- 11:00 first\n\t\n\t^terminal\n- 10:50:45 title\n\t- last ^no1wu1\n", mtime: 10 },
+		{ path: "Journal/2026-08-10.md", content: "- 12:00 summary [[2026-08-09#^memo]] [[2026-08-09#^terminal]] [[2026-08-09#^no1wu1]]\n", mtime: 10 },
+	];
+	try {
+		for (const store of [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(databaseName, { factory: indexedDB, keyRange: IDBKeyRange })]) {
+			for (let boot = 0; boot < oldVersions.length + 2; boot++) {
+				const fixture = await createCoordinatorFixture(files);
+				const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(store),
+					new DiaryMemoParser(async bytes => sha256(bytes)), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }),
+					{ now: () => 1000 + boot * 1000, fullAuditIntervalMs: 10_000 });
+				try {
+					coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+					assert.equal(fixture.readCount(), boot === oldVersions.length + 1 ? 0 : files.length, `boot ${boot}`);
+					const target = await store.getFileRevisionBatch(files[0].path);
+					assert.deepEqual(target!.file.relations!.nodes.map(node => node.blockId), ["memo", "terminal", "no1wu1"]);
+					assert.equal(target!.file.relations!.anchors.memo, 1);
+					assert.equal(target!.file.relations!.anchors.terminal, 1);
+					assert.equal(target!.file.relations!.anchors.no1wu1, 1);
+					assert.equal(target!.file.parserVersion, CATALOG_PARSER_VERSION);
+					const source = await store.getFileRevisionBatch(files[1].path);
+					assert.deepEqual(source!.file.relations!.nodes[0].targets.map(target => target.blockId), ["memo", "terminal", "no1wu1"]);
+				} finally { fixture.unload(); }
+				if (boot < oldVersions.length) {
+					// 模拟旧 parser 的派生结果；原 Daily、mtime 和 sourceRevision 均不改变。
+					await store.open();
+					const oldVersion = oldVersions[boot]!;
+					assert.ok(CATALOG_PARSER_VERSION > oldVersion);
+					const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: oldVersion }));
+					for (const file of files) {
+						const batch = (await store.getFileRevisionBatch(file.path))!;
+						await store.replaceFilePartition(buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
+							observations: batch.observations.map(item => ({ ...item, relationBlockId: null })), blockAnchors: {},
+							parserVersion: oldVersion, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt }));
+					}
+					const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
+					await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: oldVersion, settingsFingerprint: oldFingerprint });
+					store.close();
+				}
+			}
+		}
+	} finally {
+		await new Promise<void>((resolve, reject) => {
+			const request = indexedDB.deleteDatabase(databaseName);
+			request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+		});
+	}
+});
+
+test("当前 schema 的旧 parser 和 checkpoint 不跳过坏精确聚合，重启恢复 warm start", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator, CATALOG_CHECKPOINT_META_KEY } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser, CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService, buildCatalogPartition } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const { hashText } = await import("../src/utils/hash");
+	const name = `exact-parser-upgrade-${Date.now()}`;
+	const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 same #Constructor #__PROTO__\n- 09:00 same #Constructor #__PROTO__\n", mtime: 10 }];
+	try {
+		for (let boot = 0; boot < 4; boot++) {
+			const store = new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange });
+			const fixture = await createCoordinatorFixture(files), catalog = new MemoCatalogService(store);
+			if (boot === 1) fixture.failRead(files[0].path);
+			const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+				async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { now: () => 1000 + boot * 1000, fullAuditIntervalMs: 10_000 });
+			try {
+				coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+				if (boot === 1) {
+					assert.notEqual((await store.getCoverage()).kind, "complete");
+					const reader = new CatalogReadService({ catalog });
+					try {
+						await assert.rejects(reader.buildRecordStats(async () => {}, () => true));
+					} finally { reader.relations.dispose(); }
+					continue;
+				}
+				assert.equal(fixture.readCount(), boot === 3 ? 0 : 1, `boot ${boot}`);
+				const [aggregate] = await store.listDailyAggregates();
+				assert.equal(aggregate.tagMemoCounts.constructor, 2);
+				assert.equal(aggregate.tagMemoCounts.__proto__, 2);
+				assert.equal(aggregate.tagDisplayNames.constructor, "Constructor");
+				assert.equal(aggregate.tagDisplayNames.__proto__, "__PROTO__");
+				assert.equal((await store.getFile(files[0].path))!.parserVersion, CATALOG_PARSER_VERSION);
+			} finally { fixture.unload(); store.close(); }
+			if (boot === 0) {
+				await store.open();
+				const batch = (await store.getFileRevisionBatch(files[0].path))!;
+				const oldVersion = 17;
+				assert.ok(CATALOG_PARSER_VERSION > oldVersion);
+				const oldFingerprint = hashText(JSON.stringify({ folder: "Journal", format: "YYYY-MM-DD", parserVersion: oldVersion }));
+				const old = buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
+					observations: batch.observations, parserVersion: oldVersion, settingsFingerprint: oldFingerprint, auditedAt: batch.file.auditedAt });
+				// 同 schema、同源 revision 和 mtime/size，只模拟旧代码的坏派生值。
+				old.aggregate.tagMemoCounts = JSON.parse('{"constructor":"function Object() { [native code] }11"}');
+				old.aggregate.tagDisplayNames = {};
+				await store.replaceFilePartition(old);
+				const checkpoint = await store.getMeta<Record<string, unknown>>(CATALOG_CHECKPOINT_META_KEY);
+				await store.setMeta(CATALOG_CHECKPOINT_META_KEY, { ...checkpoint, parserVersion: oldVersion, settingsFingerprint: oldFingerprint });
+				assert.equal((await store.getFile(files[0].path))!.sourceRevision, batch.file.sourceRevision);
+				assert.equal((await store.listDailyAggregates())[0].tagMemoCounts.__proto__, Object.prototype);
+			}
+			store.close();
+		}
+	} finally {
+		await new Promise<void>((resolve, reject) => { const request = indexedDB.deleteDatabase(name); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
+	}
+});
+
+test("标签统计旧数据库升级后重建未编辑 Daily，重开后 warm start 复用新聚合", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
+	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
+	const name = `stats-upgrade-${Date.now()}`;
+	const files = [{ path: "Journal/2026-08-09.md", content: "- 09:00 same #Project/Alpha #Project/Beta\n- 09:00 same #project/alpha\n", mtime: 10 }];
+	try {
+		for (let boot = 0; boot < 3; boot++) {
+			const store = new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange, ...(boot === 0 ? { version: 4 } : {}) });
+			const fixture = await createCoordinatorFixture(files), catalog = new MemoCatalogService(store);
+			const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+				async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { now: () => 1000 + boot * 1000, fullAuditIntervalMs: 10_000 });
+			const reader = new CatalogReadService({ catalog });
+			try {
+				coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+				assert.equal(fixture.readCount(), boot === 2 ? 0 : 1, `boot ${boot}`);
+				const prepared = await reader.buildRecordStats(async () => {}, () => true);
+				assert.equal(prepared?.daily.get("2026-08-09")?.tagMemoCounts.get("project/alpha"), 2);
+				assert.equal(prepared?.tagDisplayNames.get("project"), undefined);
+				assert.deepEqual((await store.listDailyAggregates())[0]!.tagMemoCounts, { "project/alpha": 2, "project/beta": 1 });
+			} finally { reader.relations.dispose(); fixture.unload(); store.close(); }
+			if (boot === 0) {
+				// 保留真实旧 checkpoint 与文件 revision，只移除旧版本没有的聚合字段。
+				await new Promise<void>((resolve, reject) => {
+					const request = indexedDB.open(name, 4);
+					request.onerror = () => reject(request.error);
+					request.onsuccess = () => {
+						const database = request.result, transaction = database.transaction("aggregates", "readwrite");
+						const cursor = transaction.objectStore("aggregates").openCursor();
+						cursor.onsuccess = () => {
+							if (!cursor.result) return;
+							const aggregate = cursor.result.value; delete aggregate.tagSubtreeMemoCounts;
+							cursor.result.update(aggregate); cursor.result.continue();
+						};
+						transaction.oncomplete = () => { database.close(); resolve(); };
+						transaction.onabort = () => { database.close(); reject(transaction.error); };
+					};
+				});
+			}
+		}
+	} finally {
+		await new Promise<void>((resolve, reject) => { const request = indexedDB.deleteDatabase(name);
+			request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); });
+	}
 });
 
 test("Catalog 扫描 off switch 不注册事件、不读取 Daily", async () => {

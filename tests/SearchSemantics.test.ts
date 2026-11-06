@@ -32,6 +32,59 @@ function searchFilter(text: string): CatalogQueryFilter {
 	return { textTerms: parsed.terms, ...(parsed.date ? { searchDate: parsed.date } : {}) };
 }
 
+test("日期回退按可搜索文字实际查询及计数，不按 Daily 日期前缀匹配", async () => {
+	const name = `knomo-search-fallback-${Date.now()}-${Math.random()}`;
+	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];
+	try {
+		for (const store of stores) {
+			await store.open();
+			await store.replaceFilePartition(searchPartition("2025-01-01", ["项目 2026- 字面", "20261009 项目 2026-13 后续", "20261009 分散 项目 2026-13"]));
+			await store.replaceFilePartition(searchPartition("2026-10-09", ["日期符合但正文没有前缀", "2026<!-- hidden -->-", "```\n2026-\n```"]));
+			const filter = searchFilter("2026-");
+			assert.deepEqual((await store.query({ ...filter, limit: 20 })).items.map(item => item.logicalDate), ["2025-01-01", "2025-01-01", "2025-01-01"]);
+			assert.equal((await store.count(filter)).count, 3);
+			const continuous = searchFilter("20261009 项目 2026-13");
+			assert.equal((await store.count(continuous)).count, 1);
+			assert.equal((await store.query({ ...continuous, limit: 20 })).items[0]?.content, "20261009 项目 2026-13 后续");
+			assert.equal((await store.count(searchFilter("2026-10"))).count, 3);
+		}
+	} finally {
+		stores.forEach(store => store.close());
+		await new Promise<void>((resolve, reject) => {
+			const request = indexedDB.deleteDatabase(name); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+		});
+	}
+});
+
+test("被引用固定入口使用直接关系，查询计数分页一致，移除引用后更新成员", async () => {
+	const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+	Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } });
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+	await catalog.open();
+	const store = catalog.getStore(), reader = new CatalogReadService({ catalog });
+	const source = buildSearchSourceScope({ activeNav: "all", scopeFilter: "referenced", activeTag: null, activeTagKey: null, recordStatsSearchFilter: null });
+	assert.deepEqual(source, { hasReferrers: true });
+	const date = "2026-10-09";
+	const contents = ["A [[#^b]] [[#^b]]", "B [[#^d]] ^b", "C [[#^b]]", "D ^d", "E [[#^e]] ^e", "orphan ^orphan", "missing [[#^missing]]"];
+	try {
+		await store.replaceFilePartition(searchPartition(date, contents));
+		await store.setCoverage({ kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+		const first = await reader.query({ ...source, limit: 1 });
+		assert.equal(first.items.length, 1); assert.ok(first.nextCursor);
+		const second = await reader.query({ ...source, limit: 1, cursor: first.nextCursor });
+		assert.equal(second.nextCursor, null);
+		assert.deepEqual([...first.items, ...second.items].map(item => item.observation.content).sort(), ["B [[#^d]]", "D"]);
+		assert.equal((await reader.count(source)).count, 2);
+		await store.replaceFilePartition(searchPartition(date, ["A", contents[1], "C", ...contents.slice(3)]));
+		reader.relations.invalidate();
+		assert.deepEqual((await reader.query({ ...source, limit: 20 })).items.map(item => item.observation.content), ["D"]);
+		assert.equal((await reader.count(source)).count, 1);
+	} finally {
+		reader.relations.dispose(); store.close();
+		if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window");
+	}
+});
+
 test("生产 Catalog 查询父标签包含同名和子标签，排除相邻标签，两个 store 一致", async () => {
 	const name = `knomo-parent-tag-${Date.now()}-${Math.random()}`;
 	const stores = [new InMemoryMemoCatalogStore(), new IndexedDbMemoCatalogStore(name, { factory: indexedDB, keyRange: IDBKeyRange })];

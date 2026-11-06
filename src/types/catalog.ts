@@ -24,6 +24,7 @@ export interface ObservationHandle {
 
 // Observation 只描述当前 Daily 字节，不承担身份职责。
 export interface MemoObservation extends ObservationHandle {
+	// 关系查询优先使用 Memo 级锚点；缺失时兼容末行合法段落/列表项锚点，不改变原生引用或写权限。
 	relationBlockId?: string | null;
 	occurrenceIndex: number;
 	occurrenceCount: number;
@@ -91,8 +92,7 @@ export interface CatalogObservation extends MemoObservation {
 	hasTimeBuoy: 0 | 1;
 }
 
-export interface CatalogFileRecord {
-	relations?: CatalogFileRelations;
+export interface CatalogFileHeader {
 	sourcePath: string;
 	sourceRevision: string;
 	logicalDate: string;
@@ -101,8 +101,12 @@ export interface CatalogFileRecord {
 	parserVersion: number;
 	settingsFingerprint: string;
 	observationCount: number;
-	observationKeys?: string[];
 	auditedAt: number;
+}
+
+export interface CatalogFileRecord extends CatalogFileHeader {
+	relations?: CatalogFileRelations;
+	observationKeys?: string[];
 }
 
 export interface CatalogFileAggregate {
@@ -123,6 +127,7 @@ export interface CatalogFileAggregate {
 	untaggedMemoCount: number;
 	hourCounts: number[];
 	tagMemoCounts: Record<string, number>;
+	tagSubtreeMemoCounts: Record<string, number>;
 	tagDisplayNames: Record<string, string>;
 }
 
@@ -143,6 +148,7 @@ export interface CatalogDailyAggregate {
 	untaggedMemoCount: number;
 	hourCounts: number[];
 	tagMemoCounts: Record<string, number>;
+	tagSubtreeMemoCounts: Record<string, number>;
 	tagDisplayNames: Record<string, string>;
 }
 
@@ -200,6 +206,8 @@ export interface CatalogQuery {
 	hasReferrers?: true;
 	observationKeys?: readonly string[];
 	tags?: string[];
+	// 完整标签直接标注；多个 key 取交集，不扩展下级。
+	exactTags?: string[];
 	linkTarget?: string;
 	hasLink?: boolean;
 	imagePath?: string;

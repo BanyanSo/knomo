@@ -6,6 +6,7 @@ import type {
 	CatalogDailyAggregate,
 	CatalogFilePartition,
 	CatalogFileRecord,
+	CatalogFileHeader,
 	CatalogFileRevisionBatch,
 	CatalogObservation,
 	CatalogObservationSnapshot,
@@ -20,6 +21,7 @@ import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/time
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
 import { getCatalogTextTerms, matchesSearchDate, matchesSearchTerms, narrowCatalogQuery } from "./SearchMatching";
 import { normalizeSearchText } from "../utils/searchText";
+import { incrementTagMemoCount } from "../utils/tags";
 import { CooperativeYieldController, stableSortCooperatively } from "./CooperativeTask";
 
 export const DEFAULT_CATALOG_COVERAGE: CatalogCoverage = {
@@ -67,6 +69,7 @@ export interface MemoCatalogStore {
 	getObservation(observationKey: string): Promise<CatalogObservation | null>;
 	readObservationSnapshot(observationKeys: readonly string[], signal?: AbortSignal): Promise<CatalogObservationSnapshot>;
 	listFiles(): Promise<CatalogFileRecord[]>;
+	listFileHeaders(): Promise<CatalogFileHeader[]>;
 	count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult>;
 	query(request: CatalogQuery, signal?: AbortSignal): Promise<CatalogQueryPage>;
 	queryTimeBuoys(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyObservationPage>;
@@ -79,6 +82,14 @@ export interface MemoCatalogStore {
 	setMeta<T>(key: string, value: T): Promise<void>;
 	deleteMeta(key: string): Promise<void>;
 	clear(preserveMetaKeys?: readonly string[]): Promise<void>;
+}
+
+export function toCatalogFileHeader(file: CatalogFileHeader): CatalogFileHeader {
+	return {
+		sourcePath: file.sourcePath, sourceRevision: file.sourceRevision, logicalDate: file.logicalDate,
+		mtime: file.mtime, size: file.size, parserVersion: file.parserVersion,
+		settingsFingerprint: file.settingsFingerprint, observationCount: file.observationCount, auditedAt: file.auditedAt,
+	};
 }
 
 export class InMemoryMemoCatalogStore implements MemoCatalogStore {
@@ -187,6 +198,10 @@ export class InMemoryMemoCatalogStore implements MemoCatalogStore {
 
 	async listFiles(): Promise<CatalogFileRecord[]> {
 		return [...this.files.values()].map(clone).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+	}
+
+	async listFileHeaders(): Promise<CatalogFileHeader[]> {
+		return [...this.files.values()].map(toCatalogFileHeader).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 	}
 
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
@@ -546,6 +561,7 @@ export class FallbackMemoCatalogStore implements MemoCatalogStore {
 		}
 	}
 	listFiles(): Promise<CatalogFileRecord[]> { return this.run((store) => store.listFiles()); }
+	listFileHeaders(): Promise<CatalogFileHeader[]> { return this.run((store) => store.listFileHeaders()); }
 	async count(request: CatalogQueryFilter, signal?: AbortSignal): Promise<CatalogQueryCountResult> {
 		const result = await this.run((store) => store.count(request, signal), signal);
 		return { ...result, lifecycle: this.getLifecycle() };
@@ -689,6 +705,7 @@ export function createCatalogQueryMatcher(
 		&& tags.every((tag) => observation.tagKeys.some((observationTag) => (
 			observationTag === tag || observationTag.startsWith(`${tag}/`)
 		)))
+		&& (request.exactTags ?? []).every(tag => observation.tagKeys.includes(tag))
 		&& (linkTarget === undefined || observation.linkTargets.includes(linkTarget))
 		&& (request.hasLink === undefined || (observation.hasLink === 1) === request.hasLink)
 		&& (imagePath === undefined || observation.imagePaths.includes(imagePath))
@@ -767,6 +784,7 @@ export function mergeAggregate(
 		untaggedMemoCount: 0,
 		hourCounts: Array.from({ length: 24 }, () => 0),
 		tagMemoCounts: {},
+		tagSubtreeMemoCounts: {},
 		tagDisplayNames: {},
 	};
 	current.memoCount += aggregate.memoCount;
@@ -785,10 +803,15 @@ export function mergeAggregate(
 		current.hourCounts[hour] += aggregate.hourCounts?.[hour] ?? 0;
 	}
 	for (const [key, count] of Object.entries(aggregate.tagMemoCounts ?? {})) {
-		current.tagMemoCounts[key] = (current.tagMemoCounts[key] ?? 0) + count;
+		incrementTagMemoCount(current.tagMemoCounts, key, count);
+	}
+	for (const [key, count] of Object.entries(aggregate.tagSubtreeMemoCounts)) {
+		incrementTagMemoCount(current.tagSubtreeMemoCounts, key, count);
 	}
 	for (const [key, label] of Object.entries(aggregate.tagDisplayNames ?? {})) {
-		if (current.tagDisplayNames[key] === undefined) current.tagDisplayNames[key] = label;
+		if (!Object.prototype.hasOwnProperty.call(current.tagDisplayNames, key)) {
+			Object.defineProperty(current.tagDisplayNames, key, { value: label, writable: true, enumerable: true, configurable: true });
+		}
 	}
 	for (const target of aggregate.explicitReferenceTargets) {
 		if (!current.explicitReferenceTargets.includes(target)) {

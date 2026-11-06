@@ -7,6 +7,36 @@ import type { MobileSearchPage } from "../src/ui/MobileSearchController";
 import { createCatalogCapabilities } from "../src/services/MemoCapabilityModel";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
 
+test("首次切入被引用固定筛选不展示上一范围的卡片与计数，重复选择保留已确认结果", async () => {
+	const h = await createMobilePopupFixture();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { KnomoViewStateController } = await import("../src/ui/KnomoViewStateController");
+	try {
+		const state = new KnomoViewStateController(), oldMemo = { id: "unconfirmed" };
+		let renders = 0, queries = 0;
+		const view = Object.assign(Object.create(KnomoView.prototype), {
+			viewStateController: state, memos: [oldMemo], hasCommittedCatalogDesktopQuery: true,
+			catalogDesktopTotalCount: 10, catalogDesktopCountPresentation: { count: 10 },
+			rememberHistoryBrowsePosition: () => {}, clearSearchDebounce: () => {}, getCardFlowViewStateKey: () => "old",
+			applyViewStateTransitionEffects: () => {}, getCardFlowChangeIntent: () => "view-scope-change",
+			syncRootState: () => {}, renderScopeState: () => {}, syncSearchInputs: () => {},
+			renderFilteredListState: () => {
+				renders++; assert.deepEqual(view.memos, []);
+				assert.equal(view.hasCommittedCatalogDesktopQuery, false);
+				assert.equal(view.catalogDesktopTotalCount, null); assert.equal(view.catalogDesktopCountPresentation, null);
+				assert.equal(view.initialCatalogQueryPending, true);
+			},
+			refreshCatalogActiveQuery: () => { queries++; },
+		});
+		view.setScope("referenced");
+		assert.equal(renders, 1); assert.equal(queries, 1);
+		view.memos = [oldMemo]; view.hasCommittedCatalogDesktopQuery = true;
+		view.setScope("referenced");
+		assert.equal(renders, 1); assert.equal(queries, 1);
+		assert.deepEqual(view.memos, [oldMemo]);
+	} finally { h.close(); }
+});
+
 test("筛选摘要在相同范围内原位更新，不撤下头部或移动已有卡片", async () => {
 	const h = await createMobilePopupFixture();
 	const { syncKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
@@ -31,13 +61,14 @@ test("筛选摘要在相同范围内原位更新，不撤下头部或移动已�
 	} finally { h.close(); }
 });
 
-test("桌面被引用筛选重查期间保留已提交摘要，内部旧计数立即失效", async () => {
+for (const scope of [false, true]) test(`桌面被引用${scope ? "固定筛选" : "钻取"}重查期间保留已提交摘要，内部旧计数立即失效`, async () => {
 	const h = await createMobilePopupFixture();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const { KnomoViewStateController } = await import("../src/ui/KnomoViewStateController");
 	try {
 		const state = new KnomoViewStateController();
-		state.recordStatsSearchFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
+		if (scope) state.scopeFilter = "referenced";
+		else state.recordStatsSearchFilter = { type: "referenced", startDate: "2026-10-01", endDateExclusive: "2026-11-01" };
 		const summary = h.root.createDiv({ cls: "knomo-relation-result-count", text: "Referenced: 1 Memo" });
 		const card = h.root.createEl("article", { cls: "knomo-card" });
 		let queries = 0;
@@ -67,10 +98,11 @@ test("移动筛选与搜索在保存和同结果重查期间保留摘要、正�
 		{ type: "hour", startDate: "2026-10-01", endDateExclusive: "2026-11-01", hour: 9 },
 		{ type: "max-daily-notes", dates: ["2026-10-29"] }, { type: "max-daily-words", dates: ["2026-10-29"] },
 	];
-	const cases: Array<{ query?: string; date?: SearchDateFilter; stats?: RecordStatsSearchFilter; things?: boolean }> = [
+	const cases: Array<{ query?: string; date?: SearchDateFilter; stats?: RecordStatsSearchFilter; things?: boolean; referenced?: boolean }> = [
 		{ query: "memo" }, ...["week", "month", "last-7", "last-30", "last-week", "last-month"].map(date => ({ date: date as SearchDateFilter })),
 		...statsFilters.map(stats => ({ stats })), { query: "memo", things: true },
 		{ query: "memo", date: "month", stats: statsFilters.find(filter => filter.type === "referenced") },
+		{ referenced: true }, { referenced: true, query: "memo", date: "month" },
 	];
 	for (const scenario of cases) {
 		const h = await searchFixture(scenario);
@@ -140,7 +172,7 @@ test("移动被引用查询确认新成员或移除引用时更新结果，同�
 });
 
 async function searchFixture(
-	scenario: { query?: string; date?: SearchDateFilter; stats?: RecordStatsSearchFilter; things?: boolean },
+	scenario: { query?: string; date?: SearchDateFilter; stats?: RecordStatsSearchFilter; things?: boolean; referenced?: boolean },
 	overrides: Partial<ConstructorParameters<typeof import("../src/ui/MobileSearchController").MobileSearchController>[0]> = {},
 ) {
 	const h = await createMobilePopupFixture();
@@ -162,6 +194,7 @@ async function searchFixture(
 		batchSize: 20, debounceMs: 10, getWindow: () => h.win as unknown as Window, getDocument: () => h.win.document,
 		getRootEl: () => h.root, isMobileLayout: () => true,
 		getThingsContext: () => scenario.things ? { activeNav: "things", activeTag: "keep", activeTagKey: "keep" } : undefined,
+		getSourceScope: () => scenario.referenced ? "referenced" : "all",
 		registerDomEvent: () => {}, createHiddenText: (_container, name) => name, filterMemos: memos => [...memos],
 		renderMemoCard: (container, item) => {
 			const card = container.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": item.id } });

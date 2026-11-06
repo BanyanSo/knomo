@@ -6,6 +6,29 @@ import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import type { CatalogInventoryEntry, MemoObservation } from "../src/types/catalog";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 
+test("精确聚合安全计数特殊标签，同日多文件保留首个显式显示名", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	await store.open();
+	const parser = new DiaryMemoParser();
+	for (const suffix of ["a", "b"]) {
+		const inventory = makeInventory(`Journal/2026-08-09-${suffix}.md`, "2026-08-09");
+		const parsed = parser.parseRevision({ sourcePath: inventory.sourcePath, logicalDate: inventory.logicalDate,
+			sourceRevision: suffix, content: "- 09:00 same #Constructor #constructor #__PROTO__\n- 09:00 same #Constructor #constructor #__PROTO__\n" });
+		const partition = buildCatalogPartition(makePartitionInput(inventory, parsed.observations, suffix));
+		assert.equal(partition.aggregate.tagMemoCounts.constructor, 2);
+		assert.equal(partition.aggregate.tagMemoCounts.__proto__, 2);
+		assert.equal(partition.aggregate.tagDisplayNames.constructor, "Constructor");
+		assert.equal(partition.aggregate.tagDisplayNames.__proto__, "__PROTO__");
+		await store.replaceFilePartition(partition);
+	}
+	const [aggregate] = await store.listDailyAggregates();
+	assert.equal(aggregate.tagMemoCounts.constructor, 4);
+	assert.equal(aggregate.tagMemoCounts.__proto__, 4);
+	assert.equal(aggregate.tagDisplayNames.constructor, "Constructor");
+	assert.equal(aggregate.tagDisplayNames.__proto__, "__PROTO__");
+	store.close();
+});
+
 test("分片准备覆盖搜索和聚合，结果与同步路径相同且准备阶段不发布", async t => {
 	const inventory = makeInventory("Journal/2026-08-12.md", "2026-08-12");
 	const observations = Array.from({ length: 23 }, (_, i) => {
@@ -168,7 +191,28 @@ test("文件聚合提供全库统计和标签 facet 所需的 memo 级指标", (
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
 	]);
 	assert.deepEqual(partition.aggregate.tagMemoCounts, { "project/alpha": 1 });
+	assert.deepEqual(partition.aggregate.tagSubtreeMemoCounts, { project: 1, "project/alpha": 1 });
 	assert.deepEqual(partition.aggregate.tagDisplayNames, { "project/alpha": "Project/Alpha" });
+});
+
+test("统计子树计数逐条去重，文件替换和删除后不残留，精确 facets 保持原口径", async () => {
+	const store = new InMemoryMemoCatalogStore(), service = new MemoCatalogService(store);
+	await service.open();
+	const first = makeInventory("Journal/2026-08-12.md", "2026-08-12");
+	const second = makeInventory("Journal/extra.md", "2026-08-12");
+	const same = [1, 2].map(line => ({ ...makeObservation(first, line, "09:15", "same"),
+		tags: ["#Project", "#project/alpha", "#PROJECT/beta", "#project/alpha"] }));
+	await service.replaceFile(makePartitionInput(first, same, "first"));
+	await service.replaceFile(makePartitionInput(second, [{ ...makeObservation(second, 1, "10:15", "same"), tags: ["#project/alpha"] }], "extra"));
+	let aggregate = (await store.listDailyAggregates())[0]!;
+	assert.deepEqual(aggregate.tagMemoCounts, { project: 2, "project/alpha": 3, "project/beta": 2 });
+	assert.deepEqual(aggregate.tagSubtreeMemoCounts, { project: 3, "project/alpha": 3, "project/beta": 2 });
+	await service.replaceFile(makePartitionInput(first, [{ ...same[0]!, tags: ["#Other"] }], "edited"));
+	aggregate = (await store.listDailyAggregates())[0]!;
+	assert.deepEqual(aggregate.tagSubtreeMemoCounts, { other: 1, project: 1, "project/alpha": 1 });
+	await service.deleteFile(second.sourcePath);
+	assert.deepEqual((await store.listDailyAggregates())[0]!.tagSubtreeMemoCounts, { other: 1 });
+	service.close();
 });
 
 test("search index 排除 fenced code 文本", async () => {

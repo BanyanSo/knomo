@@ -51,6 +51,11 @@ test("Drawer 隔离主内容、循环键盘焦点、忽略 IME 并恢复入口",
 		let closed = 0;
 		focus.handleKeydown(new h.dom.window.KeyboardEvent("keydown", { key: "Escape", isComposing: true }), h.sidebar, () => closed++);
 		assert.equal(closed, 0);
+		focus.handleKeydown(new h.dom.window.KeyboardEvent("keydown", { key: "Escape", keyCode: 229, isComposing: false }), h.sidebar, () => closed++);
+		assert.equal(closed, 0);
+		last.focus();
+		focus.handleKeydown(new h.dom.window.KeyboardEvent("keydown", { key: "Tab", keyCode: 229, isComposing: false }), h.sidebar, () => assert.fail());
+		assert.equal(h.doc.activeElement, last);
 		focus.handleKeydown(new h.dom.window.KeyboardEvent("keydown", { key: "Escape", cancelable: true }), h.sidebar, () => {
 			closed++;
 			focus.sync(h.root, true, false, true);
@@ -60,6 +65,25 @@ test("Drawer 隔离主内容、循环键盘焦点、忽略 IME 并恢复入口",
 		assert.equal(h.main.inert, false);
 		assert.equal(h.sidebar.inert, true);
 	} finally { h.dom.window.close(); }
+});
+
+test("根键处理忽略无组合标记的 229，普通 Esc 随后仍关闭浮标选择器", async () => {
+	await ensureObsidianStub();
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const dom = new JSDOM();
+	let closed = 0;
+	const view = Object.create(KnomoView.prototype) as unknown as {
+		handleRootKeydown(event: KeyboardEvent): Promise<void>;
+	};
+	Object.assign(view, { timeBuoyPickerState: {}, closeTimeBuoyPicker: () => closed++ });
+	try {
+		for (const key of ["Enter", "Escape", "Tab"]) {
+			await view.handleRootKeydown(new dom.window.KeyboardEvent("keydown", { key, keyCode: 229, isComposing: false }));
+		}
+		assert.equal(closed, 0);
+		await view.handleRootKeydown(new dom.window.KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+		assert.equal(closed, 1);
+	} finally { dom.window.close(); }
 });
 
 test("Drawer 关闭不抢其他 Pane 焦点，布局切换恢复可见入口", () => {

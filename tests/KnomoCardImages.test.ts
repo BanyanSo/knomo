@@ -5,6 +5,7 @@ import { createCardMemo as makeMemo } from "./helpers/memoCardFixture";
 import type { MemoViewItem } from "../src/types/memoView";
 import {
 	MemoCardImageCache,
+	ReadyCardImageHandoff,
 	parseCardImageIndex,
 	renderMemoCardImages,
 	type RenderedMemoCardImages,
@@ -82,6 +83,54 @@ test("renderMemoCardImages reuses loaded image items with unchanged keys", () =>
 	assert.equal(root.find(".knomo-card-image-item"), item);
 	assert.equal(root.find("img"), imageEl);
 	assert.equal(root.find(".knomo-card-image-item")?.hasClass("is-loading"), false);
+});
+
+test("附件仅更新 B 时 A/C 始终挂载，重排及重复资源各自更新预览位置", () => {
+	const root = new TestElement("div");
+	const make = (name: string) => makeImage({ resourcePath: `img/${name}.png`, url: `app://${name}.png` });
+	const [a, b, c] = ["a", "b", "c"].map(make);
+	const first = renderMemoCardImages(root.asHtml(), makeMemo(), [a, b, c], labels)!;
+	const [aNode, , cNode] = first.loadItems.map(item => item.imageEl);
+	aNode.setAttr("src", a.url!); first.loadItems[0].onLoad?.();
+	cNode.setAttr("src", c.url!);
+	const [firstItem, , lastItem] = root.findAll(".knomo-card-image-item");
+	const remove = TestElement.prototype.remove;
+	firstItem.remove = lastItem.remove = () => assert.fail("未变条目应保持挂载");
+	const changed = renderMemoCardImages(root.asHtml(), makeMemo(), [a, b, c], labels, first.imagesEl, undefined, new Set(["img/b.png"]))!;
+	assert.deepEqual(changed.removedImages, [first.loadItems[1].imageEl]);
+	assert.equal(changed.loadItems.length, 1, "同 URL 的显式变更仍重新加载");
+	assert.equal(root.findAll("img")[0].asHtml(), aNode);
+	assert.equal(root.findAll("img")[2].asHtml(), cNode);
+	assert.equal(cNode.getAttr("src"), c.url);
+	assert.equal(lastItem.hasClass("is-loading"), true);
+	firstItem.remove = lastItem.remove = remove;
+	const moved = renderMemoCardImages(root.asHtml(), makeMemo(), [c, a, a, b], labels, first.imagesEl)!;
+	assert.equal(moved.loadItems.length, 1);
+	assert.deepEqual(root.findAll("img").slice(0, 2).map(node => node.asHtml()), [cNode, aNode]);
+	assert.equal(root.findAll(".knomo-card-image-button")[2].getAttr("data-image-index"), "2");
+	assert.equal(root.find(".knomo-card-image-more")?.getText(), "+1");
+});
+
+test("跨快照图片交接按解析资源逐个消费，排除相同文件名和已失效的候选", () => {
+	const root = new TestElement("div");
+	const previous = root.createDiv();
+	const a = makeImage({ resourcePath: "a/image.png", url: "app://a/image.png" });
+	const b = makeImage({ resourcePath: "b/image.png", url: "app://b/image.png" });
+	const first = renderMemoCardImages(previous.asHtml(), makeObservedMemo(1), [a, a, b], labels)!;
+	for (const item of first.loadItems) {
+		item.imageEl.setAttr("src", item.src);
+		Object.assign(item.imageEl, { complete: true, naturalWidth: 500 });
+		item.onLoad?.();
+	}
+	const handoff = new ReadyCardImageHandoff([previous.asHtml()], root.asHtml());
+	handoff.invalidate(["b/image.png"]);
+	assert.equal(previous.findAll("img").length, 3);
+	const next = root.createDiv();
+	const result = renderMemoCardImages(next.asHtml(), makeObservedMemo(4), [a, a, b], labels, null, handoff)!;
+	assert.deepEqual(next.findAll("img").slice(0, 2).map(node => node.asHtml()), first.loadItems.slice(0, 2).map(item => item.imageEl));
+	assert.equal(result.loadItems.length, 1);
+	assert.equal(result.loadItems[0].resourcePath, b.resourcePath);
+	assert.equal(handoff.take(a), null);
 });
 
 test("renderMemoCardImages limits visible images and shows the hidden count", () => {
@@ -308,7 +357,7 @@ test("移动 View 的实际重建入口经过其他筛选与空页后复用原�
 		renderCardFlowHeaders: () => [],
 		cardImageLoadQueue: {
 			clear() {}, forget() {},
-			observe(request: CardImageLoadRequest) {
+			update(request: CardImageLoadRequest) {
 				for (const item of request.images) {
 					loads++; Object.assign(item.imageEl, { naturalWidth: 4000, naturalHeight: 3000 });
 					item.imageEl.setAttr("src", item.src); item.onLoad?.();
@@ -333,6 +382,115 @@ test("移动 View 的实际重建入口经过其他筛选与空页后复用原�
 		assert.equal(loads, 6);
 		assert.deepEqual(root.findAll("img"), original);
 	} finally { Platform.isMobile = oldMobile; }
+});
+
+test("生产附件监听合并 metadata 解析，处理文件夹移动与删除，保留无关图片节点", async t => {
+	await ensureObsidianStub();
+	const { TFile, TFolder } = await import("obsidian");
+	const { default: KnomoPlugin } = await import("../src/main");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { ImageResourceCache } = await import("../src/ui/ImageResourceCache");
+	const { MemoCardPreviewCache } = await import("../src/ui/MemoCardPreviewCache");
+	const { parseMemoCardPreviewLite } = await import("../src/ui/MemoCardPreview");
+	const previous = globalThis.HTMLElement;
+	Object.assign(globalThis, { HTMLElement: TestElement });
+	t.after(() => { Object.assign(globalThis, { HTMLElement: previous }); });
+
+	const root = new TestElement("div");
+	const memo = makeMemo({ contentSnapshot: "![[stable.png]] ![[photo.png]] ![[Before/photo.png]]" });
+	const card = root.createDiv({ cls: "knomo-card", attr: { "data-memo-id": memo.id } });
+	const body = card.createDiv({ cls: "knomo-card-body" });
+	const stable = Object.assign(new TFile(), { path: "Other/stable.png" });
+	const photo = Object.assign(new TFile(), { path: "Before/photo.png" });
+	const alternate = Object.assign(new TFile(), { path: "Other/photo.png" });
+	const folder = Object.assign(new TFolder(), { path: "Before", children: [photo] });
+	const links = new Map([["stable.png", stable]]);
+	const listeners = new Map<string, (file?: unknown, oldPath?: string) => void>();
+	const timers = new Map<number, () => void>();
+	const cleanups: Array<() => void> = [];
+	const view = Object.create(KnomoView.prototype);
+	let next = 0, lookups = 0, loads = 0, hidden = false;
+	const on = (owner: string) => (name: string, callback: (file?: unknown, oldPath?: string) => void) => {
+		listeners.set(`${owner}:${name}`, callback);
+		return name;
+	};
+	const app = {
+		vault: { on: on("vault"), getResourcePath: (file: { path: string }) => `app://${file.path}` },
+		metadataCache: { on: on("metadata"), getFirstLinkpathDest: (path: string) => { lookups++; return links.get(path) ?? null; } },
+		workspace: { getLeavesOfType: () => [{ view }], containerEl: { win: {
+			setTimeout: (callback: () => void) => { timers.set(++next, callback); return next; },
+			clearTimeout: (id: number) => { timers.delete(id); },
+		} } },
+	};
+	Object.assign(view, {
+		app, memos: [memo], viewStateController: { activeNav: "all" }, cardFlowEl: root.asHtml(),
+		cardFlowCoordinator: { generation: 1 }, isPresentationHidden: () => hidden,
+		mobileSearchController: { results: null, invalidateImagePaths() {} },
+		memoCardPreviewCache: new MemoCardPreviewCache((_memo, text) => parseMemoCardPreviewLite(text)),
+		imageResourceCache: new ImageResourceCache(), cardImageCache: new MemoCardImageCache(),
+		renderedPreviewImages: new WeakMap(),
+		cardImageLoadQueue: {
+			invalidateResourcePaths() {},
+			update(request: CardImageLoadRequest) {
+				for (const item of request.images) { loads++; item.imageEl.setAttr("src", item.src); item.onLoad?.(); }
+			},
+		},
+	});
+	const plugin = Object.create(KnomoPlugin.prototype);
+	Object.assign(plugin, { app, register: (cleanup: () => void) => cleanups.push(cleanup), registerEvent() {} });
+	plugin.registerAttachmentEvents();
+	const resolved = listeners.get("metadata:resolved")!;
+	const flush = async () => {
+		const callbacks = [...timers.values()];
+		timers.clear();
+		for (const callback of callbacks) callback();
+		await new Promise<void>(resolve => setImmediate(resolve));
+		await view.flushPresentationRefresh();
+	};
+	view.renderMemoCardImages(body.asHtml(), memo, view.getMemoCardPreview(memo).images, 1, "card-flow");
+	const original = body.find("img");
+	assert.equal(loads, 1);
+	assert.equal(body.findAll(".knomo-card-image-placeholder").length, 2);
+	links.set("photo.png", photo);
+	links.set("Before/photo.png", photo);
+	resolved();
+	resolved();
+	assert.equal(timers.size, 1);
+	await flush();
+	assert.equal(loads, 3);
+	assert.equal(body.find("img"), original);
+
+	folder.path = "After";
+	photo.path = "After/photo.png";
+	listeners.get("vault:rename")!(folder, "Before");
+	links.delete("Before/photo.png");
+	resolved();
+	await flush();
+	assert.equal(body.findAll(".knomo-card-image-placeholder").length, 1);
+	assert.match(body.findAll("img")[1].getAttr("src")!, /After\/photo\.png/u);
+	assert.equal(body.find("img"), original);
+
+	hidden = true;
+	folder.children = [];
+	links.set("photo.png", alternate);
+	listeners.get("vault:delete")!(folder);
+	assert.match(view.getMemoCardPreview(memo).images[1].url, /Other\/photo\.png/u);
+	assert.match(body.findAll("img")[1].getAttr("src")!, /After\/photo\.png/u);
+	resolved();
+	await flush();
+	hidden = false;
+	await view.flushPresentationRefresh();
+	assert.match(body.findAll("img")[1].getAttr("src")!, /Other\/photo\.png/u);
+	assert.equal(body.find("img"), original);
+
+	view.trashViewClosed = true;
+	const beforeClose = lookups;
+	resolved();
+	await flush();
+	assert.equal(lookups, beforeClose);
+	resolved();
+	for (const cleanup of cleanups) cleanup();
+	assert.equal(timers.size, 0);
 });
 
 test("资源变化只清理相关缓存节点", () => {
@@ -388,6 +546,10 @@ class TestElement {
 	scrollTop = 0;
 	getBoundingClientRect(): DOMRect { return { top: 0, bottom: 200 } as DOMRect; }
 	querySelector(selector: string): TestElement | null { return this.find(selector); }
+	querySelectorAll(selector: string): TestElement[] { return this.findAll(selector); }
+	closest(selector: string): TestElement | null { return this.matches(selector) ? this : this.parent?.closest(selector) ?? null; }
+	getAttribute(key: string): string | null { return this.getAttr(key); }
+	instanceOf(type: typeof TestElement): boolean { return this instanceof type; }
 	private readonly clickListeners: Array<(event: MouseEvent) => void> = [];
 	addEventListener(type: string, listener: (event: MouseEvent) => void): void {
 		if (type === "click") this.clickListeners.push(listener);
@@ -403,6 +565,16 @@ class TestElement {
 	private readonly attrs = new Map<string, string>();
 	private text = "";
 	private parent: TestElement | null = null;
+
+	get parentElement(): TestElement | null { return this.parent; }
+	get firstElementChild(): TestElement | null { return this.children[0] ?? null; }
+	get lastElementChild(): TestElement | null { return this.children.at(-1) ?? null; }
+	get nextElementSibling(): TestElement | null {
+		return this.parent?.children[this.parent.children.indexOf(this) + 1] ?? null;
+	}
+	contains(element: TestElement): boolean {
+		return element === this || this.children.some(child => child.contains(element));
+	}
 
 	constructor(private readonly tagName: string) {}
 
@@ -451,6 +623,12 @@ class TestElement {
 		child.parent = this;
 		this.children.push(child);
 		return child;
+	}
+
+	insertBefore(child: TestElement, next: TestElement | null): void {
+		child.remove();
+		child.parent = this;
+		this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, child);
 	}
 
 	remove(): void {

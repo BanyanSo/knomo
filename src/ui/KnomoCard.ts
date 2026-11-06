@@ -8,6 +8,7 @@ import { getMemoContentStats } from "../utils/memoContentStats";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
 	getMemoCardActions,
+	getMemoCardActionSection,
 	getMemoCardShell,
 	getMemoSourceReferenceMeta,
 	getTrashCardActions,
@@ -101,7 +102,13 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				cls: "knomo-card-actions",
 				attr: { role: "menu" },
 			});
+			let previousSection: string | null = null;
 			for (const action of getMemoCardActions(memo, options.randomCard)) {
+				const section = getMemoCardActionSection(action.action);
+				if (previousSection !== null && previousSection !== section) {
+					renderCardMenuSeparator(actions, section);
+				}
+				previousSection = section;
 				renderCardAction(
 					actions,
 					memo.id,
@@ -110,6 +117,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					action.className,
 				);
 			}
+			renderCardMenuSeparator(actions, "knomo-card-info");
 			const wordCount = actions.createDiv({ cls: "knomo-card-word-count" });
 			setIcon(wordCount.createSpan({ cls: "knomo-menu-icon", attr: { "aria-hidden": "true" } }), MEMO_WORD_COUNT_ICON);
 			wordCount.createSpan({ cls: "knomo-menu-label", text: t("card.wordCount", { count: getMemoContentStats(memo).wordCount }) });
@@ -281,7 +289,14 @@ export function syncMemoCardRelationsAction(card: HTMLElement, memo: MemoRecord,
 	const menu = card.querySelector<HTMLElement>(".knomo-card-actions");
 	if (!menu) return;
 	const button = renderCardAction(menu, memo.id, action.action, getMemoActionLabel(action.action), action.className);
-	menu.insertBefore(button, menu.querySelector('[data-memo-action="delete"], .knomo-card-word-count'));
+	menu.insertBefore(button, menu.querySelector('.knomo-card-menu-separator[data-before-section="knomo-card-danger"], .knomo-card-menu-separator[data-before-section="knomo-card-info"]'));
+}
+
+function renderCardMenuSeparator(container: HTMLElement, section: string): void {
+	container.createDiv({
+		cls: "knomo-card-menu-separator",
+		attr: { role: "separator", "data-before-section": section },
+	});
 }
 
 function renderCardAction(
@@ -297,6 +312,7 @@ function renderCardAction(
 			type: "button",
 			role: "menuitem",
 			"data-memo-action": action,
+			"data-menu-section": getMemoCardActionSection(action),
 			"data-memo-id": memoId,
 		},
 	});

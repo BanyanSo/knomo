@@ -149,7 +149,7 @@ test("未保存的会话事件有界，下一次成功只合并最近 100 条", 
 function aggregate(logicalDate: string, memoCount = 1): CatalogDailyAggregate {
 	return { logicalDate, memoCount, tagCount: 0, imageCount: 0, linkCount: 0, taskCount: 0, timeBuoyCount: 0,
 		explicitReferenceCount: 0, explicitReferenceMemoCount: 0, explicitReferenceTargets: [], wordCount: 0,
-		imageMemoCount: 0, taggedMemoCount: 0, untaggedMemoCount: memoCount, hourCounts: [], tagMemoCounts: {}, tagDisplayNames: {} };
+		imageMemoCount: 0, taggedMemoCount: 0, untaggedMemoCount: memoCount, hourCounts: [], tagMemoCounts: {}, tagSubtreeMemoCounts: {}, tagDisplayNames: {} };
 }
 
 function memo(date: string): MemoViewItem {

@@ -375,34 +375,50 @@ export class CatalogReadService {
 	async buildRecordStats(
 		yieldToUi: () => Promise<void>,
 		isCurrent: () => boolean,
+		options: {
+			publishBase?: (prepared: PreparedRecordStats) => void;
+			signal?: AbortSignal;
+			expectedCatalogRevision?: number;
+		} = {},
 	): Promise<PreparedRecordStats | null> {
+		const { publishBase, signal, expectedCatalogRevision } = options;
 		if (!isCurrent()) return null;
 		await this.requireCompleteCoverage("Record statistics");
 		const aggregate = await this.options.catalog.readAggregateSnapshot();
-		if (aggregate.invalidated) return null;
+		if (aggregate.invalidated || !isCurrent()
+			|| (expectedCatalogRevision !== undefined && aggregate.catalogRevision !== expectedCatalogRevision)) return null;
 		const prepared = buildPreparedRecordStats(aggregate.aggregates);
+		const snapshot = { ...aggregate, day: formatDatePart(this.now()) };
+		if (publishBase) {
+			if (!await this.isDiscoverySnapshotCurrent(snapshot, signal) || !isCurrent()) return null;
+			publishBase(prepared);
+			await yieldToUi();
+			if (!isCurrent()) return null;
+		}
 		let relations: MemoRelationSnapshot | null = null;
+		let referenced: NonNullable<PreparedRecordStats["referenced"]>;
 		try {
-			relations = await this.relations.read(undefined, []);
-			await this.relations.assertCurrent(relations);
+			relations = await this.relations.read(signal, []);
+			if (!isCurrent()) return null;
+			await this.relations.assertCurrent(relations, signal);
 			const daily = new Map<string, number>();
 			for (const [key, referrers] of relations.referrers) {
 				const node = relations.nodes.get(key);
 				if (node && referrers.length) daily.set(node.logicalDate, (daily.get(node.logicalDate) ?? 0) + 1);
 			}
-			prepared.referenced = { daily, complete: relations.complete, failed: relations.errors.length > 0 && !relations.recovering };
+			referenced = { daily, complete: relations.complete, failed: relations.errors.length > 0 && !relations.recovering };
 		} catch (error) {
-			if (error instanceof MemoRelationsChangedError) return null;
+			if (error instanceof MemoRelationsChangedError || !isCurrent()) return null;
 			relations = null;
 			console.error("Knomo referenced statistics read failed", error);
-			prepared.referenced = { daily: new Map(), complete: false, failed: true };
+			referenced = { daily: new Map(), complete: false, failed: true };
 		}
 		await this.requireCompleteCoverage("Record statistics");
-		await yieldToUi();
-		if (!isCurrent() || !await this.isDiscoverySnapshotCurrent({ ...aggregate, day: formatDatePart(this.now()) })) return null;
-		try { if (relations) await this.relations.assertCurrent(relations); }
+		if (!publishBase) await yieldToUi();
+		if (!isCurrent() || !await this.isDiscoverySnapshotCurrent(snapshot, signal)) return null;
+		try { if (relations) await this.relations.assertCurrent(relations, signal); }
 		catch (error) { if (error instanceof MemoRelationsChangedError) return null; throw error; }
-		return isCurrent() ? prepared : null;
+		return isCurrent() ? { ...prepared, referenced } : null;
 	}
 
 	async getRandomReunionItems(count: number, options: {
@@ -870,7 +886,7 @@ export function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): 
 	if (filter.type === "with-tag") query.hasTag = true;
 	if (filter.type === "no-tag") query.hasTag = false;
 	if (filter.type === "with-image") query.hasImage = true;
-	if (filter.type === "tag") query.tags = [filter.tagKey];
+	if (filter.type === "tag") query.exactTags = [filter.tagKey];
 	if (filter.type === "hour") query.hour = filter.hour;
 	if (filter.type === "references") query.hasReference = true;
 	if (filter.type === "referenced") query.hasReferrers = true;
@@ -913,7 +929,7 @@ function buildPreparedRecordStats(aggregates: readonly CatalogDailyAggregate[]):
 			untaggedMemoCount: aggregate.untaggedMemoCount ?? 0,
 			imageMemoCount: aggregate.imageMemoCount ?? 0,
 			hourCounts: Array.from({ length: 24 }, (_, hour) => aggregate.hourCounts?.[hour] ?? 0),
-			tagMemoCounts: new Map(Object.entries(aggregate.tagMemoCounts ?? {})),
+			tagMemoCounts: new Map(Object.entries(aggregate.tagMemoCounts)),
 		});
 	}
 	return {

@@ -13,6 +13,33 @@ function draft(content: string): LocalComposerDraft {
 	return { ...emptyComposerDraft(), active: { ...emptyComposerDraft().active, content, anchor: content.length, head: 0, scrollTop: 24 } };
 }
 
+test("只跳过持久化内容和恢复顺序都相同的草稿写入", () => {
+	const disk = storage();
+	const save = disk.saveLocalStorage;
+	let writes = 0;
+	disk.saveLocalStorage = (key, value) => { writes++; save(key, value); };
+	const first = new LocalComposerDraftStore(disk, assert.fail);
+	first.update(emptyComposerDraft());
+	assert.equal(writes, 0);
+	const one = draft("one");
+	first.update(one);
+	first.update(one);
+	assert.equal(writes, 1);
+	first.changed();
+	first.update(one);
+	first.update({ ...one, active: { ...one.active, anchor: 0 } });
+	assert.equal(writes, 3);
+
+	const second = new LocalComposerDraftStore(disk, assert.fail);
+	second.update(draft("two"));
+	first.update({ ...one, active: { ...one.active, anchor: 0 } });
+	assert.equal(writes, 5, "同值写入仍会把条目移到恢复队列末尾");
+	first.close(); second.close();
+	const reopened = new LocalComposerDraftStore(disk, assert.fail);
+	assert.equal(reopened.draft.active.content, "two");
+	reopened.close();
+});
+
 function reloadDraftModule(): typeof import("../src/ui/LocalComposerDraftStore") {
 	const path = require.resolve("../src/ui/LocalComposerDraftStore");
 	const cached = require.cache[path];

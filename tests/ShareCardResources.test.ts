@@ -92,3 +92,51 @@ test("remote resources use the exact source URL, CORS and no credentials, and fa
 		assert.equal(attempts, 2);
 	} finally { globalThis.fetch = originalFetch; Object.assign(globalThis, { window: originalWindow }); }
 });
+
+test("远程图片拒绝非图片、错误响应及超限，流式超限后取消读取", async () => {
+	await ensureObsidianStub();
+	const { loadShareCardImage } = await import("../src/ui/share/ShareCardResources");
+	const originalFetch = globalThis.fetch, originalWindow = globalThis.window;
+	Object.assign(globalThis, { window: { setTimeout, clearTimeout } });
+	try {
+		for (const response of [new Response("bad", { status: 404 }), new Response("html", { headers: { "Content-Type": "text/html" } }),
+			new Response("x", { headers: { "Content-Type": "image/png", "Content-Length": "32000001" } })]) {
+			globalThis.fetch = async () => response;
+			await assert.rejects(loadShareCardImage({} as App, "https://example.test/image", "Daily/today.md", new AbortController().signal),
+				response.headers.has("Content-Length") ? /limit/u : /image/u);
+		}
+		let cancelled = 0, reads = 0;
+		const stream = new ReadableStream<Uint8Array>({ pull(controller) { reads++; controller.enqueue(new Uint8Array(16_000_001)); },
+			cancel() { cancelled++; } }, { highWaterMark: 0 });
+		globalThis.fetch = async () => new Response(stream, { headers: { "Content-Type": "image/png" } });
+		await assert.rejects(loadShareCardImage({} as App, "https://example.test/image", "Daily/today.md", new AbortController().signal), /limit/u);
+		assert.equal(reads, 2); assert.equal(cancelled, 1);
+	} finally { globalThis.fetch = originalFetch; Object.assign(globalThis, { window: originalWindow }); }
+});
+
+test("远程图片超时及外部取消会中止请求并释放计时器，后续请求仍可重试", async () => {
+	await ensureObsidianStub();
+	const { loadShareCardImage } = await import("../src/ui/share/ShareCardResources");
+	const originalFetch = globalThis.fetch, originalWindow = globalThis.window;
+	let timeout: () => void = () => assert.fail();
+	let cleared = 0, aborted = 0;
+	Object.assign(globalThis, { window: { setTimeout: (callback: () => void, delay: number) => {
+		assert.equal(delay, 20_000); timeout = callback; return 7;
+	}, clearTimeout: (timer: number) => { assert.equal(timer, 7); cleared++; } } });
+	try {
+		for (const mode of ["timeout", "abort"]) {
+			globalThis.fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
+				init!.signal!.addEventListener("abort", () => { aborted++; reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+			});
+			const controller = new AbortController();
+			const pending = loadShareCardImage({} as App, "https://example.test/image", "Daily/today.md", controller.signal);
+			const rejected = assert.rejects(pending, /image/u);
+			if (mode === "timeout") timeout(); else controller.abort();
+			await rejected;
+		}
+		assert.equal(aborted, 2); assert.equal(cleared, 2);
+		globalThis.fetch = async () => new Response(new Uint8Array([1]), { headers: { "Content-Type": "image/png" } });
+		assert.equal((await loadShareCardImage({} as App, "https://example.test/image", "Daily/today.md", new AbortController().signal)).size, 1);
+		assert.equal(cleared, 3);
+	} finally { globalThis.fetch = originalFetch; Object.assign(globalThis, { window: originalWindow }); }
+});

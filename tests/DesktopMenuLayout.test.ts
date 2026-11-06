@@ -46,6 +46,24 @@ interface DesktopMenuView {
 	handleCardFlowScroll(): void;
 }
 
+test("桌面菜单统一使用独立分隔线，关联入口动态更新不进入删除分组", async () => {
+	const f = await createMobilePopupFixture();
+	const { syncMemoCardRelationsAction } = await import("../src/ui/KnomoCard");
+	try {
+		const menu = f.card.querySelector<HTMLElement>(".knomo-card-actions")!;
+		const separators = Array.from(menu.querySelectorAll('[role="separator"]'));
+		for (const hasReferrers of [true, true, false, true, false]) {
+			syncMemoCardRelationsAction(f.card, createCardMemo({ id: "p0-memo" }), hasReferrers);
+			assert.deepEqual(Array.from(menu.querySelectorAll('[role="separator"]')), separators);
+			assert.deepEqual(separators.map(el => el.nextElementSibling?.getAttribute("data-memo-action") ?? el.nextElementSibling?.className), [
+				"open-daily", "delete", "knomo-card-word-count",
+			]);
+			assert.equal(separators[1].previousElementSibling?.getAttribute("data-memo-action"), hasReferrers ? "relations" : "copy-link");
+			assert.ok(separators.every(el => !el.hasAttribute("tabindex") && !el.hasAttribute("data-memo-action")));
+		}
+	} finally { f.close(); }
+});
+
 async function createDesktopMenuPositionFixture() {
 	const f = await createMobilePopupFixture();
 	const { KnomoView } = await import("../src/ui/KnomoView");
@@ -171,10 +189,11 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 	});
 	const scopeKeys: Record<string, TranslationKey> = {
 		all: "nav.allNotes", things: "nav.things", "no-tag": "filter.noTag", "with-link": "filter.withLink",
+		referenced: "filter.referenced",
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
 	const actionKeys: Record<string, TranslationKey> = {
-		"share-image": "share.share", edit: "card.edit", reference: "card.reference", "copy-text": "card.copyText",
+		reference: "card.reference", edit: "card.edit", "share-image": "share.share", "copy-text": "card.copyText",
 		"open-daily": "card.openDaily", "copy-link": "card.copyLink", relations: "relations.title", delete: "card.delete",
 	};
 	const css = readFileSync("styles.css", "utf8");
@@ -191,7 +210,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 				const scope = narrow ? menus.scope : menus.scope.replace("knomo-mobile-scope-popover", "knomo-desktop-scope-popover");
 				await page.setViewportSize({ width, height });
 				await page.setContent(`<style>${hostCss}${css}
-					body{margin:0;display:block;font:${font}px Arial;background:var(--background-primary);--font-ui-medium:${font}px;--border-width:1px;--text-normal:${theme === "theme-dark" ? "#ddd" : "#222"};--text-muted:var(--text-normal);--text-error:#d33;--background-primary:${theme === "theme-dark" ? "#222" : "#fff"};--background-secondary:var(--background-primary)}
+					body{margin:0;display:block;font:${font}px Arial;background:var(--background-primary);--font-ui-medium:${font}px;--border-width:1px;--text-normal:${theme === "theme-dark" ? "#ddd" : "#222"};--text-muted:var(--text-normal);--text-error:#d33;--background-modifier-border:${theme === "theme-dark" ? "#444" : "#ccc"};--background-primary:${theme === "theme-dark" ? "#222" : "#fff"};--background-secondary:var(--background-primary)}
 					body{--knomo-text-ui-medium:${15 * scale}px;--knomo-text-ui-base:${14 * scale}px;--knomo-text-meta:${13 * scale}px;--knomo-text-caption:${12 * scale}px}
 					#root{position:relative;display:block;margin:20px;width:calc(100vw - 40px);height:calc(100vh - 40px)}
 					#bounds{position:relative;display:block;width:100%;height:100%;padding:0;overflow:hidden}
@@ -248,6 +267,8 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 							rowsFit: rows.every(el => el.getBoundingClientRect().height >= 32 && el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1),
 							fontSizes: rows.map(el => getComputedStyle(el).fontSize),
 							wordCountSize: getComputedStyle(card.querySelector(".knomo-card-word-count")!).fontSize,
+							groupSeparators: kind === "card" ? Array.from(menu.querySelectorAll<HTMLElement>('[role="separator"]')).map(el => ({ section: el.dataset.beforeSection, border: getComputedStyle(el).borderTopStyle })) : [],
+							scopeSeparators: kind === "scope" ? Array.from(menu.querySelectorAll<HTMLElement>('[role="separator"]')).map(el => ({ group: el.dataset.beforeGroup, border: getComputedStyle(el).borderTopStyle })) : [],
 							lastStartReachable,
 							lastReachable: last.getBoundingClientRect().bottom <= menu.getBoundingClientRect().bottom + 1,
 							scrollable: menu.scrollHeight > menu.clientHeight,
@@ -256,10 +277,12 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
-					assert.equal(result.icons, 9, context);
+					assert.equal(result.icons, kind === "scope" ? 10 : 9, context);
+					if (kind === "scope") assert.deepEqual(result.scopeSeparators, ["filters", "revisit"].map(group => ({ group, border: "solid" })), context);
 					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
 					if (kind === "card") {
 						assert.deepEqual(result.actions, Object.keys(actionKeys), `${context}: all eight actions remain in order`);
+						assert.deepEqual(result.groupSeparators, ["knomo-card-navigation", "knomo-card-danger", "knomo-card-info"].map(section => ({ section, border: "solid" })), `${context}: all groups use the same separator`);
 						const labels = Object.values(actionKeys).map(key => translate(locale, key));
 						assert.deepEqual(result.labels, labels, `${context}: translated labels include relations`);
 						assert.deepEqual(result.accessibleLabels, labels, `${context}: accessible names match visible text`);

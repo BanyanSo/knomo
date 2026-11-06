@@ -105,6 +105,67 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
 
+test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并保留主体", async () => {
+	const h = await fixture(true);
+	try {
+		const [target] = await h.seed("A.md", "## Memos\n\n- 09:00 subject ^target\n");
+		await h.page.open(target);
+		await settle();
+		const originalCard = h.page.el!.querySelector(".knomo-relations-subject .knomo-card");
+		assert.ok(originalCard);
+		const read = h.read.relations.read.bind(h.read.relations);
+		let queries = 0;
+		h.read.relations.read = (...args) => { queries++; return read(...args); };
+		h.page.refresh();
+		h.cards!.refresh();
+		h.page.setPresentationPaused(true);
+		h.cards!.setPresentationPaused(true);
+		await h.seed("B.md", "## Memos\n\n- 10:00 [[A#^target]] first\n");
+		h.read.relations.invalidateResolution(["A.md"]);
+		h.read.relations.invalidateResolution(["B.md"]);
+		await settle();
+		assert.equal(queries, 0);
+		h.page.setPresentationPaused(false);
+		h.cards!.setPresentationPaused(false);
+		await settle();
+		assert.ok(queries > 0);
+		assert.match(h.page.el!.querySelector(".knomo-relations-list")!.textContent!, /first/);
+		assert.equal(h.page.el!.querySelector(".knomo-relations-subject .knomo-card"), originalCard);
+	} finally { h.close(); }
+});
+
+test("关联页隐藏会取消已开始的关系读取，迟到结果不能覆盖恢复后的列表", async () => {
+	const h = await fixture();
+	let release!: () => void;
+	const waiting = new Promise<void>(resolve => { release = resolve; });
+	try {
+		const [target] = await h.seed("A.md", "- 09:00 subject ^target\n");
+		await h.page.open(target);
+		const read = h.read.relations.read.bind(h.read.relations);
+		let enter!: (signal: AbortSignal) => void;
+		const started = new Promise<AbortSignal>(resolve => { enter = resolve; });
+		let first = true;
+		h.read.relations.read = async (signal, handles) => {
+			if (!first) return read(signal, handles);
+			first = false;
+			const old = await read(signal, handles);
+			enter(signal!);
+			await waiting;
+			return old;
+		};
+		h.page.refresh();
+		const signal = await started;
+		h.page.setPresentationPaused(true);
+		assert.equal(signal.aborted, true);
+		await h.seed("B.md", "- 10:00 [[A#^target]] latest\n");
+		h.read.relations.invalidateResolution(["A.md"]);
+		h.page.setPresentationPaused(false);
+		release();
+		await settle(); await settle();
+		assert.match(h.page.el!.querySelector(".knomo-relations-list")!.textContent!, /latest/);
+	} finally { release(); h.close(); }
+});
+
 test("逐层指针返回恢复入口焦点且无焦点环，新操作或上层 Modal 取消异步恢复", async () => {
 	for (const scenario of ["pointer", "keyboard", "new-input", "modal"]) {
 		const h = await fixture();
@@ -214,7 +275,7 @@ test("卡片菜单随被引用信息加载、增删更新，只有引用来源�
 		assert.equal(target.querySelector('[data-memo-action="relations"]'), null);
 		await settle(); await settle();
 		assert.deepEqual(Array.from(target.querySelectorAll<HTMLElement>("[data-memo-action]")).map(item => item.dataset.memoAction),
-			["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
+			["reference", "edit", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
 		assert.equal(source.querySelector('[data-memo-action="relations"]'), null);
 		await h.seed("C.md", "- 12:00 C [[D#^b]]\n"); await settle(); await settle();
 		assert.ok(source.querySelector('[data-memo-action="relations"]'));
@@ -427,16 +488,16 @@ test("被引用指标局部撤下旧数值与入口，正常更新不播报，�
 		const chart = h.host.createDiv({ text: "chart" });
 		const metric = h.host.createEl("button", { attr: { "data-record-stats-metric": "referenced", "data-action": "record-stats-filter-referenced" } });
 		metric.createDiv({ cls: "knomo-record-stats-metric-value", text: "1" }); metric.focus();
-		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: true, error: null });
-		assert.equal(metric.textContent, "—"); assert.equal(metric.getAttribute("data-action"), null);
+		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: true, error: null, valid: false });
+		assert.equal(metric.querySelector(".knomo-record-stats-metric-value")?.textContent, "—"); assert.equal(metric.getAttribute("data-action"), null);
 		assert.equal(h.win.document.activeElement, metric); assert.equal(h.host.firstElementChild, chart);
 		assert.equal(metric.querySelector("[role='status'],[aria-live]"), null);
 		const failed = { ...selected, referenced: { count: 1, complete: false, failed: true } };
-		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null });
+		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null, valid: true });
 		const fault = metric.querySelector("[role='status']"); assert.ok(fault);
-		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null });
+		syncKnomoReferencedMetric(h.host, failed, { state: "ready", updating: false, error: null, valid: true });
 		assert.equal(metric.querySelector("[role='status']"), fault);
-		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: false, error: null });
+		syncKnomoReferencedMetric(h.host, selected, { state: "ready", updating: false, error: null, valid: true });
 		assert.equal(metric.textContent, "1"); assert.equal(metric.querySelector("[role='status']"), null);
 		assert.equal(h.host.firstElementChild, chart); assert.equal(h.win.document.activeElement, metric);
 	} finally { h.close(); }
@@ -463,11 +524,120 @@ test("统计构建正常失效仍有一次尾随准备，同代次持续失效�
 			recordStatsPreparationController: new RecordStatsPreparationController({ scheduleTask: (callback, delay) => h.win.setTimeout(callback, delay), cancelTask: id => h.win.clearTimeout(id) }),
 		});
 		assert.equal(await view.prepareRecordStats(), false); await settle(); await settle();
-		assert.equal(stats.getSnapshot().state, persistent ? "idle" : "ready"); assert.equal(stats.getSnapshot().error, null);
+		assert.equal(stats.getSnapshot().state, "ready"); assert.equal(stats.getSnapshot().error, null);
+		assert.equal(stats.select("month", new Date(2026, 9, 25))?.overview.memoCount, 2);
+		assert.equal(stats.getSnapshot().valid, !persistent);
 		if (!persistent) assert.equal(stats.select("month", new Date(2026, 9, 25))?.referenced?.count, 1);
 		assert.equal(checks, persistent ? 2 : 3);
 	} finally { h.close(); }
 	}
+});
+
+test("统计基础指标先独立发布，取消旧关系消费者后只接受最新来源", async () => {
+	const h = await fixture();
+	try {
+		await h.seed("A.md", "- 10:00 A ^a\n");
+		await h.seed("B.md", "- 11:00 B [[A#^a]]\n");
+		const { RecordStatsService, isReferencedMemoStatsAvailable } = await import("../src/services/RecordStatsService");
+		const stats = new RecordStatsService();
+		const select = () => stats.select("month", new Date(2026, 9, 25));
+		const revision = await h.catalog.getStore().getCatalogRevision();
+		assert.equal(await h.read.buildRecordStats(async () => {}, () => true, {
+			publishBase: () => assert.fail("旧来源不能先发布新快照的基础指标"),
+			expectedCatalogRevision: revision - 1,
+		}), null);
+		const read = h.read.relations.read.bind(h.read.relations);
+		let entered!: (signal: AbortSignal) => void;
+		const reading = new Promise<AbortSignal>(resolve => { entered = resolve; });
+		let release!: () => void;
+		const waiting = new Promise<void>(resolve => { release = resolve; });
+		h.read.relations.read = async (signal, handles) => { entered(signal!); await waiting; return read(signal, handles); };
+		let basePublishes = 0;
+		const old = stats.prepareFromSource("old", (current, publish, signal) =>
+			h.read.buildRecordStats(async () => {}, current, { publishBase: publish, signal, expectedCatalogRevision: revision }),
+		true, () => { basePublishes++; });
+		const oldSignal = await reading;
+		assert.equal(basePublishes, 1);
+		assert.equal(select()?.overview.memoCount, 2);
+		assert.equal(select()?.referenced, undefined);
+		assert.equal(isReferencedMemoStatsAvailable(select(), stats.getSnapshot()), false);
+		assert.equal(stats.isPreparedForSource("old"), false);
+
+		stats.invalidate();
+		assert.equal(oldSignal.aborted, true);
+		await h.seed("C.md", "- 12:00 C\n");
+		h.read.relations.read = read;
+		const newest = stats.prepareFromSource("new", (current, publish, signal) =>
+			h.read.buildRecordStats(async () => {}, current, { publishBase: publish, signal }));
+		assert.equal(await newest, true);
+		release();
+		assert.equal(await old, false);
+		assert.equal(select()?.overview.memoCount, 3);
+		assert.equal(select()?.referenced?.count, 1);
+		assert.equal(stats.isPreparedForSource("new"), true);
+	} finally { h.close(); }
+});
+
+test("统计被引用按钮从未知到可用再失效时保留节点焦点，所有激活入口遵守当前状态", async () => {
+	const h = await fixture();
+	try {
+		await h.seed("A.md", "- 10:00 A ^a\n"); await h.seed("B.md", "- 11:00 [[A#^a]]\n");
+		const { RecordStatsService } = await import("../src/services/RecordStatsService");
+		const { RecordStatsViewStateController } = await import("../src/ui/RecordStatsViewStateController");
+		const { KnomoViewStateController } = await import("../src/ui/KnomoViewStateController");
+		const { KnomoView } = await import("../src/ui/KnomoView");
+		const { renderKnomoRecordStatsPage, syncKnomoReferencedMetric } = await import("../src/ui/KnomoRecordStatsPage");
+		const prepared = (await h.read.buildRecordStats(async () => {}, () => true))!;
+		const stats = new RecordStatsService(), ranges = new RecordStatsViewStateController(new Date(2026, 9, 25));
+		ranges.setView("month");
+		await stats.prepareFromSource("partial", async () => ({ ...prepared, referenced: { ...prepared.referenced!, complete: false } }));
+		let opened = 0, clicks = 0;
+		const view = Object.assign(Object.create(KnomoView.prototype), {
+			recordStatsService: stats, recordStatsViewStateController: ranges, viewStateController: new KnomoViewStateController(),
+			catalogReadService: h.read, catalogCoverage: await h.catalog.getStore().getCoverage(),
+			catalogStatus: { settings: "ready", content: "ready", catalog: "complete", currentConfiguration: "ready", projection: "ready" },
+			currentLayout: "mobile", trashViewClosed: false, getDailyNotesStatus: () => ({ enabled: true }),
+			mobileSearchController: { resetState: () => {} }, openMobileSearchPage: () => { opened++; },
+		});
+		const selected = () => stats.select("month", new Date(2026, 9, 25))!;
+		const filter = { type: "referenced", startDate: selected().startDate, endDateExclusive: selected().endDateExclusive };
+		const page = renderKnomoRecordStatsPage(h.host, { snapshot: stats.getSnapshot(), selected: selected(), view: "month",
+			canAdvance: false, canRetreat: true, createHiddenText: (parent, id, text) => { parent.createSpan({ text, attr: { id } }); return id; } });
+		const metric = page.querySelector<HTMLButtonElement>("[data-record-stats-metric='referenced']")!;
+		const chart = page.querySelector(".knomo-record-stats-chart")!;
+		page.scrollTop = 80; metric.focus();
+		h.host.addEventListener("click", event => {
+			if ((event.target as HTMLElement).closest("[data-record-stats-metric='referenced']")) { clicks++; view.openRecordStatsMetricFilter("referenced"); }
+		});
+		const sync = (blocked = false) => syncKnomoReferencedMetric(page, selected(), stats.getSnapshot(), blocked);
+		const cannotOpen = () => {
+			const before = opened, events = clicks;
+			metric.click(); metric.dispatchEvent(new h.win.MouseEvent("click", { bubbles: true, cancelable: true }));
+			for (const key of ["Enter", " "]) metric.dispatchEvent(new h.win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+			view.openRecordStatsMetricFilter("referenced"); view.openRecordStatsSearchFilter(filter);
+			assert.equal(opened, before); assert.equal(clicks, events);
+			assert.equal(metric.getAttribute("aria-disabled"), "true");
+			assert.equal(metric.querySelector(".knomo-record-stats-metric-value")?.textContent, "—");
+		};
+		cannotOpen();
+		const pendingText = metric.querySelector(".knomo-record-stats-metric-description")!.textContent;
+		await stats.prepareFromSource("complete", async () => prepared); sync(); metric.click();
+		assert.equal(opened, 1); assert.equal(metric.hasAttribute("aria-disabled"), false);
+		assert.equal(metric.querySelector(".knomo-record-stats-metric-description"), null);
+		stats.invalidate(false); sync(); cannotOpen();
+		await stats.prepareFromSource("failed", async () => { throw Error("refresh failed"); }); sync(); cannotOpen();
+		const fault = metric.querySelector(".knomo-record-stats-metric-description")!;
+		assert.notEqual(fault.textContent, pendingText); assert.equal(fault.getAttribute("role"), "status");
+		sync(); assert.equal(metric.querySelector(".knomo-record-stats-metric-description"), fault);
+		await stats.prepareFromSource("recovered", async () => prepared); sync(); metric.click(); assert.equal(opened, 2);
+		view.catalogStatus.settings = "unavailable"; sync(true); cannotOpen();
+		view.catalogStatus.settings = "ready"; sync();
+		view.openRecordStatsSearchFilter({ ...filter, startDate: "2020-01-01" }); assert.equal(opened, 2);
+		metric.click(); assert.equal(opened, 3);
+		assert.equal(page.querySelector("[data-record-stats-metric='referenced']"), metric);
+		assert.equal(page.querySelector(".knomo-record-stats-chart"), chart);
+		assert.equal(h.win.document.activeElement, metric); assert.equal(page.scrollTop, 80);
+	} finally { h.close(); }
 });
 
 test("实际视图接线在 metadata 挂起期间无全局关系提示，后台放行后各表面自动出现预览", async () => {
@@ -846,6 +1016,48 @@ test("无关 Daily 编辑不打断已打开关联页或重读其正文", async (
 		assert.doesNotMatch(h.page.el!.querySelector("h3:last-of-type")!.textContent!, /Pending update|待更新/u);
 		await settle();
 		assert.equal(h.bodyReads(), count);
+	} finally { h.close(); }
+});
+
+test("Memo 级锚点优先恢复卡片摘要和关联详情，其内部子块引用不进入摘要", async () => {
+	const h = await fixture(true);
+	try {
+		const [target] = await h.seed("A.md", "- 10:00 first\n  last ^memo\n  - child ^child\n");
+		await h.seed("B.md", "- 11:00 历史引用恢复 [[A#^memo]]\n- 12:00 子块引用 [[A#^child]]\n");
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(target));
+		await settle(); await settle();
+		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 1);
+		assert.equal(card.querySelector(".knomo-referrer-summary")?.textContent, "历史引用恢复");
+		card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!.click();
+		await settle(); await settle();
+		assert.equal(h.page.isOpen, true);
+		const rows = h.page.el!.querySelectorAll(".knomo-relations-list .knomo-card-content");
+		assert.equal(rows.length, 1);
+		assert.match(rows[0].textContent!, /历史引用恢复/u);
+		assert.deepEqual(h.errors, []);
+	} finally { h.close(); }
+});
+
+test("旧版末项锚点恢复摘要、被引用筛选和关联详情，非末项 ID 不混入", async () => {
+	const h = await fixture(true);
+	try {
+		const [target] = await h.seed("A.md", "- 10:50:45 赚不到钱的表现（做成的反愿景）：\n\t- 精力分散。 ^internal\n\t- 分不清矛盾主次。  ^no1wu1\n");
+		await h.seed("B.md", "- 11:00 历史列表引用 [[A#^no1wu1|旧别名]]\n- 12:00 内部子块引用 [[A#^internal]]\n");
+		assert.equal((await h.read.count({ hasReferrers: true })).count, 1);
+		const page = await h.read.query({ hasReferrers: true, limit: 30 });
+		assert.deepEqual(page.items.map(item => observationHandleKey(item.observationHandle)), [observationHandleKey(target)]);
+		const card = h.host.createEl("article", { cls: "knomo-card" });
+		h.cards!.observe(card, await h.memo(target));
+		await settle(); await settle();
+		assert.equal(card.querySelectorAll(".knomo-referrer-preview").length, 1);
+		assert.equal(card.querySelector(".knomo-referrer-summary")?.textContent, "历史列表引用");
+		card.querySelector<HTMLButtonElement>(".knomo-referrer-preview")!.click();
+		await settle(); await settle();
+		const rows = h.page.el!.querySelectorAll(".knomo-relations-list .knomo-card-content");
+		assert.equal(rows.length, 1);
+		assert.match(rows[0].textContent!, /历史列表引用/u);
+		assert.deepEqual(h.errors, []);
 	} finally { h.close(); }
 });
 

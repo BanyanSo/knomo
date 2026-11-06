@@ -136,21 +136,25 @@ export class LocalComposerDraftStore {
 		if (this.disposed) return;
 		try {
 			const latest = this.read();
+			const saved = latest.find(item => item.id === this.entry.id);
 			// 比较实际持久化基线，不能用旧实例的内存版本覆盖重载后的新版本。
-			if (JSON.stringify(latest.find(item => item.id === this.entry.id) ?? null) !== this.persistedEntry) {
+			if (JSON.stringify(saved ?? null) !== this.persistedEntry) {
 				this.dispose();
 				this.reportError();
 				return;
 			}
-			const entries = latest.filter(item => item.id !== this.entry.id);
 			const draft = this.entry.draft;
-			if (draft.active.content.length || draft.active.referenceText !== null || draft.editingMemo || draft.suspendedCreate || this.entry.pending) {
-				entries.push(clone(this.entry));
-			}
+			const entry = draft.active.content.length || draft.active.referenceText !== null || draft.editingMemo || draft.suspendedCreate || this.entry.pending
+				? this.entry : null;
+			const serialized = JSON.stringify(entry);
+			// 同值保存仍可能改变恢复顺序。已在末尾或本来就没有条目时，才可跳过空写。
+			if (!this.reportedFailure && serialized === this.persistedEntry && (saved === undefined || saved === latest[latest.length - 1])) return;
+			const entries = latest.filter(item => item.id !== this.entry.id);
+			if (entry !== null) entries.push(clone(entry));
 			this.storage.saveLocalStorage(STORAGE_KEY, { schema: 1, entries });
 			// 某些宿主会静默忽略写入，读回失败也必须提示。
 			if (JSON.stringify(this.read()) !== JSON.stringify(entries)) throw new Error("Draft write was not retained");
-			this.persistedEntry = JSON.stringify(entries.find(item => item.id === this.entry.id) ?? null);
+			this.persistedEntry = serialized;
 			this.reportedFailure = false;
 		} catch { this.reportError(); }
 	}

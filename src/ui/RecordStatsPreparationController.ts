@@ -72,7 +72,9 @@ export class RecordStatsPreparationController {
 		this.prepareTaskId = null;
 	}
 
-	clearRetryRequest(): void {
+	cancelPreparation(): void {
+		this.clearScheduledPreparation();
+		this.requestPromise = null;
 		this.requestInvalidated = false;
 	}
 
@@ -88,11 +90,10 @@ export class RecordStatsPreparationController {
 		this.requestInvalidated = false;
 		const request = options.runPreparation(this.sourceKey);
 		const trackedRequest = request.finally(() => {
+			if (this.requestPromise !== trackedRequest) return;
 			const shouldRetry = this.requestInvalidated && !options.isPreparedForSource(this.sourceKey);
 			this.requestInvalidated = false;
-			if (this.requestPromise === trackedRequest) {
-				this.requestPromise = null;
-			}
+			this.requestPromise = null;
 			if (shouldRetry) {
 				void this.prepare(options);
 			}

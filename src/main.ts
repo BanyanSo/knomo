@@ -1,5 +1,5 @@
 import { initializeCatalogRuntime } from "./services/CatalogStartup";
-import { getLanguage, Notice, Platform, Plugin, TFile, View } from "obsidian";
+import { getLanguage, Notice, Platform, Plugin, TFile, TFolder, Vault, View } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
@@ -666,9 +666,32 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	private registerAttachmentEvents(): void {
+		const resolved = new ViewRefreshScheduler(() => this.app.workspace.containerEl.win, async () => {
+			for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+				if (leaf.view instanceof KnomoView) leaf.view.handleAttachmentMetadataResolved();
+			}
+		}, OPEN_VIEWS_REFRESH_DEBOUNCE_MS);
+		this.register(() => resolved.clear());
+		this.registerEvent(this.app.metadataCache.on("resolved", () => {
+			void resolved.queue().catch(error => console.error("Knomo attachment resolution refresh failed", error));
+		}));
+		const folderChanged = (folder: TFolder, oldPath?: string) => {
+			const paths: string[] = [];
+			Vault.recurseChildren(folder, child => {
+				if (!(child instanceof TFile) || !isSupportedImagePath(child.path)) return;
+				paths.push(child.path);
+				if (oldPath !== undefined && child.path.startsWith(`${folder.path}/`)) {
+					paths.push(oldPath + child.path.slice(folder.path.length));
+				}
+			});
+			const folders = oldPath === undefined ? [folder.path] : [oldPath, folder.path];
+			for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
+				if (leaf.view instanceof KnomoView) leaf.view.handleAttachmentFoldersChanged(folders, paths);
+			}
+		};
 		this.registerEvent(this.app.vault.on("create", (file) => {
 			if (file instanceof TFile && isSupportedImagePath(file.path)) {
-				this.broadcastAttachmentChanges([file.path]);
+				this.broadcastAttachmentChanges([file.path], true);
 			}
 		}));
 		this.registerEvent(this.app.vault.on("modify", (file) => {
@@ -677,17 +700,25 @@ export default class KnomoPlugin extends Plugin {
 			}
 		}));
 		this.registerEvent(this.app.vault.on("delete", (file) => {
+			if (file instanceof TFolder) {
+				folderChanged(file);
+				return;
+			}
 			if (file instanceof TFile && isSupportedImagePath(file.path)) {
-				this.broadcastAttachmentChanges([file.path]);
+				this.broadcastAttachmentChanges([file.path], true);
 			}
 		}));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+			if (file instanceof TFolder) {
+				folderChanged(file, oldPath);
+				return;
+			}
 			const paths = [
 				isSupportedImagePath(oldPath) ? oldPath : null,
 				file instanceof TFile && isSupportedImagePath(file.path) ? file.path : null,
 			].filter((path): path is string => path !== null);
 			if (paths.length > 0) {
-				this.broadcastAttachmentChanges(paths);
+				this.broadcastAttachmentChanges(paths, true);
 			}
 		}));
 	}
@@ -721,10 +752,10 @@ export default class KnomoPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("delete", () => refresh()));
 	}
 
-	private broadcastAttachmentChanges(paths: readonly string[]): void {
+	private broadcastAttachmentChanges(paths: readonly string[], resolutionChanged = false): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 			if (leaf.view instanceof KnomoView) {
-				leaf.view.handleAttachmentFilesChanged(paths);
+				leaf.view.handleAttachmentFilesChanged(paths, resolutionChanged);
 			}
 		}
 	}

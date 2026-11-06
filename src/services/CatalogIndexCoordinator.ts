@@ -5,7 +5,7 @@ import type { CatalogScanSnapshot } from "../types/catalogView";
 import type {
 	CatalogCheckpoint,
 	CatalogCoverage,
-	CatalogFileRecord,
+	CatalogFileHeader,
 	CatalogInventoryEntry,
 	CatalogRefreshResult,
 } from "../types/catalog";
@@ -278,12 +278,12 @@ export class CatalogIndexCoordinator {
 
 	async refreshLocalCatalog(): Promise<CatalogRefreshResult> {
 		if (!this.opened || this.isStopped()) throw new Error("Memo Catalog is not available.");
-		const before = await this.catalogService.listFiles();
+		const before = await this.catalogService.listFileHeaders();
 		if (this.isStopped()) throw new Error("Memo Catalog is not available.");
 		await this.reconcileInventory();
 		await this.waitForIdle();
 		if (this.isStopped()) throw new Error("Memo Catalog is not available.");
-		const after = await this.catalogService.listFiles();
+		const after = await this.catalogService.listFileHeaders();
 		return buildRefreshResult(before, after, [...this.failedPaths.values()]);
 	}
 
@@ -422,13 +422,13 @@ export class CatalogIndexCoordinator {
 			if (this.isStopped()) return;
 
 			const store = this.catalogService.getStore();
-			const storedFiles = await store.listFiles();
+			const storedFiles = await store.listFileHeaders();
 			if (this.isStopped()) return;
 			const previousCoverage = await store.getCoverage();
 			if (this.isStopped()) return;
 			this.suppressScannedPeriodChanges = storedFiles.length === 0 && previousCoverage.kind !== "complete";
 			if (storedFiles.length === 0 && inventory.length > 0) this.rebuilding = true;
-			const storedByPath = new Map<string, CatalogFileRecord>();
+			const storedByPath = new Map<string, CatalogFileHeader>();
 			for (const file of storedFiles) {
 				storedByPath.set(file.sourcePath, file);
 				if (yieldController.shouldYield()) await yieldController.yieldNow();
@@ -1184,7 +1184,7 @@ function buildSettingsFingerprint(config: DailyNotesConfig): string {
 }
 
 function isCurrentFileRecord(
-	record: CatalogFileRecord | undefined,
+	record: CatalogFileHeader | undefined,
 	inventory: CatalogInventoryEntry,
 	settingsFingerprint: string,
 ): boolean {
@@ -1208,8 +1208,8 @@ function sortPathsNewestFirst(
 }
 
 function buildRefreshResult(
-	before: readonly CatalogFileRecord[],
-	after: readonly CatalogFileRecord[],
+	before: readonly CatalogFileHeader[],
+	after: readonly CatalogFileHeader[],
 	failures: readonly CatalogFailure[],
 ): CatalogRefreshResult {
 	const beforeByPath = new Map(before.map((file) => [file.sourcePath, file]));

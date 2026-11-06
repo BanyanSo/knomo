@@ -128,7 +128,7 @@ test("formats common-tag chart, action, filter, and empty-state text", async () 
 	assert.equal(translate("zh-CN", "recordStats.commonTags.empty"), "这一范围内还没有标签");
 	assert.equal(
 		translate("zh-CN", "recordStats.action.filterTag", { tag: "Work", count: 3 }),
-		"筛选标签 #Work 的 3 条记录",
+		"查看 3 条直接标注 #Work 的记录",
 	);
 	assert.equal(
 		translate("zh-CN", "recordStats.filter.tag", {
@@ -136,7 +136,7 @@ test("formats common-tag chart, action, filter, and empty-state text", async () 
 			endDate: "2026-06-30",
 			tag: "Work",
 		}),
-		"2026-06-01 至 2026-06-30 · #Work",
+		"2026-06-01 至 2026-06-30 · 直接标注 #Work",
 	);
 });
 

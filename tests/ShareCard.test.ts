@@ -204,6 +204,31 @@ test("closing suppresses pending publication and failures", async () => {
 	}
 });
 
+test("重复选择最新模板共用待处理或已成功结果，切回以最后选择为准", async () => {
+	const renders: string[] = [];
+	const completed: string[] = [];
+	let release!: () => void;
+	const session = new ShareCardSession<string>(async template => {
+		renders.push(template);
+		if (renders.length === 1) await new Promise<void>(resolve => { release = resolve; });
+		return template;
+	}, template => completed.push(template), error => assert.fail(String(error)));
+	session.select("paper");
+	session.select("paper");
+	release();
+	await tick();
+	session.select("paper");
+	await tick();
+	assert.deepEqual(renders, ["paper"]);
+	assert.deepEqual(completed, ["paper"]);
+	session.select("reflection");
+	session.select("daybook");
+	session.select("reflection");
+	await tick();
+	assert.deepEqual(completed, ["paper", "reflection"]);
+	assert.equal(renders.includes("daybook"), false);
+});
+
 test("output capability detection and click-stack dispatch use PNG files, never text or automatic Vault writes", async () => {
 	const calls: string[] = [];
 	class Item { static supports(type: string) { return type === "image/png"; } constructor(readonly value: unknown) {} }

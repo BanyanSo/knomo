@@ -54,8 +54,13 @@ export function renderKnomoDesktopTopbar(container: HTMLElement, options: Header
 
 export function renderKnomoScopePopover(container: HTMLElement, cls: string): HTMLElement {
 	const popover = container.createDiv({ cls, attr: { role: "menu" } });
+	let previousGroup: TitleModeOption["group"] | undefined;
 	for (const option of TITLE_MODE_OPTIONS) {
+		if (previousGroup !== undefined && option.group !== previousGroup) {
+			popover.createDiv({ cls: "knomo-scope-menu-separator", attr: { role: "separator", "data-before-group": option.group } });
+		}
 		renderTitleModeButton(popover, option, "knomo-scope-option");
+		previousGroup = option.group;
 	}
 	return popover;
 }
@@ -90,7 +95,6 @@ export function renderKnomoCompactSearchPanel(container: HTMLElement, options: H
 
 export function renderKnomoSearchPopover(container: HTMLElement): HTMLElement {
 	const searchMenu = container.createDiv({ cls: "knomo-search-menu", attr: { role: "menu" } });
-	searchMenu.createDiv({ cls: "knomo-search-date-hint", attr: { hidden: "", role: "status", "aria-live": "polite" } });
 	for (const option of SEARCH_DATE_OPTIONS) {
 		renderSearchDateButton(searchMenu, option, "knomo-search-menu-option");
 	}

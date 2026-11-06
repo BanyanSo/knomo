@@ -35,7 +35,8 @@ export class MemoRelationWindow {
 
 	constructor(readonly el: HTMLElement, private readonly scroll: HTMLElement, private readonly estimate: number,
 		private readonly render: (row: HTMLElement, node: MemoRelationNode, index: number) => Promise<void>,
-		private readonly release: (row: HTMLElement) => void) {
+		private readonly release: (row: HTMLElement) => void,
+		private readonly isPaused: () => boolean = () => false) {
 		el.classList.add("knomo-relation-window");
 		el.setAttribute("role", "list");
 		el.setAttribute("tabindex", "-1");
@@ -110,12 +111,12 @@ export class MemoRelationWindow {
 
 	private offset(): number { return this.scroll.scrollTop + this.el.getBoundingClientRect().top - this.scroll.getBoundingClientRect().top; }
 	private onScroll = (): void => {
-		if (this.queued) return;
+		if (this.queued || this.isPaused()) return;
 		this.queued = true;
 		this.el.win.requestAnimationFrame(() => { this.queued = false; if (!this.disposed) this.update(); });
 	};
 	private update(): void {
-		if (this.disposed) return;
+		if (this.disposed || this.isPaused()) return;
 		const top = this.scroll.scrollTop - this.offset();
 		const start = this.heights.indexAt(Math.max(0, top - 600));
 		const end = Math.min(this.nodes.length, start + 24, this.heights.indexAt(Math.max(0, top + this.scroll.clientHeight + 600)) + 2);
@@ -164,7 +165,7 @@ export class MemoRelationWindow {
 		}
 	}
 	private measure(): void {
-		if (this.disposed) return;
+		if (this.disposed || this.isPaused()) return;
 		const anchor = this.captureAnchor();
 		let changed = false;
 		for (const [key, row] of this.rows) {

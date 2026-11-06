@@ -289,9 +289,9 @@ test("WikiLink 保留百分号和实体原文，Markdown URL 只解码一次并�
 	} finally { relations.dispose(); }
 });
 
-test("相对路径、同文件与编码兼容，子块和 Daily 外锚点及重复锚点不升级为 Memo", async () => {
+test("相对路径、同文件与编码兼容，非末行子块和 Daily 外锚点及重复锚点不升级为 Memo", async () => {
 	const { seed, relations } = await fixture();
-	const [a] = await seed("Daily/A (1).md", "outside ^duplicate\n\n- 10:00 A ^a\n- 10:01 dup ^duplicate\n- 10:02 parent\n  - child ^child\n");
+	const [a] = await seed("Daily/A (1).md", "outside ^duplicate\n\n- 10:00 A ^a\n- 10:01 dup ^duplicate\n- 10:02 parent\n  - child ^child\n  - last\n");
 	const [b] = await seed("Daily/B.md", "- 11:00 [A](<./A%20(1).md#%5Ea>) [[A (1)#^duplicate]] [[A (1)#^child]] [[#^b]] ^b\n");
 	const graph = await relations.read();
 	assert.deepEqual(graph.sources.get(b!)?.map(node => observationHandleKey(node.handle)), [a]);
@@ -302,6 +302,61 @@ test("Memo 自身锚点不被内部子块锚点替代，frontmatter 与注释不
 	const [a] = await seed("A.md", "---\nvalue: ^a\n---\n\n- 10:00 parent ^a\n  - child ^child\n");
 	const [b] = await seed("B.md", "- 11:00 [[A#^a]] [[A#^child]]\n");
 	assert.deepEqual((await relations.read()).sources.get(b!)?.map(node => observationHandleKey(node.handle)), [a]);
+});
+
+test("历史首段及末项恢复关系，重复 ID 与非主锚点不提升，目标编辑增量更新缓存", async () => {
+	const { seed, relations } = await fixture();
+	try {
+		const [a, b, child, duplicate, shadowed] = await seed("Daily/A.md", [
+			"- 10:00 first\n  last ^a\n  - child ^internal",
+			"- 10:01 first\n\t\n\t^b",
+			"- 10:02 parent\n  - child ^child",
+			"- 10:03 duplicate ^duplicate",
+			"- 10:04 real ^shadowed",
+			"- 10:05 text ^shadowed `tail`",
+			"outside ^duplicate",
+		].join("\n"));
+		const [source] = await seed("Daily/B.md", "- 11:00 summary [[A#^a]] [b](./A.md#%5Eb) [[A#^internal]] [[A#^child]] [[A#^duplicate]] [[A#^shadowed]]\n");
+		const first = await relations.read();
+		assert.deepEqual(new Set(first.sources.get(source!)?.map(node => observationHandleKey(node.handle))), new Set([a, b, child, shadowed]));
+		assert.equal(first.referrers.has(duplicate!), false);
+		assert.equal(first.referrers.get(a!)?.length, 1);
+		// 来源不改写，目标的新解析结果必须撤下旧关系并建立新关系。
+		const [next] = await seed("Daily/A.md", "- 10:00 first\n  last ^b\n  - child ^a\n");
+		const current = await relations.read();
+		assert.equal(current.referrers.has(a!), false);
+		assert.equal(current.referrers.get(next!)?.length, 1);
+		assert.deepEqual(current.sources.get(source!)?.map(node => observationHandleKey(node.handle)), [next]);
+	} finally { relations.dispose(); }
+});
+
+test("末行兼容随目标位置、重复 ID 和主锚点变化更新，未改来源与自引不制造旧关系", async () => {
+	const { seed, relations, catalog } = await fixture();
+	try {
+		const sourceText = "- 11:00 summary [[A#^legacy|旧别名]] [同一目标](A.md#%5Elegacy) ![[A#^legacy]]\n";
+		const [source] = await seed("B.md", sourceText);
+		const targetText = "- 10:00 parent [[#^legacy]]\n\t- [ ] last ^legacy\n";
+		const assertTargets = async (expected: string[]) => {
+			const snapshot = await relations.read();
+			assert.deepEqual(snapshot.sources.get(source!)?.map(node => observationHandleKey(node.handle)) ?? [], expected);
+			for (const target of expected) assert.equal(snapshot.referrers.get(target)?.length, 1, "重复链接与自引不能增加引用者");
+		};
+		const [target] = await seed("A.md", targetText);
+		await assertTargets([target!]);
+		await seed("A.md", targetText + "outside ^legacy\n");
+		await assertTargets([]);
+		const [restored] = await seed("A.md", targetText);
+		await assertTargets([restored!]);
+		await seed("A.md", targetText + "\t- after\n");
+		await assertTargets([]);
+		await seed("A.md", targetText.replace("parent [[#^legacy]]", "parent [[#^legacy]] ^primary"));
+		await assertTargets([]);
+		const [current] = await seed("A.md", targetText);
+		await assertTargets([current!]);
+		const batch = (await catalog.getFileRevisionBatch("B.md"))!;
+		assert.equal(observationHandleKey(batch.observations[0]), source);
+		assert.equal(batch.observations[0].content, sourceText.slice("- 11:00 ".length).trimEnd());
+	} finally { relations.dispose(); }
 });
 
 test("来源改链、上下文变化与目标重命名重验证未改正文的候选", async () => {

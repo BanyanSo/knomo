@@ -6,6 +6,8 @@ import type { Menu, MenuItem, MenuPositionDef } from "obsidian";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoAction } from "../src/ui/KnomoActionDispatch";
 import type { KnomoMobileMenu } from "../src/ui/KnomoMobileMenu";
+import type { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+import type { SidebarNav, TitleMode, ViewTitleState } from "../src/ui/viewNavigation";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
 import { createReferenceMemo } from "./helpers/referenceMemo";
 
@@ -16,7 +18,7 @@ test("原生菜单有无自身锚点均显示固定的引用和复制链接", as
 			h.originalMemo.catalog = createReferenceMemo(anchor).catalog;
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
-			assert.equal(menu.items[2].title, "Reference");
+			assert.equal(menu.items[0].title, "Reference");
 			assert.equal(menu.items[5].title, "Copy link");
 			h.controller.close();
 		}
@@ -35,12 +37,12 @@ test("移动端卡片菜单使用原生分区，删除独立成组且不插入�
 			syncMemoCardRelationsAction(h.f.card, h.originalMemo, hasReferrers);
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
-			assert.deepEqual(menu.items.map(item => item.icon), ["share", "pencil", "message-square-quote", "copy",
+			assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy",
 				...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : []), "trash-2", "text"]);
 			const sections = new Map<string, string[]>();
 			for (const item of menu.items) sections.set(item.section, [...(sections.get(item.section) ?? []), item.icon]);
 			assert.deepEqual([...sections], [
-				["knomo-card-primary", ["share", "pencil", "message-square-quote", "copy"]],
+				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy"]],
 				["knomo-card-navigation", [...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : [])]],
 				["knomo-card-danger", ["trash-2"]],
 				["knomo-card-info", ["text"]],
@@ -57,6 +59,9 @@ interface MenuView {
 	mobileSearchPageOpen: boolean;
 	mobileDrawerOpen: boolean;
 	mobileMenuController: KnomoMobileMenu;
+	viewStateController: KnomoViewStateController;
+	setTitleMode(mode: TitleMode): void;
+	getTitleState(): ViewTitleState;
 	toggleCardMenu(id: string | null): void;
 	toggleScopeMenu(): void;
 	registerMobileMenuTriggerEvents(): void;
@@ -69,7 +74,9 @@ interface MenuView {
 	timeBuoyPickerState: object | null;
 }
 
-async function createHarness(controlTime = false) {
+type MenuPresentation = "phone" | "floating" | "trailing-backdrop";
+
+async function createHarness(controlTime = false, presentation: MenuPresentation = "phone") {
 	const f = await createMobilePopupFixture("cancel-edit");
 	const clock = controlTime ? controlWindowClock(f.win as unknown as Window) : null;
 	// 普通菜单用例默认窗口已激活；失焦交接用例单独控制此状态。
@@ -77,7 +84,7 @@ async function createHarness(controlTime = false) {
 	const { KnomoMobileMenu } = await import("../src/ui/KnomoMobileMenu");
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const menus: FakeMenu[] = [];
-	const controller = new KnomoMobileMenu(() => { const menu = new FakeMenu(f.win.document); menus.push(menu); return menu as unknown as Menu; });
+	const controller = new KnomoMobileMenu(() => { const menu = new FakeMenu(f.win.document, presentation); menus.push(menu); return menu as unknown as Menu; });
 	const originalMemo = f.view.editingMemo!;
 	let latestMemo = originalMemo;
 	const actions: Array<{ action: MemoAction; memo: MemoViewItem }> = [];
@@ -212,7 +219,7 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 		assert.equal(h.controller.kind, "card");
 		assert.equal(menu.items.length, 8);
 		assert.equal(menu.noIcon, false);
-		assert.deepEqual(menu.items.map(item => item.icon), ["share", "pencil", "message-square-quote", "copy", "calendar-days", "link", "trash-2", "text"]);
+		assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy", "calendar-days", "link", "trash-2", "text"]);
 		assert.equal(menu.items.at(-1)!.label, true);
 		assert.equal(menu.items[6].warning, true);
 		assert.equal(menu.doc, h.f.win.document);
@@ -227,7 +234,7 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 	} finally { h.close(); }
 });
 
-test("Scope Menu keeps all nine modes and checks only the current mode; delayed old hide cannot close a new menu", async () => {
+test("Scope Menu keeps ten modes in three native sections and checks only the current mode; delayed old hide cannot close a new menu", async () => {
 	const h = await createHarness();
 	const { TITLE_MODE_OPTIONS } = await import("../src/ui/viewNavigation");
 	try {
@@ -238,6 +245,10 @@ test("Scope Menu keeps all nine modes and checks only the current mode; delayed 
 		assert.equal(h.controller.kind, "scope");
 		assert.ok(menu.items[0].dom.closest(".knomo-mobile-menu-scope"));
 		assert.deepEqual(menu.items.map(item => item.title), TITLE_MODE_OPTIONS.map(item => item.label));
+		assert.deepEqual(menu.items.map(item => item.section), [
+			...Array(2).fill("knomo-scope-views"), ...Array(4).fill("knomo-scope-filters"), ...Array(4).fill("knomo-scope-revisit"),
+		]);
+		assert.deepEqual(menu.separators, [], "原生 section 不额外叠加分隔行");
 		assert.deepEqual(menu.items.map((item, index) => item.checked ? index : -1).filter(index => index >= 0), [4]);
 		old.hidden!(); old.items[0].click!();
 		assert.equal(h.controller.kind, "scope");
@@ -247,6 +258,21 @@ test("Scope Menu keeps all nine modes and checks only the current mode; delayed 
 		menu.hidden!(); menu.items[3].click!();
 		assert.deepEqual(h.scopes, ["with-link"]);
 		assert.equal(h.f.popup.scopeMenuOpen, false);
+	} finally { h.close(); }
+});
+
+test("移动菜单被引用选中态与首次轻触一次派发", async () => {
+	const h = await createHarness();
+	try {
+		Object.assign(h.view, { getTitleState: () => ({ activeNav: "all", activeTagKey: null, scopeFilter: "referenced" }) });
+		h.view.toggleScopeMenu();
+		const menu = h.menus[0], item = menu.items.find(item => item.title === "Referenced")!;
+		assert.equal(item.icon, "message-square-reply");
+		assert.equal(item.checked, true);
+		assert.equal(menu.items.filter(item => item.checked).length, 1);
+		item.dom.click(); item.dom.click();
+		assert.deepEqual(h.scopes, ["referenced"]);
+		assert.equal(h.controller.kind, null);
 	} finally { h.close(); }
 });
 
@@ -341,6 +367,74 @@ test("the first iOS menu-item touch executes the selected Card or Scope action o
 			assert.equal(h.actions.length + h.scopes.length, 1, "迟到的兼容点击不能再次执行");
 		} finally { h.close(); }
 	}
+});
+
+test("宿主手机与浮动菜单的首次轻触通过真实导航往返全部笔记，只执行一次", async t => {
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { TITLE_MODE_OPTIONS } = await import("../src/ui/viewNavigation");
+	const prototype = KnomoView.prototype as unknown as Pick<MenuView, "setTitleMode" | "getTitleState">;
+	const routes: Array<[SidebarNav, TitleMode, SidebarNav]> = [
+		["all", "random", "random"], ["all", "review", "review"],
+		["random", "all", "all"], ["review", "all", "all"],
+		["review", "random", "random"], ["random", "review", "review"],
+	];
+	for (const presentation of ["phone", "floating", "trailing-backdrop"] as const) {
+		for (const [from, mode, to] of routes) await t.test(`${presentation}: ${from} → ${to}`, async () => {
+			const h = await createHarness(false, presentation);
+			let randomLoads = 0;
+			const noop = () => {};
+			try {
+				h.view.composerOpen = false;
+				h.view.mobileSearchPageOpen = false;
+				h.f.win.document.hasFocus = () => false;
+				// 保留菜单、真实 setTitleMode/setScope/setSidebarNav 和状态迁移，仅隔离正文读取与列表绘制。
+				Object.assign(h.view, {
+					setTitleMode: (selected: TitleMode) => { h.scopes.push(selected); prototype.setTitleMode.call(h.view, selected); },
+					getTitleState: () => prototype.getTitleState.call(h.view),
+					rememberHistoryBrowsePosition: noop,
+					getCardFlowViewStateKey: () => "",
+					getCardFlowChangeIntent: () => "view-scope-change",
+					cancelCatalogDesktopCount: noop, cancelCatalogDesktopQuery: noop,
+					shouldDeferCardFlowForAllMemos: () => false,
+					renderUiState: noop, renderFilteredListState: noop,
+					reloadCurrentCatalogQuery: async () => true,
+					mobileSearchController: { isOpen: false, resetState: noop, cancelPendingRequest: noop },
+					randomReunionController: { cancelPending: noop, getSnapshot: () => ({ status: "idle" }),
+						refresh: async () => { randomLoads++; } },
+					shuffleDayController: { cancelPending: noop },
+				});
+				h.view.viewStateController.setSidebarNav(from);
+				h.view.toggleScopeMenu();
+				const menu = h.menus[0];
+				const item = menu.items[TITLE_MODE_OPTIONS.findIndex(option => option.mode === mode)].dom;
+				const end = tap(h, item.querySelector("span")!);
+				assert.equal(h.view.viewStateController.activeNav, to, "首次 touchend 必须完成导航，不依赖原生 click");
+				assert.equal(end.defaultPrevented, true);
+				assert.equal(h.controller.kind, null);
+				assert.equal(h.f.popup.scopeMenuOpen, false);
+				assert.deepEqual(h.scopes, [mode]);
+				await h.f.click(item);
+				assert.deepEqual(h.scopes, [mode], "迟到的兼容 click 不再次导航");
+				assert.equal(randomLoads, to === "random" ? 1 : 0);
+			} finally { h.close(); }
+		});
+	}
+});
+
+test("没有自身蒙版的浮动菜单仍接管菜单项轻触，不接管相邻的其他蒙版", async () => {
+	const h = await createHarness(false, "floating");
+	try {
+		const unrelated = h.f.win.document.body.createDiv({ cls: "suggestion-bg" });
+		h.view.toggleScopeMenu();
+		const menu = h.menus[0];
+		assert.equal(menu.background, null);
+		assert.equal(menu.items[0].dom.closest(".menu")!.previousElementSibling, unrelated);
+		assert.equal(tap(h, unrelated).defaultPrevented, false, "不能接管其他组件的蒙版");
+		assert.equal(h.controller.kind, "scope");
+		assert.equal(tap(h, menu.items[3].dom).defaultPrevented, true);
+		assert.deepEqual(h.scopes, ["with-link"]);
+		assert.equal(unrelated.isConnected, true);
+	} finally { h.close(); }
 });
 
 test("menu touch activation yields to scrolling, host gestures, cancellation, multitouch and long presses", async () => {
@@ -540,7 +634,7 @@ class FakeMenu {
 	background: HTMLElement | null = null;
 	private dom: HTMLElement | null = null;
 	private removeOutsideListener: (() => void) | null = null;
-	constructor(private readonly ownerDocument: Document) {}
+	constructor(private readonly ownerDocument: Document, private readonly presentation: MenuPresentation = "phone") {}
 	setNoIcon() { this.noIcon = true; return this; }
 	addSeparator() { this.separators.push(this.items.length); return this; }
 	addItem(build: (item: MenuItem) => void) {
@@ -559,13 +653,19 @@ class FakeMenu {
 	}
 	showAtPosition(_position: MenuPositionDef, doc: Document) {
 		this.doc = doc;
+		if (this.presentation !== "floating") {
+			this.background = doc.body.appendChild(doc.createElement("div"));
+			this.background.className = "suggestion-bg";
+			this.background.getClientRects = () => [new doc.defaultView!.DOMRect(0, 0, 100, 100)] as unknown as DOMRectList;
+		}
+		// 对齐宿主手机 sheet：蒙版在菜单之前，菜单项位于内部滚动容器。
 		this.dom = doc.body.appendChild(doc.createElement("div"));
 		this.dom.className = "menu";
 		this.dom.getClientRects = () => [new doc.defaultView!.DOMRect(0, 0, 100, 100)] as unknown as DOMRectList;
-		for (const item of this.items) this.dom.appendChild(item.dom);
-		this.background = doc.body.appendChild(doc.createElement("div"));
-		this.background.className = "suggestion-bg";
-		this.background.getClientRects = () => [new doc.defaultView!.DOMRect(0, 0, 100, 100)] as unknown as DOMRectList;
+		const scroll = this.dom.appendChild(doc.createElement("div"));
+		scroll.className = "menu-scroll";
+		for (const item of this.items) scroll.appendChild(item.dom);
+		if (this.presentation === "trailing-backdrop" && this.background) doc.body.appendChild(this.background);
 		let ready = false;
 		queueMicrotask(() => { ready = true; });
 		const outside = (event: MouseEvent) => {
@@ -763,7 +863,7 @@ test("卡片普通选项关闭内部菜单后仍恢复视图，编辑选项保�
 					if (action !== "copy-text") editor.focus();
 				} });
 				h.view.toggleCardMenu(h.originalMemo.id);
-				const index = action === "edit" ? 1 : action === "reference" ? 2 : 3;
+				const index = action === "edit" ? 1 : action === "reference" ? 0 : 3;
 				h.menus[0].items[index].click!();
 				if (action !== "copy-text") assert.equal(h.f.win.document.activeElement, editor, "编辑聚焦必须同步保留");
 				for (const callback of [...frames.values()]) callback(0);
@@ -950,7 +1050,7 @@ test("移动草稿重新展开定位末尾，已展开时再次聚焦保留选�
 });
 
 test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Composer 和 CodeMirror 获得焦点", async () => {
-	for (const index of [1, 2]) {
+	for (const index of [0, 1]) {
 		const h = await createHarness(true);
 		const real = await useRealComposerActions(h);
 		let focused = false;
@@ -970,7 +1070,7 @@ test("失焦菜单的编辑与引用保留原生激活，再经真实 View、Com
 			assert.equal(h.f.win.document.activeElement, h.f.view.inputEl);
 			assert.equal(h.f.view.inputEl.composer.view.hasFocus, true);
 			assert.equal(h.f.view.inputEl.value, index === 1 ? h.originalMemo.contentSnapshot : "编辑中的 Memo：取消手势不应丢失这些修改。");
-			if (index === 2) assert.equal(h.f.view.quoteReferenceText, "[[source]]");
+			if (index === 0) assert.equal(h.f.view.quoteReferenceText, "[[source]]");
 			let through = 0;
 			const layer = real.controller.getLayerEl()!;
 			layer.addEventListener("click", () => through++);
@@ -985,7 +1085,7 @@ test("失焦菜单原生 click 正常到达时直接执行，不被首击补偿�
 	let focused = false; h.f.win.document.hasFocus = () => focused;
 	try {
 		h.view.toggleCardMenu(h.originalMemo.id);
-		const item = h.menus[0].items[2].dom;
+		const item = h.menus[0].items[0].dom;
 		assert.equal(tap(h, item).defaultPrevented, false);
 		focused = true; await h.f.click(item);
 		await h.clock!.advance(130);

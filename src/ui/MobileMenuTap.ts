@@ -1,12 +1,12 @@
 import { clickFromPointer } from "./NavigationFocus";
 
 // 菜单的轻触直接沿宿主 click 路径执行；滚动、拖动、多指和长按交还宿主。
-export function registerMobileMenuTap(menu: HTMLElement, backdrop: HTMLElement, dismiss: () => void): () => void {
+export function registerMobileMenuTap(menu: HTMLElement, backdrop: HTMLElement | null, dismiss: () => void): () => void {
 	return registerMenuTap(menu.ownerDocument, target => {
 		const item = target.closest<HTMLElement>(".menu-item:not(.is-disabled):not(.is-label)");
 		// 只有编辑/引用在失焦时保留原生触摸，由 View 在窗口激活后恢复动作。
 		if (item?.querySelector("[data-knomo-menu-input]") && !menu.ownerDocument.hasFocus()) return null;
-		return backdrop.contains(target) ? backdrop : item?.closest(".menu") === menu ? item : null;
+		return backdrop?.contains(target) ? backdrop : item?.closest(".menu") === menu ? item : null;
 	}, surface => { if (surface === backdrop) dismiss(); else clickFromPointer(surface); });
 }
 

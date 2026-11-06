@@ -55,21 +55,26 @@ test("keys record stats idle state as loading", async () => {
 	assert.equal(
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "idle", error: null, updating: false },
+			recordStatsSnapshot: { state: "idle", error: null, updating: false, valid: false },
 		}),
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "loading", error: null, updating: false },
+			recordStatsSnapshot: { state: "loading", error: null, updating: false, valid: false },
 		}),
 	);
 	assert.notEqual(
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "ready", error: null, updating: false },
+			recordStatsSnapshot: { state: "ready", error: null, updating: false, valid: true },
 		}),
 		getCardFlowStateKey({
 			...base,
-			recordStatsSnapshot: { state: "ready", error: null, updating: true },
+			recordStatsSnapshot: { state: "ready", error: null, updating: true, valid: false },
 		}),
+	);
+	assert.notEqual(
+		getCardFlowStateKey({ ...base, recordStatsSnapshot: { state: "ready", error: null, updating: false, valid: true } }),
+		getCardFlowStateKey({ ...base, recordStatsSnapshot: { state: "ready", error: null, updating: false, valid: false } }),
+		"静默失效也必须触发撤下旧被引用入口",
 	);
 });

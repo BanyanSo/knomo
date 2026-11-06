@@ -16,7 +16,7 @@ import { buildSearchBody } from "./SearchDocument";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { getMemoContentStatsFromContent } from "../utils/memoContentStats";
-import { normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
+import { incrementTagMemoCount, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 import { collectRelationBlockAnchors, extractMemoRelationTargets } from "../utils/memoRelations";
 
 export interface CatalogPartitionInput {
@@ -93,6 +93,10 @@ export class MemoCatalogService {
 
 	listFiles() {
 		return this.store.listFiles();
+	}
+
+	listFileHeaders() {
+		return this.store.listFileHeaders();
 	}
 
 	listDailyAggregates(fromDate?: string, toDate?: string) {
@@ -229,7 +233,7 @@ function createFileAggregate(file: CatalogFileRecord): CatalogFileAggregate {
 		tagCount: 0, linkCount: 0, imageCount: 0, taskCount: 0, timeBuoyCount: 0,
 		explicitReferenceCount: 0, explicitReferenceMemoCount: 0, explicitReferenceTargets: [],
 		wordCount: 0, imageMemoCount: 0, taggedMemoCount: 0, untaggedMemoCount: 0,
-		hourCounts: Array.from({ length: 24 }, () => 0), tagMemoCounts: {}, tagDisplayNames: {},
+		hourCounts: Array.from({ length: 24 }, () => 0), tagMemoCounts: {}, tagSubtreeMemoCounts: {}, tagDisplayNames: {},
 	};
 }
 
@@ -247,10 +251,24 @@ function addFileAggregateObservation(aggregate: CatalogFileAggregate, observatio
 	aggregate.taggedMemoCount += observation.tagKeys.length > 0 ? 1 : 0;
 	aggregate.untaggedMemoCount += observation.tagKeys.length === 0 ? 1 : 0;
 	for (const target of observation.explicitReferenceTargets) pushUnique(aggregate.explicitReferenceTargets, target);
-	for (const key of observation.tagKeys) aggregate.tagMemoCounts[key] = (aggregate.tagMemoCounts[key] ?? 0) + 1;
+	for (const key of observation.tagKeys) incrementTagMemoCount(aggregate.tagMemoCounts, key, 1);
+	// 每条 occurrence 独立去重，不能通过相加精确标签计数推导父级数量。
+	const subtreeKeys = new Set<string>();
+	for (const key of observation.tagKeys) {
+		let ancestor = key;
+		while (ancestor.length > 0) {
+			subtreeKeys.add(ancestor);
+			const separator = ancestor.lastIndexOf("/");
+			if (separator < 0) break;
+			ancestor = ancestor.slice(0, separator);
+		}
+	}
+	for (const key of subtreeKeys) incrementTagMemoCount(aggregate.tagSubtreeMemoCounts, key, 1);
 	for (const tag of observation.tags) {
 		const key = normalizeTagKey(tag), display = normalizeTagDisplay(tag);
-		if (key.length > 0 && display.length > 0 && aggregate.tagDisplayNames[key] === undefined) aggregate.tagDisplayNames[key] = display;
+		if (key.length > 0 && display.length > 0 && !Object.prototype.hasOwnProperty.call(aggregate.tagDisplayNames, key)) {
+			Object.defineProperty(aggregate.tagDisplayNames, key, { value: display, writable: true, enumerable: true, configurable: true });
+		}
 	}
 	const hour = Number.parseInt(observation.time.slice(0, 2), 10);
 	if (Number.isInteger(hour) && hour >= 0 && hour < aggregate.hourCounts.length) aggregate.hourCounts[hour]++;

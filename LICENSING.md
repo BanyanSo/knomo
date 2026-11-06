@@ -79,40 +79,15 @@ describes the license for new contributions. Ordinary user notes, Daily
 Notes, Monthly projections, and other user content do not become GPL-covered
 merely by being created or processed with Knomo.
 
-## Source and distribution: release work still required
+## Source and distribution
 
-The [source repository](https://github.com/BanyanSo/knomo) contains the
-development source. A moving repository link, a lockfile, or a GitHub
-automatic source archive alone is not a declaration that the complete
-Corresponding Source for a particular binary has been provided.
-
-This change updates licensing files and metadata only. It does not update
-the build or release workflow, retrofit existing main.js, or certify an
-existing binary. The current workflow uploads only main.js, manifest.json,
-and styles.css. GPL release delivery therefore remains pending.
-
-Before distributing the 1.10.0 GPL release, the release maintainer must:
-
-1. Match the `1.10.0` tag, manifest, package metadata, lockfile, and exact
-   source commit, and build the assets from those recorded inputs.
-2. Supply LICENSE, this licensing notice, OBSIDIAN-EXCEPTION.txt, applicable
-   historical MIT notices, and complete third-party notices with the work.
-   Verify delivery for the three-file installation path as well as any ZIP;
-   do not assume the installer downloads extra legal files.
-3. Provide complete Corresponding Source, including preferred modification
-   forms and necessary build/install scripts and dependency source material,
-   with clear version-specific directions next to the binary download and
-   equivalent access at no further charge under GPLv3 section 6(d).
-   Verify generated dependency distributions against their source and retain
-   any necessary patches or generation inputs. Host code excluded by the
-   additional permission is not a reason to omit bundled library source.
-4. Verify the release from a clean checkout and the delivered source package;
-   record build tool versions, dependency provenance, and asset checksums.
-   Run the current project verify gate and additional release checks without
-   duplicating checks already included in that gate.
-5. Check the actual uploaded assets, source availability, notices, and
-   provenance at release time. Maintain source availability as required by
-   the chosen GPL distribution method.
+Development source is available in the
+[source repository](https://github.com/BanyanSo/knomo). Distribution of
+covered binaries requires complete Corresponding Source and applicable
+license and copyright notices under the terms of LICENSE. Provide clear,
+version-specific directions for obtaining the Corresponding Source.
+The host additional permission does not waive these obligations for Knomo
+or bundled third-party material.
 
 The host permission is a copyright permission from the covered Knomo
 contributors, not an endorsement or authorization from Obsidian. These files
@@ -121,7 +96,7 @@ channel's requirements.
 
 ## 中文摘要
 
-Knomo 1.10.0 的本次许可变更采用 **GPL-3.0-only，加 Knomo Obsidian 宿主附加许可**。
+自 Knomo 1.10.0 的许可变更起，采用 **GPL-3.0-only，加 Knomo Obsidian 宿主附加许可**。
 根 LICENSE 保持 GPLv3 标准全文；仅适用版本 3，不包含“或任何后续版本”的选择。
 宿主附加许可仅处理作为插件与独立取得的 Obsidian 结合，不免除 Knomo 及其受覆盖
 修改的 GPL 义务，不授权复制或分发 Obsidian，也不为任意闭源模块提供豁免。
@@ -131,6 +106,4 @@ Knomo 1.10.0 的本次许可变更采用 **GPL-3.0-only，加 Knomo Obsidian 宿
 不会仅因使用 Knomo 而变为 GPL 内容。分发修改版时，应履行适用的源码、许可、
 版权、修改说明及无担保声明义务。
 
-本次仅更新许可文件及元数据，尚未实现发行物自动携带完整声明或对应源码交付。
-正式发布前仍需完成上面的版本、源码、干净构建、发行物和下载可用性验收。
 此摘要供阅读便利；具体授权以 LICENSE 和 OBSIDIAN-EXCEPTION.txt 的英文条款为准。

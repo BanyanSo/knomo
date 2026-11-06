@@ -8,6 +8,7 @@ import type {
 	CatalogFileAggregate,
 	CatalogFilePartition,
 	CatalogFileRecord,
+	CatalogFileHeader,
 	CatalogFileRevisionBatch,
 	CatalogObservation,
 	CatalogObservationSnapshot,
@@ -27,6 +28,7 @@ import {
 	emptyInvalidatedPage,
 	createCatalogQueryMatcher,
 	mergeAggregate,
+	toCatalogFileHeader,
 	normalizeCatalogText,
 } from "./MemoCatalogStore";
 import type { CatalogMetaEntry, MemoCatalogStore } from "./MemoCatalogStore";
@@ -35,8 +37,9 @@ import { selectCatalogSearchToken } from "./MemoCatalogService";
 import type { TimeBuoyObservationPage, TimeBuoyPageRequest } from "../types/timeBuoy";
 import { TimeBuoyPageSelection } from "./TimeBuoyQuery";
 
-const CATALOG_DATABASE_VERSION = 4;
+const CATALOG_DATABASE_VERSION = 6;
 const FILES_STORE = "files";
+const FILE_HEADERS_STORE = "fileHeaders";
 const OBSERVATIONS_STORE = "observations";
 const POSTINGS_STORE = "postings";
 const TIME_BUOYS_STORE = "timeBuoys";
@@ -234,7 +237,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		}
 		const generation = this.snapshotGeneration;
 		const transaction = this.getDatabase().transaction(
-			[FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE],
+			[FILES_STORE, FILE_HEADERS_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE],
 			"readwrite",
 		);
 		const done = waitForTransaction(transaction);
@@ -277,6 +280,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			]);
 			for (const { partition, observationKeys, postingKeys, buoyKeys, existingObservations, reuseExisting } of partitionsWithKeys) {
 				files.put(partition.file);
+				transaction.objectStore(FILE_HEADERS_STORE).put(toCatalogFileHeader(partition.file));
 				if (reuseExisting) continue;
 				const nextKeys = new Set(partition.file.observationKeys ?? []);
 				const existingByKey = new Map(existingObservations.flatMap((observation) =>
@@ -326,7 +330,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		await this.open();
 		const generation = this.snapshotGeneration;
 		const transaction = this.getDatabase().transaction(
-			[FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE],
+			[FILES_STORE, FILE_HEADERS_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE],
 			"readwrite",
 		);
 		const done = waitForTransaction(transaction);
@@ -357,16 +361,23 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			await done;
 			return currentRevision;
 		}
-		for (const key of observationKeys) observations.delete(key);
-		for (const key of postingKeys) postings.delete(key);
-		for (const key of buoyKeys) transaction.objectStore(TIME_BUOYS_STORE).delete(key);
-		files.delete(sourcePath);
-		transaction.objectStore(AGGREGATES_STORE).delete(sourcePath);
-		const revision = currentRevision + 1;
-		metadata.put({ key: CATALOG_REVISION_META, value: revision } satisfies CatalogMetaRecord<number>);
-		await done;
-		if (generation === this.snapshotGeneration) this.fileChanges.record(revision, [sourcePath]);
-		return revision;
+		try {
+			transaction.objectStore(FILE_HEADERS_STORE).delete(sourcePath);
+			for (const key of observationKeys) observations.delete(key);
+			for (const key of postingKeys) postings.delete(key);
+			for (const key of buoyKeys) transaction.objectStore(TIME_BUOYS_STORE).delete(key);
+			files.delete(sourcePath);
+			transaction.objectStore(AGGREGATES_STORE).delete(sourcePath);
+			const revision = currentRevision + 1;
+			metadata.put({ key: CATALOG_REVISION_META, value: revision } satisfies CatalogMetaRecord<number>);
+			await done;
+			if (generation === this.snapshotGeneration) this.fileChanges.record(revision, [sourcePath]);
+			return revision;
+		} catch (error) {
+			try { transaction.abort(); } catch { /* 事务可能已结束，保留原始失败原因。 */ }
+			await done.catch(() => undefined);
+			throw error;
+		}
 	}
 
 	async getFile(sourcePath: string): Promise<CatalogFileRecord | null> {
@@ -447,6 +458,15 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		return files.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 	}
 
+	async listFileHeaders(): Promise<CatalogFileHeader[]> {
+		await this.open();
+		const transaction = this.getDatabase().transaction(FILE_HEADERS_STORE, "readonly");
+		const done = waitForTransaction(transaction);
+		const files = await requestResult(transaction.objectStore(FILE_HEADERS_STORE).getAll()) as CatalogFileHeader[];
+		await done;
+		return files.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+	}
+
 	queryTimeBuoys(request: TimeBuoyPageRequest, signal?: AbortSignal): Promise<TimeBuoyObservationPage> {
 		return this.withQuerySignal(signal, querySignal => this.readTimeBuoyPage(request, querySignal));
 	}
@@ -497,7 +517,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 
 	private async readQueryPage(request: CatalogQuery, signal: AbortSignal): Promise<CatalogQueryPage> {
 		signal.throwIfAborted();
-		request = { ...request, ...narrowCatalogQuery(request), text: undefined, textTerms: getCatalogTextTerms(request) };
+		request = { ...narrowCatalogQuery(request), limit: request.limit, cursor: request.cursor, text: undefined, textTerms: getCatalogTextTerms(request) };
 		await this.open();
 		signal.throwIfAborted();
 		const database = this.getDatabase();
@@ -925,7 +945,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 		this.fileChanges.clear();
 		await this.open();
 		const transaction = this.getDatabase().transaction(
-			[FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE],
+			[FILES_STORE, FILE_HEADERS_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE],
 			"readwrite",
 		);
 		const done = waitForTransaction(transaction);
@@ -936,7 +956,7 @@ export class IndexedDbMemoCatalogStore implements MemoCatalogStore {
 			requestResult(metaStore.get(key)) as Promise<CatalogMetaRecord<unknown> | undefined>);
 		const revisionRecord = await revisionRequest;
 		const preservedRecords = await Promise.all(preservedRequests);
-		for (const storeName of [FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE]) {
+		for (const storeName of [FILES_STORE, FILE_HEADERS_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE]) {
 			transaction.objectStore(storeName).clear();
 		}
 		for (const record of preservedRecords) {
@@ -1020,7 +1040,7 @@ function openCatalogDatabase(
 }
 
 function createCatalogSchema(database: IDBDatabase, transaction: IDBTransaction | null, oldVersion: number): void {
-	if (oldVersion > 0 && oldVersion < CATALOG_DATABASE_VERSION) {
+	if (oldVersion > 0 && oldVersion < 5) {
 		const storeNames: string[] = [];
 		for (let index = 0; index < database.objectStoreNames.length; index += 1) {
 			const storeName = database.objectStoreNames.item(index);
@@ -1034,6 +1054,19 @@ function createCatalogSchema(database: IDBDatabase, transaction: IDBTransaction 
 	}
 	if (!database.objectStoreNames.contains(FILES_STORE)) {
 		database.createObjectStore(FILES_STORE, { keyPath: "sourcePath" });
+	}
+	if (!database.objectStoreNames.contains(FILE_HEADERS_STORE)) {
+		const headers = database.createObjectStore(FILE_HEADERS_STORE, { keyPath: "sourcePath" });
+		// v5 只补本机派生元数据，不重新读取 Daily，也不丢弃已有分区及 checkpoint。
+		if (oldVersion === 5 && transaction !== null) {
+			const request = transaction.objectStore(FILES_STORE).openCursor();
+			request.onsuccess = () => {
+				const cursor = request.result;
+				if (cursor === null) return;
+				headers.put(toCatalogFileHeader(cursor.value as CatalogFileRecord));
+				cursor.continue();
+			};
+		}
 	}
 	if (!database.objectStoreNames.contains(OBSERVATIONS_STORE)) {
 		const observations = database.createObjectStore(OBSERVATIONS_STORE, { keyPath: "observationKey" });
@@ -1065,7 +1098,7 @@ function createCatalogSchema(database: IDBDatabase, transaction: IDBTransaction 
 }
 
 function validateCatalogSchema(database: IDBDatabase): void {
-	for (const storeName of [FILES_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE]) {
+	for (const storeName of [FILES_STORE, FILE_HEADERS_STORE, OBSERVATIONS_STORE, POSTINGS_STORE, TIME_BUOYS_STORE, AGGREGATES_STORE, META_STORE]) {
 		if (!database.objectStoreNames.contains(storeName)) {
 			throw new CatalogDatabaseCorruptError(`Memo Catalog store is missing: ${storeName}.`);
 		}
@@ -1257,6 +1290,8 @@ function sameLookupKeys(left: readonly string[], right: readonly string[]): bool
 function getCatalogIndexCandidates(request: CatalogQueryFilter): CatalogIndexSelection[] {
 	const candidates: CatalogIndexSelection[] = [];
 	for (const tag of request.tags?.map(normalizeCatalogText).filter(Boolean) ?? []) candidates.push({ kind: "tag", value: tag });
+	// 入口已按标签 key 规范化；posting 包含下级，最终仍须经过精确 matcher。
+	for (const tag of request.exactTags ?? []) candidates.push({ kind: "tag", value: tag });
 	for (const term of getCatalogTextTerms(request)) {
 		const token = selectCatalogSearchToken(term);
 		if (token !== null) candidates.push({ kind: "search", value: token });

@@ -37,6 +37,7 @@ export class TrashSnapshotStore {
 
 	getSummary(): TrashStoreSummary {
 		const state = this.readState();
+		// 分支保留判别联合的 count/error 关联，摘要不携带 items 正文。
 		if (state.status === "ready") return { status: state.status, count: state.count, error: state.error };
 		return { status: state.status, count: state.count, error: state.error };
 	}

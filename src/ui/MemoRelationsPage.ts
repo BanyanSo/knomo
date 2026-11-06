@@ -46,6 +46,8 @@ export class MemoRelationsPage {
 	private refreshTimer: number | null = null;
 	private running: Promise<void> | null = null;
 	private pending = false;
+	private paused = false;
+	private restorePending = false;
 	private invalidatedVersion: number | null = null;
 	private subjectRecoveryKey: string | null = null;
 	private referrers: readonly MemoRelationNode[] | null = null;
@@ -183,10 +185,33 @@ export class MemoRelationsPage {
 	}
 
 	refresh(): void {
-		if (!this.isOpen || this.queued || this.disposed) return;
+		if (!this.isOpen || this.disposed) return;
+		if (this.paused) { this.pending = true; return; }
+		if (this.queued) return;
 		this.queued = true;
 		const win = this.el?.win;
-		this.refreshTimer = win?.setTimeout(() => { this.queued = false; this.refreshTimer = null; if (this.isOpen && !this.disposed) void this.load(); }, 45) ?? null;
+		this.refreshTimer = win?.setTimeout(() => { this.queued = false; this.refreshTimer = null; if (this.isOpen && !this.disposed) void this.load(this.restorePending); }, 45) ?? null;
+	}
+
+	setPresentationPaused(paused: boolean): void {
+		if (this.disposed || this.paused === paused) return;
+		this.paused = paused;
+		if (!this.isOpen) return;
+		if (paused) {
+			this.pending ||= this.queued || this.running !== null;
+			this.controller?.abort();
+			this.rowController.abort();
+			this.rowController = new AbortController();
+			if (this.refreshTimer !== null) this.el?.win.clearTimeout(this.refreshTimer);
+			this.refreshTimer = null; this.queued = false;
+			this.clearPendingRows();
+			this.loading?.clear();
+		} else if (this.pending) {
+			this.pending = false;
+			this.refresh();
+		} else {
+			this.referrersWindow?.refresh();
+		}
 	}
 
 	remount(): void {
@@ -201,16 +226,13 @@ export class MemoRelationsPage {
 		this.focusRecovery?.cancel(); this.focusRecovery = null;
 		this.controller?.abort();
 		if (this.refreshTimer !== null) this.el?.win.clearTimeout(this.refreshTimer);
-		if (this.rowsTimer !== null) this.el?.win.clearTimeout(this.rowsTimer);
-		this.rowsTimer = null; this.rowsQueued = false;
-		this.refreshTimer = null; this.queued = false; this.pending = false; this.running = null;
+		this.refreshTimer = null; this.queued = false; this.pending = false; this.running = null; this.restorePending = false;
 		this.loading?.clear(); this.loading = null;
 		this.referrers = null; this.rowFailures.clear();
 		this.rowFaultScope = null;
 		this.subjectRecoveryKey = null; this.invalidatedVersion = null;
 		this.rowController.abort(); this.rowController = new AbortController();
-		for (const pending of this.pendingRows.values()) pending.done();
-		this.pendingRows.clear();
+		this.clearPendingRows();
 		this.referrersWindow?.dispose(); this.referrersWindow = null;
 		if (this.subject) this.options.releaseCard(this.subject);
 		if (this.el) releaseNavigationFocus(this.el);
@@ -218,6 +240,13 @@ export class MemoRelationsPage {
 		this.subject = null;
 		this.listEl = null; this.listTitle = null; this.status = null; this.loadingEl = null;
 		this.memos.clear();
+	}
+
+	private clearPendingRows(): void {
+		if (this.rowsTimer !== null) this.el?.win.clearTimeout(this.rowsTimer);
+		this.rowsTimer = null; this.rowsQueued = false;
+		for (const pending of this.pendingRows.values()) pending.done();
+		this.pendingRows.clear();
 	}
 
 	private buildShell(): void {
@@ -243,7 +272,7 @@ export class MemoRelationsPage {
 		this.loading = new DelayedLoadingIndicator({ scheduleTask: (callback, delay) => el.win.setTimeout(callback, delay), cancelTask: id => el.win.clearTimeout(id) });
 		this.listEl = el.createDiv({ cls: "knomo-relations-list" });
 		this.referrersWindow = new MemoRelationWindow(this.listEl, el, 260,
-			(row, node, index) => this.renderRow(row, node, index), row => this.releaseRow(row));
+			(row, node, index) => this.renderRow(row, node, index), row => this.releaseRow(row), () => this.paused);
 		this.syncLoading(true);
 	}
 
@@ -269,8 +298,10 @@ export class MemoRelationsPage {
 	}
 
 	private async load(restore = false): Promise<void> {
+		this.restorePending ||= restore;
+		if (this.paused) { this.pending = true; return; }
 		if (this.running) { this.pending = true; return this.running; }
-		const task = this.loadCurrent(restore);
+		const task = this.loadCurrent(this.restorePending);
 		this.running = task;
 		try { await task; }
 		finally {
@@ -290,6 +321,7 @@ export class MemoRelationsPage {
 		let phase: "subject" | "relations" = "subject";
 		try {
 			await this.options.read.relations.verifyHandle(frame.handle, signal);
+			signal.throwIfAborted();
 			const key = observationHandleKey(frame.handle);
 			if (this.subject?.dataset.subject !== key) {
 				const [item] = await this.options.read.readMemoItems([frame.handle], signal);
@@ -298,6 +330,7 @@ export class MemoRelationsPage {
 			phase = "relations";
 			const snapshot = await this.options.read.relations.read(signal, [frame.handle]);
 			await this.options.read.relations.assertCurrent(snapshot, signal, [frame.handle]);
+			signal.throwIfAborted();
 			if (!this.el || frame !== this.frames[this.frames.length - 1]) return;
 			const incoming = snapshot.referrers.get(key) ?? [];
 			if (snapshot.complete || this.referrers === null || this.referrers.length === 0) this.referrers = incoming;
@@ -330,6 +363,7 @@ export class MemoRelationsPage {
 				await this.referrersWindow!.settled();
 				signal.throwIfAborted();
 				this.restoreFocus(frame);
+				this.restorePending = false;
 			}
 		} catch (error) {
 			if (signal.aborted || !this.el) return;
@@ -348,6 +382,7 @@ export class MemoRelationsPage {
 	}
 
 	private renderRow(row: HTMLElement, node: MemoRelationNode, index: number): Promise<void> {
+		if (this.paused) return Promise.resolve();
 		return new Promise(done => {
 			this.pendingRows.set(row, { node, index, done, signal: this.rowController.signal, generation: this.generation });
 			if (!this.rowsQueued) {

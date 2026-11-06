@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseSearchInput } from "../src/services/SearchQuery";
 import { getCatalogQueryKey } from "../src/services/SearchMatching";
+import { normalizeSearchText } from "../src/utils/searchText";
 
 for (const [input, fromDate, toDate] of [
 	["20261009", "2026-10-09", "2026-10-09"], ["2026-10-09", "2026-10-09", "2026-10-09"],
@@ -30,17 +31,20 @@ for (const input of ["1232", "0230", "0000", "1899", "2100", "123", "20261", "12
 	});
 }
 for (const input of ["1900", "2099"]) test("固定年份窗口：" + input, () => assert.equal(parseSearchInput(input).date?.kind, "range"));
-for (const input of ["2026-", "2026-10-", "20261001~", "~20261009"]) {
-	test("未完成输入不降级：" + input, () => assert.equal(parseSearchInput(input).status, "incomplete"));
-}
-for (const [input, error] of [
-	["202613", "invalid-date"], ["20260229", "invalid-date"], ["20260230", "invalid-date"], ["02-30", "invalid-date"],
-	["2026-10-99", "invalid-date"], ["2026~202610", "mixed-range"], ["1009~20261012", "mixed-range"],
-	["20261009~20261001", "reversed-range"], ["2026 1009", "multiple-dates"], ["2026 2027", "multiple-dates"],
-	["1232~2026", "invalid-range-endpoint"],
-] as const) test("无效输入提示：" + input, () => {
-	assert.equal(parseSearchInput(input).status, "invalid");
-	assert.equal(parseSearchInput(input).error, error);
+for (const input of [
+	"2026-", "2026-10-", "20261001~", "20261001 ~", "~20261009", "2026-13", "202613", "20260229", "20260230", "02-30",
+	"2026-10-99", "2026~202610", "1009~20261012", "20261009~20261001", "2026 1009", "2026 2027",
+	"1232~2026", "20261009~项目", "2026~~2027", '"2026', '“2026',
+	"项目 2026-13 后续", "20261009 项目 2026-13 后续", "2026-13 项目 20261009", '"2026" 20261009 2026-',
+	'  Ａ  项目　２０２６１００９　２０２６－１３  “2026” ',
+]) test("解析失败整条回退为连续文字：" + input, () => {
+	assert.deepEqual(parseSearchInput(input), {
+		status: "valid", terms: [normalizeSearchText(input)], date: null, dateRange: null,
+	});
+});
+
+test("空白输入仍为空条件", () => {
+	for (const input of ["", " \t\n　"]) assert.deepEqual(parseSearchInput(input), { status: "empty", terms: [], date: null, dateRange: null });
 });
 
 test("日期转义与 NFKC 保留原始删除区间", () => {

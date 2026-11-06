@@ -34,6 +34,30 @@ test("手机侧边栏隐藏时不读 Trash，可见时合并变化，关闭视�
 	assert.equal(reads, 1);
 });
 
+test("桌面普通侧栏不加载 Trash，回收站打开时才合并外部变化刷新", async () => {
+	const view = await fixture(false);
+	let reads = 0;
+	view.trashMemoController = {
+		ensureLoaded: async () => { reads++; },
+		loadTrashMemos: async () => { reads++; },
+	};
+	view.vaultTagIndex = { ensureReady: async () => {} };
+	await view.ensureSidebarIndexes();
+	view.scheduleTrashCountRefresh();
+	view.flushTimers();
+	assert.equal(reads, 0);
+	view.viewStateController.activeNav = "trash";
+	view.scheduleTrashCountRefresh();
+	view.scheduleTrashCountRefresh();
+	assert.equal(view.timers.size, 1);
+	view.flushTimers();
+	assert.equal(reads, 1);
+	view.scheduleTrashCountRefresh();
+	view.viewStateController.activeNav = "all";
+	view.flushTimers();
+	assert.equal(reads, 1);
+});
+
 test("徽标区分未知、真实空、读取失败以及有效数量", async () => {
 	const view = await fixture();
 	let state = { trashCount: null as number | null, trashCountLoading: true, trashCountError: null as string | null };
@@ -61,10 +85,10 @@ test("徽标区分未知、真实空、读取失败以及有效数量", async ()
 	assert.equal(attrs.has("aria-busy"), false);
 });
 
-async function fixture() {
+async function fixture(isMobile = true) {
 	await ensureObsidianStub();
 	const { Platform } = await import("obsidian");
-	Object.assign(Platform, { isMobile: true });
+	Object.assign(Platform, { isMobile });
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const timers = new Map<number, () => void>();
 	let next = 0;

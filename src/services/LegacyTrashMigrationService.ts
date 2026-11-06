@@ -40,11 +40,8 @@ export class LegacyTrashMigrationService {
 			? this.flight.then(() => this.run(mode)) : this.flight;
 		this.cancelRetry?.(); this.cancelRetry = null;
 		this.flightMode = mode;
-		const operation = Promise.resolve().then(() => this.options.runExclusive
-			? this.options.runExclusive(() => this.runOnce(mode)) : this.runOnce(mode)).catch((error: unknown) => {
-			// 进入写入屏障前被其他维护任务阻挡时，保留旧源等待后续重试。
-			return this.report = { ...emptyReport(), status: "pending", diagnostics: [{ code: "legacy_migration_busy", sourcePath: null, memoId: null, detail: String(error) }] };
-		});
+		const operation = Promise.resolve().then(() => mode === "manual"
+			? this.runMaintenance(() => this.runOnce(mode)) : this.runOnce(mode));
 		this.flight = operation.then(async (report) => {
 			try { await this.options.onReportChanged?.(); }
 			catch { /* 提示失败不改变已校验的迁移结果。 */ }
@@ -60,17 +57,28 @@ export class LegacyTrashMigrationService {
 		});
 		return this.flight;
 	}
+	private async runMaintenance(action: () => Promise<LegacyMigrationReport>): Promise<LegacyMigrationReport> {
+		try {
+			return await (this.options.runExclusive ? this.options.runExclusive(action) : action());
+		} catch (error) {
+			// 进入写入屏障前被其他维护任务阻挡时，保留旧源等待后续重试。
+			return this.report = { ...emptyReport(), status: "pending", diagnostics: [{ code: "legacy_migration_busy", sourcePath: null, memoId: null, detail: String(error) }] };
+		}
+	}
+
 	private async runOnce(mode: "startup" | "manual"): Promise<LegacyMigrationReport> {
 		try {
 			if (this.options.isReady?.() === false) throw new RetryableMigrationError("Migration configuration is not ready.");
 			const root = this.options.getTrashFolder();
 			const assertActive = () => {
-				if (this.options.signal?.aborted || root !== this.options.getTrashFolder()) throw new RetryableMigrationError("Migration cancelled or Trash folder changed.");
+				if (this.options.signal?.aborted || this.options.isReady?.() === false || root !== this.options.getTrashFolder()) {
+					throw new RetryableMigrationError("Migration cancelled or Trash configuration changed.");
+				}
 			};
 			assertActive();
 			let completion = extractLegacyMigration(await this.options.pluginDataStore.read());
 			assertActive();
-			if (completion !== null) return this.report = await this.cleanup(completion, assertActive);
+			if (completion !== null) return this.report = await this.cleanup(completion, assertActive, mode === "startup");
 			if (this.source.inspect().kind === "missing") return this.report = { ...emptyReport(), status: "not_applicable" };
 			if (mode === "startup") return this.report = { ...emptyReport(), status: "recovery_required", diagnostics: [{
 				code: "legacy_import_required", sourcePath: null, memoId: null, detail: "Legacy Trash import requires an explicit recovery action.",
@@ -111,8 +119,13 @@ export class LegacyTrashMigrationService {
 			await this.persistCompletion(completion);
 			return this.report = await this.cleanup(completion, assertActive);
 		} catch (error) {
-			return this.report = { ...emptyReport(), status: error instanceof RetryableMigrationError || this.options.signal?.aborted ? "pending" : "recovery_required", diagnostics: [{ code: "legacy_trash_migration_failed", sourcePath: null, memoId: null, detail: String(error) }] };
+			return this.report = this.migrationFailure(error);
 		}
+	}
+
+	private migrationFailure(error: unknown): LegacyMigrationReport {
+		return { ...emptyReport(), status: error instanceof RetryableMigrationError || this.options.signal?.aborted ? "pending" : "recovery_required",
+			diagnostics: [{ code: "legacy_trash_migration_failed", sourcePath: null, memoId: null, detail: String(error) }] };
 	}
 	private async persistCompletion(completion: LegacyMigrationCompletion): Promise<void> {
 		assertLegacySystemRoot(completion.legacySystemRoot);
@@ -125,7 +138,7 @@ export class LegacyTrashMigrationService {
 		}
 	}
 
-	private async cleanup(completion: LegacyMigrationCompletion, assertActive: () => void): Promise<LegacyMigrationReport> {
+	private async cleanup(completion: LegacyMigrationCompletion, assertActive: () => void, startupPreflight = false): Promise<LegacyMigrationReport> {
 		const report: LegacyMigrationReport = { ...emptyReport(), status: "ready", sourceRevision: completion.sourceRevision };
 		try {
 			assertActive();
@@ -136,8 +149,28 @@ export class LegacyTrashMigrationService {
 				if (protectedPath === path || protectedPath.startsWith(`${path}/`) || path.startsWith(`${protectedPath}/`)) throw new Error("Unsafe legacy cleanup overlap.");
 			}
 			const folder = this.app.vault.getAbstractFileByPath(path);
-			if (folder === null && !await this.app.vault.adapter.exists(path)) return report;
+			if (folder === null && !await this.app.vault.adapter.exists(path)) {
+				assertActive();
+				return report;
+			}
 			if (!(folder instanceof TFolder)) throw new Error("Legacy cleanup target is not an available folder.");
+			if (startupPreflight) {
+				// 只读预检只决定是否申请屏障，不能授权删除预检时的目录。
+				return this.runMaintenance(async () => {
+					try {
+						assertActive();
+						const current = extractLegacyMigration(await this.options.pluginDataStore.read());
+						assertActive();
+						if (current?.legacySystemRoot !== path || current.sourceRevision !== completion.sourceRevision
+							|| this.app.vault.getAbstractFileByPath(path) !== folder) {
+							throw new RetryableMigrationError("Legacy completion or cleanup target changed.");
+						}
+						return await this.cleanup(current, assertActive);
+					} catch (error) {
+						return this.migrationFailure(error);
+					}
+				});
+			}
 			// 合法 Monthly 备份沿用旧版分类；未知文件不属于清理授权。
 			Vault.recurseChildren(folder, (child) => {
 				if (child instanceof TFile && classifyLegacyArtifactPath(path, child.path) === null) throw new LegacyCleanupUnknownFileError(child.path);
@@ -146,6 +179,7 @@ export class LegacyTrashMigrationService {
 			await this.app.fileManager.trashFile(folder);
 			if (await this.app.vault.adapter.exists(path)) throw new Error("Legacy cleanup not confirmed.");
 		} catch (error) {
+			if (error instanceof RetryableMigrationError) throw error;
 			report.diagnostics = [{ code: error instanceof LegacyCleanupUnknownFileError ? "legacy_cleanup_unknown_file" : "legacy_cleanup_failed",
 				sourcePath: error instanceof LegacyCleanupUnknownFileError ? error.path : completion.legacySystemRoot, memoId: null, detail: String(error) }];
 			report.cleanupCandidate = { legacySystemRoot: completion.legacySystemRoot, sourceRevision: completion.sourceRevision };

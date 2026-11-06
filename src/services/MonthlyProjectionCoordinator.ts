@@ -15,6 +15,7 @@ import { sha256Bytes } from "../utils/sha256";
 import type { SelfWriteTracker } from "./SelfWriteTracker";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
+import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 const DEFAULT_DEBOUNCE_MS = 250;
 const DEFAULT_COOLDOWN_MS = 1_000;
@@ -80,9 +81,16 @@ export class MonthlyProjectionCoordinator {
 	private timer: number | null = null;
 	private stopped = false;
 	private discoveryPending = false;
+	private reconciliationVersion = 0;
+	private reconciledVersion = 0;
+	private backgroundFailed = false;
 	private projectionAllowed: boolean;
 	private configurationGeneration = 0;
 	private configuration: MonthlyProjectionConfigurationSnapshot | null = null;
+	private historicalHashRead: {
+		configuration: MonthlyProjectionConfigurationSnapshot;
+		promise: Promise<Map<string, string>>;
+	} | null = null;
 
 	constructor(
 		private readonly app: App,
@@ -97,10 +105,10 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	start(owner: Component): void {
-		owner.registerEvent(this.app.vault.on("modify", (file) => { void this.handleFileChanged(file); }));
-		owner.registerEvent(this.app.vault.on("create", (file) => { void this.handleFileChanged(file); }));
-		owner.registerEvent(this.app.vault.on("delete", (file) => { void this.handleFileDeleted(file); }));
-		owner.registerEvent(this.app.vault.on("rename", (file, oldPath) => { void this.handleFileRenamed(file, oldPath); }));
+		owner.registerEvent(this.app.vault.on("modify", (file) => { void this.runBackground(() => this.handleFileChanged(file)); }));
+		owner.registerEvent(this.app.vault.on("create", (file) => { void this.runBackground(() => this.handleFileChanged(file)); }));
+		owner.registerEvent(this.app.vault.on("delete", (file) => { void this.runBackground(() => this.handleFileDeleted(file)); }));
+		owner.registerEvent(this.app.vault.on("rename", (file, oldPath) => { void this.runBackground(() => this.handleFileRenamed(file, oldPath)); }));
 		owner.registerDomEvent(this.app.workspace.containerEl.doc, "visibilitychange", () => {
 			if (this.app.workspace.containerEl.doc.visibilityState !== "hidden") this.scheduleRun(0);
 		});
@@ -131,9 +139,9 @@ export class MonthlyProjectionCoordinator {
 		}
 		this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
 		await this.persistCheckpoint();
-		if (this.discoveryPending) await this.discoverHistoricalPeriods(false);
 		this.notifyStateChanged();
 		this.scheduleRun(this.getNextDelay());
+		if (this.discoveryPending) await this.discoverHistoricalPeriods(false);
 	}
 
 	async handleConfigurationChanged(): Promise<void> {
@@ -143,14 +151,15 @@ export class MonthlyProjectionCoordinator {
 		if (generation !== this.configurationGeneration || this.isStopped()) return;
 		const wasProjectionAllowed = this.projectionAllowed;
 		this.projectionAllowed = this.isProjectionAllowed();
-		this.configuration = next;
 		if (previous === null) {
+			this.configuration = next;
 			await this.initialize();
 			return;
 		}
 		const configurationChanged = previous.renderFingerprint !== next.renderFingerprint
 			|| previous.dailyScopeKey !== next.dailyScopeKey;
 		if (!configurationChanged) {
+			await this.reconcileMissedChanges();
 			if (!wasProjectionAllowed && this.projectionAllowed) {
 				if (this.pendingPeriods.size === 0) this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
 				await this.persistCheckpoint();
@@ -159,10 +168,12 @@ export class MonthlyProjectionCoordinator {
 			}
 			return;
 		}
+		this.configuration = next;
 		this.metadata.clear();
 		this.discoveryPending = true;
 		this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
 		await this.persistCheckpoint();
+		await this.reconcileMissedChanges();
 		await this.discoverHistoricalPeriods(false);
 	}
 
@@ -234,8 +245,9 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	getProjectionState(): MonthlyProjectionState {
-		if (this.failedPeriods.size > 0) return "failed";
+		if (this.backgroundFailed || this.failedPeriods.size > 0) return "failed";
 		if (!this.isProjectionAllowed()) return "stale";
+		if (this.reconciledVersion !== this.reconciliationVersion) return "stale";
 		if (this.pendingPeriods.size > 0 || this.running !== null) return "stale";
 		return "ready";
 	}
@@ -249,6 +261,7 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private async runOnce(ignoreCooldown: boolean): Promise<{ projected: number; failed: number }> {
+		await this.reconcileMissedChanges();
 		let projected = 0;
 		let failed = 0;
 		for (const period of this.getPendingPeriodsInPriorityOrder()) {
@@ -317,9 +330,16 @@ export class MonthlyProjectionCoordinator {
 			if (existing !== null && !(existing instanceof TFile)) {
 				throw new Error(`Monthly projection target is not a file: ${targetPath}`);
 			}
+			const assertTarget = (file: TFile | null = existing) => {
+				assertCurrent();
+				// 文件对象可随目录移动改变路径；同文替换也不能继承旧任务的写权限。
+				if ((file !== null && file.path !== targetPath)
+					|| this.app.vault.getAbstractFileByPath(targetPath) !== file) throw new MonthlyProjectionStaleError();
+			};
 			let existingContent: string | null = null;
 			if (existing instanceof TFile) {
 				existingContent = await this.app.vault.read(existing);
+				assertTarget();
 				if (!hasKnomoMonthlyArchiveMarker(existingContent)) {
 					this.metadata.delete(period);
 					return;
@@ -327,7 +347,7 @@ export class MonthlyProjectionCoordinator {
 			}
 			const runtime = this.createCooperativeRuntime();
 			const built = await this.options.inputBuilder.build(period, runtime);
-			assertCurrent();
+			assertTarget();
 			if (built.status === "incomplete") {
 				outcome = "incomplete";
 				return;
@@ -346,11 +366,11 @@ export class MonthlyProjectionCoordinator {
 				sourceDigest: built.sourceDigest,
 				preservedMarker,
 			}, undefined, runtime);
-			assertCurrent();
+			assertTarget();
 			if (projection.path !== targetPath) throw new Error("Monthly projection settings changed during build.");
 			if (existing instanceof TFile) {
 				const currentHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(existing)));
-				assertCurrent();
+				assertTarget();
 				if (currentHash === projection.outputHash) {
 					this.metadata.set(period, toMetadata(projection));
 					return;
@@ -371,9 +391,9 @@ export class MonthlyProjectionCoordinator {
 				if (existing instanceof TFile) {
 					let skippedUnmarked = false;
 					let changedMarker = false;
-					assertCurrent();
+					assertTarget();
 					await this.app.vault.process(existing, (currentContent) => {
-						assertCurrent();
+						assertTarget();
 						if (!hasKnomoMonthlyArchiveMarker(currentContent)) {
 							skippedUnmarked = true;
 							return currentContent;
@@ -384,7 +404,7 @@ export class MonthlyProjectionCoordinator {
 						}
 						return currentContent === projection.content ? currentContent : projection.content;
 					});
-					assertCurrent();
+					assertTarget();
 					if (skippedUnmarked) {
 						this.options.selfWriteTracker.discard(targetPath, opId);
 						this.metadata.delete(period);
@@ -396,11 +416,12 @@ export class MonthlyProjectionCoordinator {
 					const parentFolder = getParentFolderPath(targetPath);
 					assertCurrent();
 					if (parentFolder !== null) await ensureFolder(this.app, parentFolder);
-					assertCurrent();
+					assertTarget();
 					file = await this.app.vault.create(targetPath, projection.content);
 				}
+				assertTarget(file);
 				const outputHash = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(file)));
-				assertCurrent();
+				assertTarget(file);
 				if (outputHash !== projection.outputHash) throw new Error("Monthly projection output verification failed.");
 				this.metadata.set(period, toMetadata(projection));
 			} catch (error) {
@@ -479,13 +500,15 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private async discoverHistoricalPeriods(fallbackToDaily: boolean): Promise<void> {
-		const generation = this.configurationGeneration;
-		const isCurrent = () => !this.isStopped() && generation === this.configurationGeneration;
+		const configuration = this.configuration;
+		if (configuration === null) return;
+		const metadataAtStart = new Map(this.metadata);
+		const isCurrent = () => !this.isStopped() && this.configuration === configuration && this.isProjectionAllowed();
 		let outputHashes: Map<string, string>;
 		try {
-			outputHashes = await this.options.inputBuilder.readOwnedMonthlyOutputHashes();
+			outputHashes = await this.readHistoricalOutputHashes(configuration);
 		} catch {
-			await this.persistCheckpoint();
+			if (isCurrent()) await this.persistCheckpoint();
 			return;
 		}
 		if (!isCurrent()) return;
@@ -500,7 +523,7 @@ export class MonthlyProjectionCoordinator {
 				if (!isCurrent()) return;
 				if (!fallbackToDaily) {
 					await this.invalidatePeriods(
-						this.getIncompletePeriods(ownedPeriods, outputHashes),
+						this.getIncompletePeriods(ownedPeriods, outputHashes, metadataAtStart),
 						MONTHLY_NORMAL_PRIORITY,
 					);
 					await this.persistCheckpoint();
@@ -510,15 +533,36 @@ export class MonthlyProjectionCoordinator {
 			}
 		}
 		if (!isCurrent()) return;
-		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], outputHashes);
+		const missingPeriods = this.getIncompletePeriods([...sourcePeriods, ...ownedPeriods], outputHashes, metadataAtStart);
 		this.discoveryPending = false;
 		await this.invalidatePeriods(missingPeriods, MONTHLY_NORMAL_PRIORITY);
 		await this.persistCheckpoint();
 	}
 
-	private getIncompletePeriods(periods: readonly string[], outputHashes: ReadonlyMap<string, string>): string[] {
+	private readHistoricalOutputHashes(configuration: MonthlyProjectionConfigurationSnapshot): Promise<Map<string, string>> {
+		if (this.historicalHashRead?.configuration === configuration) return this.historicalHashRead.promise;
+		const read: NonNullable<MonthlyProjectionCoordinator["historicalHashRead"]> = {
+			configuration,
+			promise: Promise.resolve().then(() => this.options.inputBuilder.readOwnedMonthlyOutputHashes({
+				yieldControl: () => this.yieldSlice(),
+				assertCurrent: () => {
+					this.assertRunning();
+					if (this.configuration !== configuration || !this.isProjectionAllowed()) throw new MonthlyProjectionStaleError();
+				},
+			})).finally(() => {
+				if (this.historicalHashRead === read) this.historicalHashRead = null;
+			}),
+		};
+		this.historicalHashRead = read;
+		return read.promise;
+	}
+
+	private getIncompletePeriods(periods: readonly string[], outputHashes: ReadonlyMap<string, string>,
+		metadataAtStart: ReadonlyMap<string, MonthlyProjectionMetadata>): string[] {
 		return [...new Set(periods)].filter((period) =>
 			!this.pendingPeriods.has(period)
+			// 扫描期间已提交的投影沿用其提交校验，旧扫描结果不能重新判它过期。
+			&& this.metadata.get(period) === metadataAtStart.get(period)
 			&& (!this.metadata.has(period) || !outputHashes.has(period)
 				|| this.metadata.get(period)?.outputHash !== outputHashes.get(period)));
 	}
@@ -632,8 +676,48 @@ export class MonthlyProjectionCoordinator {
 		if (this.timer !== null) win.clearTimeout(this.timer);
 		this.timer = win.setTimeout(() => {
 			this.timer = null;
-			void this.run();
+			void this.runBackground(() => this.run());
 		}, delay);
+	}
+
+	private async runBackground(action: () => Promise<unknown>): Promise<void> {
+		if (this.isStopped()) return;
+		try {
+			if (!this.isProjectionAllowed()) {
+				// 不读取未知配置；恢复后从完整 inventory 和现有投影补齐漏掉的事件。
+				this.reconciliationVersion++;
+				this.configurationGeneration++;
+				this.backgroundFailed = false;
+				this.notifyStateChanged();
+				return;
+			}
+			await action();
+		} catch (error) {
+			if (this.isStopped() || error instanceof MonthlyProjectionStoppedError || error instanceof MonthlyProjectionStaleError) return;
+			this.reconciliationVersion++;
+			this.configurationGeneration++;
+			const failed = this.isProjectionAllowed();
+			if (failed && !this.backgroundFailed) logContinuationFailure("monthly", "background", error);
+			this.backgroundFailed = failed;
+			this.notifyStateChanged();
+			this.scheduleRun(this.retryDelayMs);
+		}
+	}
+
+	private async reconcileMissedChanges(): Promise<void> {
+		if (this.reconciliationVersion === this.reconciledVersion || this.configuration === null || !this.isProjectionAllowed()) return;
+		const version = this.reconciliationVersion;
+		const generation = this.configurationGeneration;
+		await this.options.inputBuilder.initializeInventory(true);
+		const current = await this.options.inputBuilder.getConfigurationSnapshot();
+		const owned = await this.options.inputBuilder.listOwnedMonthlyPeriods();
+		this.assertRunning();
+		if (generation !== this.configurationGeneration || !this.isProjectionAllowed()) throw new MonthlyProjectionStaleError();
+		await this.invalidatePeriods([...this.configuration.dailyPeriods, ...current.dailyPeriods, ...owned, this.getCurrentPeriod()]);
+		this.assertRunning();
+		if (generation !== this.configurationGeneration || !this.isProjectionAllowed()) throw new MonthlyProjectionStaleError();
+		this.reconciledVersion = version;
+		this.backgroundFailed = false;
 	}
 
 	private isProjectionAllowed(): boolean {
@@ -651,6 +735,7 @@ export class MonthlyProjectionCoordinator {
 	}
 
 	private notifyStateChanged(): void {
+		if (this.isStopped()) return;
 		try {
 			this.options.onStateChanged?.();
 		} catch {

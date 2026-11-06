@@ -138,6 +138,7 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 		};
 		Object.assign(view, { cardFlowEl: root.asHtml(), containerEl: { win: {} }, renderedCardMemos: new Map(),
 			cardImageCache: new MemoCardImageCache(),
+			memoMarkdownRenderer: { releaseCard: () => {} },
 			cardFlowCoordinator: { generation: 1, clearMobileBatchContinuation: () => {}, removeSentinel: () => {}, getPendingVisibleCount: () => null, syncBatch: () => {} },
 			prepareRecentTimeFlow: () => { view.recentTimeFlowContext = context; view.recentDecorations = new RecentTimeFlowDecorations(context); },
 			getInitialCardBatchSize: () => 10, renderCardForMode: render,
@@ -243,18 +244,29 @@ test("memo card action menu includes open daily in the requested order", async (
 
 	const actions = root.findAll("[data-memo-action]");
 	assert.deepEqual(actions.map((action) => action.getAttr("data-memo-action")), [
-		"share-image",
-		"edit",
 		"reference",
+		"edit",
+		"share-image",
 		"copy-text",
 		"open-daily",
 		"copy-link",
 		"delete",
 	]);
 	assert.equal(root.find("[data-memo-action='open-daily']")?.getText(), "Open daily note");
+	assert.deepEqual(actions.map((action) => action.getAttr("data-menu-section")), [
+		"knomo-card-primary", "knomo-card-primary", "knomo-card-primary", "knomo-card-primary",
+		"knomo-card-navigation", "knomo-card-navigation", "knomo-card-danger",
+	]);
 	assert.equal(root.find(".knomo-card-word-count")?.getText(), "Words: 1");
+	assert.deepEqual(root.findAll(".knomo-card-menu-separator").map(separator => [
+		separator.getAttr("role"), separator.getAttr("data-before-section"),
+	]), [
+		["separator", "knomo-card-navigation"],
+		["separator", "knomo-card-danger"],
+		["separator", "knomo-card-info"],
+	]);
 	assert.deepEqual(actions.map((action) => action.find(".knomo-menu-icon")?.getAttr("data-icon")), [
-		"share", "pencil", "message-square-quote", "copy", "calendar-days", "link", "trash-2",
+		"message-square-quote", "pencil", "share", "copy", "calendar-days", "link", "trash-2",
 	]);
 	assert.ok(actions.every((action) => action.find(".knomo-menu-icon")?.getAttr("aria-hidden") === "true"));
 	assert.ok(actions.every((action) => action.getAttr("aria-label") === null && action.getAttr("title") === null));

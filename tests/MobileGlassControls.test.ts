@@ -41,7 +41,7 @@ async function segmentHtml(): Promise<string> {
 			trend: [], activeHours: [], commonTags: [],
 		};
 		renderKnomoRecordStatsPage(root, {
-			snapshot: { state: "ready", error: null, updating: false }, selected, view: "week", canAdvance: false, canRetreat: true,
+			snapshot: { state: "ready", error: null, updating: false, valid: true }, selected, view: "week", canAdvance: false, canRetreat: true,
 			createHiddenText: (parent, id, text) => { parent.createSpan({ text, attr: { id } }); return id; },
 		});
 		return buoy + root.querySelector(".knomo-record-stats-view-controls")!.outerHTML;

@@ -4,20 +4,25 @@ import { SearchSession, getSearchShortcutDate } from "../src/ui/SearchSession";
 import { buildSearchSourceScope } from "../src/ui/SearchSourceScope";
 import { getCatalogQueryKey, narrowCatalogQuery } from "../src/services/SearchMatching";
 
-test("非法草稿与关闭不提交，结果保留自己的指纹", () => {
+test("回退文字可提交并移除旧手写日期，关闭与新草稿不改已接受结果指纹", () => {
 	const session = new SearchSession();
 	session.updateDraft("2026 复盘"); session.submit();
 	const filter = session.getFilter();
 	session.commitResult(filter, 4, "complete");
 	session.updateDraft("2026-");
-	assert.equal(session.submit(), false);
-	assert.equal(session.applied.input, "2026 复盘");
+	assert.equal(session.submit(), true);
+	assert.equal(session.applied.input, "2026-");
+	assert.equal(session.applied.date, null);
+	assert.equal(session.applied.dateOrigin, null);
+	assert.deepEqual(session.getFilter(), { textTerms: ["2026-"] });
 	assert.equal(session.result!.key, getCatalogQueryKey(filter));
+	assert.equal(session.result!.input, "2026 复盘");
+	assert.deepEqual(session.result!.filter, filter);
 	const version = session.version;
 	session.close();
 	assert.ok(session.version > version);
 	assert.equal(session.draft.text, "2026-");
-	assert.equal(session.applied.input, "2026 复盘");
+	assert.equal(session.applied.input, "2026-");
 });
 
 test("B：快捷日期与手输互斥，按钮只删除日期原文，原生清空保留快捷日期", () => {
@@ -37,13 +42,33 @@ test("B：快捷日期与手输互斥，按钮只删除日期原文，原生清�
 	session.updateDraft(""); session.submit();
 	assert.equal(session.hasConditions, false);
 	session.updateDraft("2026-");
-	assert.equal(session.toggleShortcut("week"), false);
+	assert.equal(session.toggleShortcut("week"), true);
+	assert.equal(session.draft.text, "2026-");
 	session.beginComposition();
 	assert.equal(session.submit(), false);
 	assert.equal(session.toggleShortcut("month"), false);
 	session.reset();
 	assert.equal(session.draft.text, "");
 	assert.equal(session.draft.composing, false);
+});
+
+test("回退整条文字可选中及取消快捷日期，不移除其中有效日期或引号", () => {
+	const session = new SearchSession();
+	const text = '20261009 项目 2026-13 "2026"';
+	session.updateDraft(text, 2, 7);
+	assert.equal(session.toggleShortcut("month"), true);
+	assert.equal(session.draft.text, text);
+	assert.deepEqual([session.draft.selectionStart, session.draft.selectionEnd], [2, 7]);
+	assert.deepEqual(session.applied.terms, [text]);
+	assert.equal(session.applied.dateOrigin, "shortcut");
+	assert.equal(session.toggleShortcut("month"), true);
+	assert.equal(session.applied.dateOrigin, null);
+	assert.equal(session.draft.text, text);
+	session.toggleShortcut("week");
+	session.updateDraft("2026-"); session.submit();
+	assert.equal(session.applied.shortcut, "week");
+	session.updateDraft(""); session.submit();
+	assert.equal(session.applied.shortcut, "week");
 });
 
 test("来源与日期取交集且不丢失日期集合、小时和回顾口径", () => {

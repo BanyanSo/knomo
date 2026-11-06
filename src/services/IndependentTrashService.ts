@@ -66,11 +66,14 @@ export class IndependentTrashService {
 		return this.cleanupOnly.get(snapshotId)?.confirmed === true;
 	}
 
-	restore(snapshotId: string): Promise<TrashWriteResult> {
+	restore(selected: TrashSnapshot): Promise<TrashWriteResult> {
+		const snapshot = structuredClone(selected);
+		const snapshotId = snapshot.snapshotId;
 		return this.serial(async (store) => {
 			const pending = this.cleanupOnly.get(snapshotId);
 			if (pending !== undefined) return this.finishRestore(pending.snapshot, pending.prepared, pending.observation, store);
-			const snapshot = await store.read(snapshotId);
+			try { await store.assertUnchanged(snapshot); }
+			catch (error) { throw new Error(t("trash.restoreSnapshotError", { error: String(error) })); }
 			const original = await this.options.getOriginalDailyFile(snapshot.sourcePath, snapshot.logicalDate);
 			if (original !== null && original.path !== snapshot.sourcePath) throw new Error("Restore cannot follow a historical file move.");
 			const file = original ?? await this.options.getDailyFileForDate(snapshot.logicalDate);

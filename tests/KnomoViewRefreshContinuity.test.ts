@@ -244,6 +244,37 @@ test("列表查询等待置顶数据后才返回，拒绝混合不同 Catalog re
 	assert.equal(queries, 4, "初次成功一次，过期快照最多重读三次");
 });
 
+test("桌面恢复按已接受的范围重读已展开的页，拒绝混合 Catalog 版本", async () => {
+	const { view } = await refreshHarness();
+	const { CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");
+	const { getCatalogQueryKey } = await import("../src/services/SearchMatching");
+	const coverage = { kind: "complete", pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1, coveredFromDate: null };
+	const cursor = { catalog: { key: "next" } };
+	const filter = { text: "matching" };
+	const queries: Array<[unknown, unknown]> = [];
+	let revision = 2;
+	Object.assign(view, {
+		getCatalogQueryFingerprint: (full: boolean) => full ? getCatalogQueryKey(filter) : "recent",
+		buildCatalogActiveQuery: (full: boolean) => full ? filter : {},
+		shouldShowTodayTimeBuoys: () => false, catalogTodayTimeBuoys: null,
+		viewStateController: new KnomoViewStateController(),
+		queryCatalogFeature: async (request: { text?: string; cursor: unknown }) => {
+			queries.push([request.text, request.cursor]);
+			return { items: [], nextCursor: request.cursor === null ? cursor : null, coverage,
+				catalogRevision: request.cursor === null ? 2 : revision, readState: "ready", status: { content: "ready" } };
+		},
+	});
+	view.viewStateController.search.commitResult(filter, 1, "complete");
+	view.memos = Array.from({ length: 60 }, (_, index) => ({ id: String(index) }));
+	await view.reloadMemos(false, false, true);
+	assert.deepEqual(queries, [["matching", null], ["matching", cursor]]);
+
+	revision = 3;
+	queries.length = 0;
+	await assert.rejects(view.loadCatalogMemos(true, undefined, new Date(), { memoCount: 60, todayCount: 0 }), CatalogDiscoveryInvalidatedError);
+	assert.deepEqual(queries, Array.from({ length: 3 }, () => [["matching", null], ["matching", cursor]]).flat());
+});
+
 test("引用事件增量刷新且原位排队正文与来源引用，不清空卡片容器", async () => {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");

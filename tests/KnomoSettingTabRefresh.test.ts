@@ -88,6 +88,31 @@ test("legacy and declarative entry points render the same three-tab page", async
 	}
 });
 
+test("设置刷新按宿主版本选择入口，隐藏的旧版页面不会重新挂载", async () => {
+	await ensureObsidianStub();
+	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
+	const { requireApiVersion } = await import("obsidian");
+	const version = requireApiVersion as typeof requireApiVersion & { set(value: string): void };
+	const dom = setupDom();
+	try {
+		for (const api of ["1.11.0", "1.13.0"]) for (const visible of [true, false]) {
+			version.set(api);
+			const root = dom.window.document.getElementById("settings")!;
+			root.innerHTML = "<span>old</span>";
+			let updates = 0;
+			const tab = Object.create(KnomoSettingTab.prototype);
+			Object.assign(tab, { containerEl: root, pageEl: null, settingsVisible: visible,
+				update: () => updates++, display: () => assert.fail("内部刷新不应调用宿主兼容入口"),
+				mountPage: (parent: HTMLElement) => { parent.append(dom.window.document.createElement("main")); },
+			});
+			tab.refreshSettingTab();
+			assert.equal(updates, api === "1.13.0" ? 1 : 0);
+			assert.equal(root.querySelectorAll("main").length, api === "1.11.0" && visible ? 1 : 0);
+			assert.equal(root.querySelectorAll("span").length, api === "1.11.0" && visible ? 0 : 1);
+		}
+	} finally { version.set("1.11.0"); dom.window.close(); }
+});
+
 test("标题成功在当前行持续显示影响范围，无延迟或重复通知", async () => {
 	await ensureObsidianStub();
 	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");

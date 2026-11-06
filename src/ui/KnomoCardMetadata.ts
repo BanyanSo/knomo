@@ -34,7 +34,7 @@ export interface TrashCardActionMeta {
 	state: TrashActionState;
 }
 
-const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["share-image", "edit", "reference", "copy-text", "open-daily", "copy-link", "relations", "delete"];
+const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["reference", "edit", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"];
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
 	"share-image": "share",
 	relations: "network",
@@ -48,6 +48,12 @@ export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
 	"mark-reviewed": "check",
 };
 export const MEMO_WORD_COUNT_ICON = "text";
+
+export function getMemoCardActionSection(action: MemoAction): string {
+	return action === "delete" ? "knomo-card-danger"
+		: ["share-image", "edit", "reference", "copy-text"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
+}
+
 const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
 const CJK_CONTENT_MIN_HAN_COUNT = 8;
 const CJK_CONTENT_MIN_HAN_RATIO = 0.25;

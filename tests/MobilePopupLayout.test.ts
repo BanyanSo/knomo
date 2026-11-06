@@ -165,7 +165,7 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 			const win = window as unknown as { ComposerFixture: { MobileComposerController: new (options: object) => object }; composerController: object; viewportProbe: EventTarget & { height: number }; closedCalls: number; keyboardOnFocus: boolean };
 			const viewport = Object.assign(new EventTarget(), { height: 720, width: 390, offsetTop: 0, offsetLeft: 0 });
 			Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
-			win.viewportProbe = viewport; win.closedCalls = 0; win.keyboardOnFocus = true;
+			win.viewportProbe = viewport; win.closedCalls = 0; win.keyboardOnFocus = false;
 			const root = document.getElementById("root")!, composer = root.querySelector<HTMLElement>(".knomo-composer")!, input = composer.querySelector<HTMLElement>(".cm-content")!;
 			let open = false;
 			const controller = new win.ComposerFixture.MobileComposerController({
@@ -190,33 +190,82 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 		const layoutsBefore = await layoutCount();
 		const entering = await page.evaluate(async () => {
 			const content = document.querySelector<HTMLElement>(".knomo-mobile-composer-content")!;
-			const top = content.getBoundingClientRect().top;
+			const backdrop = document.querySelector<HTMLElement>(".knomo-mobile-composer-backdrop")!;
+			const input = content.querySelector<HTMLElement>(".cm-content")!;
+			const buttons = Array.from(content.querySelectorAll(".knomo-tool-button, .knomo-send-button, .knomo-cancel-edit-button"));
+			const toolbar = content.querySelector(".knomo-composer-bar")!;
+			const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+			const sample = () => {
+				const rect = content.getBoundingClientRect();
+				const x = (rect.left + rect.right) / 2;
+				const hitsPanel = (y: number) => content.contains(document.elementFromPoint(x, y));
+				let top = Math.ceil(rect.top);
+				let bottom = Math.floor(Math.min(rect.bottom, 420) - 1);
+				const hasVisiblePanel = top <= bottom && hitsPanel(bottom);
+				// 命中区随裁剪变化，面板的布局坐标本身看不出入场方向。
+				while (hasVisiblePanel && top < bottom) {
+					const middle = Math.floor((top + bottom) / 2);
+					if (hitsPanel(middle)) bottom = middle;
+					else top = middle + 1;
+				}
+				return {
+					top: rect.top,
+					visibleTop: hasVisiblePanel ? top : null,
+					toolbarBottom: Math.max(...buttons.map(button => button.getBoundingClientRect().bottom)),
+					toolbarInset: rect.bottom - toolbar.getBoundingClientRect().bottom,
+					opacity: Number(getComputedStyle(content).opacity),
+					backdropOpacity: Number(getComputedStyle(backdrop).opacity),
+				};
+			};
 			(window as unknown as { composerController: { open: () => void } }).composerController.open();
-			await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-			const after = content.getBoundingClientRect().top;
-			const samples: Array<{ top: number; toolbarInset: number; opacity: number }> = [];
-			const toolbar = document.querySelector<HTMLElement>(".knomo-composer-bar")!;
+			const focused = document.activeElement === input;
+			await nextFrame();
+			await nextFrame();
+			const pending = sample();
+			window.dispatchEvent(new CustomEvent("keyboardWillShow", { detail: { keyboardHeight: 300 } }));
+			const samples = [pending];
 			const started = performance.now();
 			while (performance.now() - started < 360) {
-				await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-				const rect = content.getBoundingClientRect();
-				samples.push({ top: rect.top, toolbarInset: rect.bottom - toolbar.getBoundingClientRect().bottom, opacity: Number(getComputedStyle(content).opacity) });
+				await nextFrame();
+				samples.push(sample());
 			}
-			return { before: top, after, samples };
+			return { focused, pending, samples };
 		});
 		const entryLayouts = await layoutCount() - layoutsBefore;
 		t.diagnostic(`Composer entry layouts: ${entryLayouts}`);
 		assert.ok(entryLayouts <= 6, `入场位置动画不应逐帧重排，本轮布局次数：${entryLayouts}`);
+		assert.equal(entering.focused, true, "透明面板仍须在 open 调用栈内聚焦");
+		assert.equal(entering.pending.opacity, 0, "原生位置到达前不能在底部露出");
 		assert.ok(entering.samples.length >= 6, "须覆盖多个入场帧");
+		const visibleTops: number[] = [];
+		for (const sample of entering.samples) {
+			if (sample.opacity > 0) {
+				assert.ok(sample.toolbarBottom <= 417, "从首个可见帧起，工具栏须位于模拟键盘上沿之上");
+				if (sample.visibleTop !== null) visibleTops.push(sample.visibleTop);
+			}
+		}
+		assert.ok(visibleTops.length >= 3 && visibleTops[0] - visibleTops.at(-1)! > 20, `面板须从停靠边缘向上展开，实际边缘：${visibleTops.join(", ")}`);
+		for (let index = 1; index < visibleTops.length; index++) {
+			assert.ok(visibleTops[index] <= visibleTops[index - 1] + 1, "可见边缘应持续上移");
+		}
 		for (let index = 1; index < entering.samples.length; index++) {
 			const previous = entering.samples[index - 1], current = entering.samples[index];
 			assert.ok(current.top <= previous.top + 0.5, "打开期间不能反向下移");
 			assert.ok(current.opacity >= previous.opacity, "打开期间不能再次变透明");
+			assert.ok(current.backdropOpacity >= previous.backdropOpacity, "蒙版应与面板连续淡入");
 			assert.ok(Math.abs(current.toolbarInset - previous.toolbarInset) < 0.5, "工具栏须与面板同步移动");
 		}
-		assert.ok(entering.before - entering.after < 150, "首帧不能跳过大半键盘行程");
 		const openedTop = await page.locator(".knomo-mobile-composer-content").evaluate((el: HTMLElement) => el.getBoundingClientRect().top);
-		assert.ok(openedTop < entering.before - 200, "最终应贴近键盘上沿");
+		assert.ok(openedTop < entering.pending.top - 200, "最终应贴近键盘上沿");
+		for (const height of [348, 300]) {
+			const toolbarBottom = await page.evaluate(async (height: number) => {
+				window.dispatchEvent(new CustomEvent("keyboardDidShow", { detail: { keyboardHeight: height } }));
+				await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+				const buttons = Array.from(document.querySelectorAll(".knomo-mobile-composer-content .knomo-tool-button, .knomo-mobile-composer-content .knomo-send-button"));
+				return Math.max(...buttons.map(button => button.getBoundingClientRect().bottom));
+			}, height);
+			assert.ok(Math.abs(toolbarBottom - (720 - height - 4)) <= 1, "候选栏高度改变后首帧应贴住新的键盘上沿");
+		}
 		await page.evaluate(() => (window as unknown as { composerController: { closeKeepingDraft: () => void } }).composerController.closeKeepingDraft());
 		assert.equal(await page.locator(".knomo-mobile-composer-layer").getAttribute("data-close-stage"), "exit");
 		assert.equal(await page.locator(".knomo-mobile-composer-content").evaluate((el: HTMLElement) => el.inert), true);
@@ -269,14 +318,20 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 			assert.equal(tracking.bottom, 0, "布局锚点固定，键盘位移仅作用于变换");
 			await page.evaluate(() => (window as unknown as { composerController: { closeKeepingDraft: () => void } }).composerController.closeKeepingDraft());
 			await page.waitForTimeout(70);
-			// 在退场中途重开：沿当前动画位置反向恢复，旧收尾不得隐藏新一轮。
-			const reentry = await page.evaluate(() => {
+			// 中途重开先重新停靠，避免反向滑过仍占位的键盘。
+			const reentry = await page.evaluate(async () => {
 				const content = document.querySelector<HTMLElement>(".knomo-mobile-composer-content")!;
-				const before = content.getBoundingClientRect().top;
+				const input = content.querySelector<HTMLElement>(".cm-content")!;
 				(window as unknown as { composerController: { open: () => void } }).composerController.open();
-				return { before, after: content.getBoundingClientRect().top };
+				const focused = document.activeElement === input;
+				const pending = Number(getComputedStyle(content).opacity);
+				await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+				const buttons = Array.from(content.querySelectorAll(".knomo-tool-button, .knomo-send-button, .knomo-cancel-edit-button"));
+				return { focused, pending, toolbarBottom: Math.max(...buttons.map(button => button.getBoundingClientRect().bottom)) };
 			});
-			assert.ok(Math.abs(reentry.after - reentry.before) < 2, "中途重开不得瞬移回动画起点");
+			assert.equal(reentry.focused, true);
+			assert.equal(reentry.pending, 0);
+			assert.ok(reentry.toolbarBottom <= 417, "中途重开须先把工具栏停靠在键盘上沿");
 			await page.waitForTimeout(380);
 			assert.equal(await page.evaluate(() => (window as unknown as { closedCalls: number }).closedCalls), cycle + 1);
 			assert.equal(await page.locator(".knomo-mobile-composer-layer").getAttribute("aria-hidden"), "false");
@@ -289,9 +344,35 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 				});
 			}
 		}
-		await page.emulateMedia({ reducedMotion: "reduce" });
 		await page.evaluate(() => (window as unknown as { composerController: { closeKeepingDraft: () => void } }).composerController.closeKeepingDraft());
-		assert.equal(await page.evaluate(() => (window as unknown as { closedCalls: number }).closedCalls), 4);
+		await page.waitForFunction(() => (window as unknown as { closedCalls: number }).closedCalls === 4);
+		const interrupted = await page.evaluate(async () => {
+			const { composerController } = window as unknown as { composerController: { open: () => void; closeKeepingDraft: () => void } };
+			composerController.open();
+			await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+			const content = document.querySelector<HTMLElement>(".knomo-mobile-composer-content")!;
+			const rise = content.getAnimations().find((animation): animation is CSSAnimation => animation instanceof CSSAnimation)!;
+			rise.currentTime = 120;
+			const before = getComputedStyle(content).clipPath;
+			composerController.closeKeepingDraft();
+			const style = getComputedStyle(content);
+			return { before, after: style.clipPath, playState: style.animationPlayState };
+		});
+		assert.notEqual(interrupted.before, "none");
+		assert.equal(interrupted.after, interrupted.before, "入场中关闭不能突然显露剩余面板");
+		assert.equal(interrupted.playState, "paused");
+		await page.waitForFunction(() => (window as unknown as { closedCalls: number }).closedCalls === 5);
+		await page.emulateMedia({ reducedMotion: "reduce" });
+		const reducedEntry = await page.evaluate(async () => {
+			(window as unknown as { composerController: { open: () => void } }).composerController.open();
+			await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+			const content = document.querySelector<HTMLElement>(".knomo-mobile-composer-content")!;
+			const style = getComputedStyle(content);
+			return { opacity: style.opacity, clipPath: style.clipPath };
+		});
+		assert.deepEqual(reducedEntry, { opacity: "1", clipPath: "none" }, "减少动态效果时应直接显示已停靠的面板");
+		await page.evaluate(() => (window as unknown as { composerController: { closeKeepingDraft: () => void } }).composerController.closeKeepingDraft());
+		assert.equal(await page.evaluate(() => (window as unknown as { closedCalls: number }).closedCalls), 6);
 		assert.deepEqual(errors, []);
 	} finally { await browser.close(); }
 });

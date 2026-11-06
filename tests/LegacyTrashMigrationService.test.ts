@@ -41,10 +41,12 @@ test("启动检查期间的显式恢复会在检查后导入，重复点击仍�
 	const f = await fixture();
 	let release!: () => void;
 	const gate = new Promise<void>(resolve => { release = resolve; });
+	const read = f.plugin.loadData;
+	f.plugin.loadData = async () => { await gate; return read(); };
 	let maintenance = 0;
 	const { LegacyTrashMigrationService } = await import("../src/services/LegacyTrashMigrationService");
 	const service = new LegacyTrashMigrationService(f.vault.app, f.reader, { ...f.options,
-		runExclusive: async action => { if (++maintenance === 1) await gate; return action(); },
+		runExclusive: async action => { maintenance++; return action(); },
 	});
 	const startup = service.run();
 	const manual = service.run("manual");
@@ -55,7 +57,73 @@ test("启动检查期间的显式恢复会在检查后导入，重复点击仍�
 	assert.equal((await repeatedManual).status, "ready");
 	assert.equal((await f.store.query()).items.length, 2);
 	assert.equal(f.settingsWrites(), 1);
-	assert.equal(maintenance, 2);
+	assert.equal(maintenance, 1);
+});
+
+test("只读启动分支无需进入维护屏障", async t => {
+	for (const scenario of ["missing", "completed", "invalid", "read-failed"] as const) {
+		await t.test(scenario, async () => {
+			const f = await fixture();
+			const { LegacyTrashMigrationService } = await import("../src/services/LegacyTrashMigrationService");
+			if (scenario === "missing") f.reader.inspect = () => ({ kind: "missing" });
+			if (scenario === "completed") await f.plugin.saveData({ legacyMigration: {
+				completed: true, legacySystemRoot: "Absent/_knomo-system", sourceRevision: "a".repeat(64),
+			} });
+			if (scenario === "invalid") await f.plugin.saveData({ legacyMigration: { completed: false } });
+			if (scenario === "read-failed") f.plugin.loadData = async () => { throw new Error("Cannot read data"); };
+			let maintenance = 0;
+			const service = new LegacyTrashMigrationService(f.vault.app, f.reader, { ...f.options,
+				runExclusive: async action => { maintenance++; return action(); },
+			});
+			assert.equal((await service.run()).status, {
+				missing: "not_applicable", completed: "ready", invalid: "recovery_required", "read-failed": "recovery_required",
+			}[scenario]);
+			assert.equal(maintenance, 0);
+			assert.equal(f.vault.read(INDEX), f.index);
+		});
+	}
+});
+
+test("启动清理等待进行中的写入，并在获得屏障后重新校验条件", async t => {
+	for (const scenario of ["unchanged", "completion", "configuration", "target", "unload"] as const) {
+		await t.test(scenario, async () => {
+			const f = await fixture();
+			const { LegacyTrashMigrationService } = await import("../src/services/LegacyTrashMigrationService");
+			const { KnomoMutationBarrier } = await import("../src/services/KnomoMutationBarrier");
+			const { TFolder } = await import("obsidian");
+			const barrier = new KnomoMutationBarrier();
+			const controller = new AbortController();
+			const completion = { completed: true, legacySystemRoot: "Knomo/_knomo-system", sourceRevision: "a".repeat(64) };
+			await f.plugin.saveData({ legacyMigration: completion });
+			let releaseWrite!: () => void;
+			const write = barrier.wrap(() => new Promise<void>(resolve => { releaseWrite = resolve; }))();
+			let requestMaintenance!: () => void;
+			const maintenance = new Promise<void>(resolve => { requestMaintenance = resolve; });
+			const service = new LegacyTrashMigrationService(f.vault.app, f.reader, { ...f.options,
+				signal: controller.signal,
+				getTrashFolder: () => f.options.getTrashFolder(),
+				runExclusive: action => { requestMaintenance(); return barrier.runPaused(action); },
+			});
+			const startup = service.run();
+			assert.equal(startup, service.run());
+			await maintenance;
+			assert.equal(f.vault.read(INDEX), f.index);
+			await assert.rejects(barrier.wrap(async () => {})(), /being rebuilt/);
+			if (scenario === "completion") await f.plugin.saveData({ legacyMigration: { ...completion, sourceRevision: "b".repeat(64) } });
+			if (scenario === "configuration") f.options.getTrashFolder = () => "Elsewhere";
+			if (scenario === "target") {
+				const lookup = f.vault.app.vault.getAbstractFileByPath.bind(f.vault.app.vault);
+				f.vault.app.vault.getAbstractFileByPath = path => path === completion.legacySystemRoot
+					? Object.assign(new TFolder(), { path, children: [] }) : lookup(path);
+			}
+			if (scenario === "unload") controller.abort();
+			releaseWrite();
+			await write;
+			assert.equal((await startup).status, scenario === "unchanged" ? "ready" : "pending");
+			assert.equal(f.vault.read(INDEX), scenario === "unchanged" ? null : f.index);
+			assert.equal(f.sourceReads(), 0);
+		});
+	}
 });
 
 test("非默认旧目录的合法 Monthly 备份可清理，保留当前正文和 Trash", async () => {
@@ -162,7 +230,7 @@ test("正式 Legacy reader 迁移仅保留独立 Trash；活动 Memo 不写 Dail
 		getDailyFileForDate: async () => { throw new Error("Original Daily should be used."); },
 		updateCatalogPartition: async () => undefined, refreshCatalogPaths: async () => undefined,
 	});
-	assert.equal((await trash.restore(snapshots[0]!.snapshotId)).state, "restored");
+	assert.equal((await trash.restore(snapshots[0]!)).state, "restored");
 	await f.store.remove(snapshots[1]!);
 	const { indexedDB, IDBKeyRange } = await import("fake-indexeddb");
 	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");

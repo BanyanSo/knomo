@@ -9,6 +9,23 @@ before(async () => {
 	({ KnomoViewStateController } = await import("../src/ui/KnomoViewStateController"));
 });
 
+test("被引用固定筛选清除旧条件，无日期范围，重复选择与返回保持既有规则", () => {
+	const state = new KnomoViewStateController();
+	state.activeNav = "review";
+	state.activeTag = "work"; state.activeTagKey = "work";
+	state.searchQuery = "old"; state.searchDateFilter = "week";
+	state.recordStatsSearchFilter = { type: "day", date: "2026-10-01" };
+	assert.equal(state.setScope("referenced").type, "changed");
+	assert.deepEqual(state.getSearchSource(), { hasReferrers: true });
+	assert.equal(state.activeNav, "all");
+	assert.equal(state.searchQuery, ""); assert.equal(state.searchDateFilter, null);
+	assert.equal(state.activeTagKey, null); assert.equal(state.recordStatsSearchFilter, null);
+	assert.equal(state.setScope("referenced").type, "already-active");
+	state.setSidebarNav("record-stats"); state.returnFromRecordStats();
+	assert.equal(state.scopeFilter, "referenced");
+	state.setScope("all"); assert.equal(state.isDefaultListState(), true);
+});
+
 test("Things 保留组合条件、单项清除、Scope 日期与统计返回", () => {
 	const state = new KnomoViewStateController();
 	state.activeTag = "project";

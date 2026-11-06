@@ -1,5 +1,6 @@
 import { isRecord } from "../utils/object";
 
+// Monthly 摘要按 Unicode code point 排序；不可替换为 Legacy 的 UTF-16 顺序。
 export function canonicalJson(value: unknown): string {
 	return JSON.stringify(toCanonicalValue(value));
 }

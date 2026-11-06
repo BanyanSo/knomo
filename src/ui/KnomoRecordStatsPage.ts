@@ -1,6 +1,7 @@
 import { setIcon } from "obsidian";
 
 import { getKnomoLocale, t } from "../i18n";
+import { isReferencedMemoStatsAvailable, RECORD_STATS_COMMON_TAG_LIMIT } from "../services/RecordStatsService";
 import type {
 	RecordStatsSnapshot,
 	RecordStatsTrendPoint,
@@ -28,6 +29,7 @@ interface MetricItem {
 	action?: string;
 	ariaLabel?: string;
 	description?: string;
+	descriptionStatus?: boolean;
 }
 
 interface BarAction {
@@ -85,7 +87,7 @@ function renderLoadingState(container: HTMLElement, visible: boolean): void {
 	const tags = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
 	tags.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
 	const tagChart = tags.createDiv({ cls: "knomo-record-stats-skeleton-tag-chart" });
-	for (let index = 0; index < 5; index += 1) {
+	for (let index = 0; index < RECORD_STATS_COMMON_TAG_LIMIT; index += 1) {
 		tagChart.createDiv({ cls: "knomo-record-stats-skeleton-tag-row" });
 	}
 }
@@ -133,7 +135,7 @@ function renderSelectedRange(container: HTMLElement, options: RenderKnomoRecordS
 	renderViewControls(section, options.view);
 	renderRangeNavigation(section, selected, options.canRetreat, options.canAdvance);
 	renderTrendChart(section, options.view, selected, options.createHiddenText);
-	renderRangeMetrics(section, options.view, selected, options.snapshot);
+	renderRangeMetrics(section, options.view, selected, options.snapshot, options.pending?.blocked ?? false);
 	renderActiveHours(section, selected, options.createHiddenText);
 	renderCommonTags(section, selected);
 }
@@ -235,7 +237,7 @@ function renderTrendChart(
 	}
 }
 
-function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selected: SelectedRecordStats, snapshot: RecordStatsSnapshot): void {
+function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selected: SelectedRecordStats, snapshot: RecordStatsSnapshot, blocked: boolean): void {
 	const section = container.createDiv({ cls: "knomo-record-stats-metrics-section" });
 	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: getRangeStatsTitle(view) });
 	renderMetricGrid(section, [
@@ -271,7 +273,7 @@ function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selec
 			action: "record-stats-filter-references",
 			ariaLabel: t("recordStats.action.filterReferences", { count: selected.range.referenceMemoCount }),
 		},
-		getReferencedMetric(selected, snapshot),
+		getReferencedMetric(selected, snapshot, blocked),
 		{
 			label: t("recordStats.metric.maxDailyNotes"),
 			value: selected.range.maxDailyMemoCount,
@@ -287,34 +289,36 @@ function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selec
 	], "knomo-record-stats-range-grid");
 }
 
-function getReferencedMetric(selected: SelectedRecordStats, snapshot: RecordStatsSnapshot): MetricItem {
+function getReferencedMetric(selected: SelectedRecordStats, snapshot: RecordStatsSnapshot, blocked = false): MetricItem {
 	const referenced = selected.referenced;
-	const stale = snapshot.updating || snapshot.error !== null;
+	const available = isReferencedMemoStatsAvailable(selected, snapshot, blocked);
+	const failed = blocked || snapshot.error !== null || (snapshot.valid && referenced?.failed === true);
+	const label = t("recordStats.metric.referenced");
+	const value = available ? referenced!.count : "—";
 	return { name: "referenced", label: t("recordStats.metric.referenced"),
-		value: !stale && referenced?.complete ? referenced.count : "—",
-		action: !stale && (referenced?.count ?? 0) > 0 ? "record-stats-filter-referenced" : undefined,
-		ariaLabel: t("recordStats.action.filterReferenced"),
-		description: !stale && referenced?.failed ? t("relations.failed") : undefined };
+		value,
+		action: available && referenced!.count > 0 ? "record-stats-filter-referenced" : undefined,
+		ariaLabel: `${label}: ${typeof value === "number" ? formatNumber(value) : value}`,
+		description: available ? undefined : t(failed ? "relations.failed" : "recordStats.referenced.pending"),
+		descriptionStatus: failed };
 }
 
 // 关系接续只修改这个指标，保留其它统计内容、滚动位置和当前控件。
-export function syncKnomoReferencedMetric(container: HTMLElement, selected: SelectedRecordStats, snapshot: RecordStatsSnapshot): void {
-	let metric = container.querySelector<HTMLElement>("[data-record-stats-metric='referenced']");
+export function syncKnomoReferencedMetric(container: HTMLElement, selected: SelectedRecordStats, snapshot: RecordStatsSnapshot, blocked = false): void {
+	const metric = container.querySelector<HTMLElement>("[data-record-stats-metric='referenced']");
 	if (!metric) return;
-	const item = getReferencedMetric(selected, snapshot);
-	if (item.action && metric.tagName !== "BUTTON") {
-		const button = container.createEl("button");
-		button.className = metric.className; button.type = "button"; button.dataset.recordStatsMetric = "referenced";
-		button.append(...Array.from(metric.childNodes)); metric.replaceWith(button); metric = button;
-	}
+	const item = getReferencedMetric(selected, snapshot, blocked);
 	if (item.action) { metric.dataset.action = item.action; metric.classList.add("is-interactive"); metric.removeAttribute("aria-disabled"); }
 	else { metric.removeAttribute("data-action"); metric.classList.remove("is-interactive"); if (metric.tagName === "BUTTON") metric.setAttribute("aria-disabled", "true"); }
 	if (metric.tagName === "BUTTON") metric.setAttribute("aria-label", item.ariaLabel!);
 	metric.querySelector(".knomo-record-stats-metric-value")!.textContent = typeof item.value === "number" ? formatNumber(item.value) : item.value;
-	const description = metric.querySelector<HTMLElement>(".knomo-record-stats-metric-description");
+	let description = metric.querySelector<HTMLElement>(".knomo-record-stats-metric-description");
 	if (item.description) {
-		if (!description) metric.createDiv({ cls: "knomo-record-stats-metric-description", text: item.description, attr: { role: "status" } });
-	} else if (!snapshot.updating) description?.remove();
+		description ??= metric.createDiv({ cls: "knomo-record-stats-metric-description" });
+		if (description.textContent !== item.description) description.textContent = item.description;
+		if (item.descriptionStatus) description.setAttribute("role", "status");
+		else description.removeAttribute("role");
+	} else description?.remove();
 }
 
 function renderActiveHours(
@@ -437,20 +441,28 @@ function renderMetricGrid(container: HTMLElement, items: MetricItem[], cls: stri
 	const grid = container.createDiv({ cls: `knomo-record-stats-metric-grid ${cls}` });
 	for (const item of items) {
 		const action = typeof item.value === "number" && item.value <= 0 ? null : item.action ?? null;
-		const metric = action !== null
+		const metric = action !== null || item.name === "referenced"
 			? grid.createEl("button", {
-				cls: "knomo-record-stats-metric is-interactive",
+				cls: action ? "knomo-record-stats-metric is-interactive" : "knomo-record-stats-metric",
 				attr: {
 					type: "button",
-					"data-action": action,
+					...(action ? { "data-action": action } : { "aria-disabled": "true" }),
 					"aria-label": item.ariaLabel ?? item.label,
 				},
 			})
 			: grid.createDiv({ cls: "knomo-record-stats-metric" });
+		if (item.name === "referenced") {
+			// 保留已聚焦按钮；原生键盘／触控产生的 click 在禁用时不可继续冒泡。
+			metric.addEventListener("click", event => {
+				if (metric.getAttribute("aria-disabled") !== "true") return;
+				event.preventDefault(); event.stopImmediatePropagation();
+			});
+		}
 		metric.createDiv({ cls: "knomo-record-stats-metric-value", text: typeof item.value === "number" ? formatNumber(item.value) : item.value });
 		if (item.name) metric.setAttr("data-record-stats-metric", item.name);
 		metric.createDiv({ cls: "knomo-record-stats-metric-label", text: item.label });
-		if (item.description) metric.createDiv({ cls: "knomo-record-stats-metric-description", text: item.description, attr: { role: "status" } });
+		if (item.description) metric.createDiv({ cls: "knomo-record-stats-metric-description", text: item.description,
+			attr: item.descriptionStatus ? { role: "status" } : {} });
 	}
 }
 

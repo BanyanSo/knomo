@@ -45,19 +45,34 @@ export class ImageResourceCache {
 	}
 
 	invalidateImagePaths(paths: readonly string[]): void {
-		const normalizedPaths = paths.map(normalizeComparablePath);
-		const basenames = new Set(normalizedPaths.map(getPathBasename));
+		const normalizedPaths = new Set(paths.map(normalizeComparablePath));
+		const basenames = new Set([...normalizedPaths].map(getPathBasename));
 		for (const [key, entry] of this.entries) {
 			const resolvedPath = entry.value.resourcePath;
-			if (resolvedPath !== undefined && normalizedPaths.includes(normalizeComparablePath(resolvedPath))) {
+			if (resolvedPath !== undefined && normalizedPaths.has(normalizeComparablePath(resolvedPath))) {
 				this.entries.delete(key);
 				continue;
 			}
 			const rawPath = normalizeComparablePath(entry.rawPath);
-			if (normalizedPaths.includes(rawPath) || basenames.has(getPathBasename(rawPath))) {
+			if (normalizedPaths.has(rawPath) || basenames.has(getPathBasename(rawPath))) {
 				this.entries.delete(key);
 			}
 		}
+	}
+
+	invalidateMissing(): void {
+		for (const [key, entry] of this.entries) {
+			if (entry.value.missing) this.entries.delete(key);
+		}
+	}
+
+	getPathsInFolders(matches: (path: string) => boolean): string[] {
+		const paths = new Set<string>();
+		for (const { rawPath, value } of this.entries.values()) {
+			if (matches(rawPath)) paths.add(rawPath);
+			if (value.resourcePath !== undefined && matches(value.resourcePath)) paths.add(value.resourcePath);
+		}
+		return [...paths];
 	}
 
 	clear(): void {

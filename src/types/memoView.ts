@@ -1,5 +1,6 @@
 import type { TrashMemoItem, TrashSnapshot } from "./trash";
 import { hashText } from "../utils/hash";
+import { parseDiaryMemoBlock } from "../services/DiaryMemoParser";
 import { extractLeadingParagraphBlockId, getFourColumnMemoPrefix, splitMarkdownLines, stripMemoContinuationIndent } from "../utils/markdown";
 import type { CatalogMemoItem } from "./catalogView";
 import type { DailyRef, MemoImageRef, MemoLinkRef, MemoStatus } from "./memo";
@@ -80,6 +81,8 @@ export function toTrashMemoItem(item: TrashSnapshot): TrashMemoItem {
 
 function readDeletedPayloadContent(rawBlock: string): string {
 	const lines = splitMarkdownLines(rawBlock);
+	const parsed = parseDiaryMemoBlock(lines, 0);
+	if (parsed !== null) return parsed.content;
 	const prefix = getFourColumnMemoPrefix(lines);
 	if (prefix !== null) {
 		const continuation = lines.slice(Math.max(1, prefix.contentStartLineOffset))

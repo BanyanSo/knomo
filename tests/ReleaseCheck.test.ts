@@ -29,6 +29,23 @@ const script = path.resolve("scripts/release-check.mjs");
 const version = "2.3.4";
 const importModule = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<ReleaseCheck>;
 const load = () => importModule(pathToFileURL(script).href);
+
+test("浏览器模块、通道或安装目录变化使发布验证证据失效", async () => {
+	const core = await load();
+	const keys = ["KNOMO_LAYOUT_PLAYWRIGHT", "KNOMO_LAYOUT_BROWSER", "PLAYWRIGHT_BROWSERS_PATH"] as const;
+	for (const key of keys) {
+		const previous = process.env[key];
+		try {
+			delete process.env[key];
+			const before = core.verificationInputs(process.cwd()).fingerprint;
+			process.env[key] = "different-browser-configuration";
+			assert.notEqual(core.verificationInputs(process.cwd()).fingerprint, before, key);
+		} finally {
+			if (previous === undefined) delete process.env[key];
+			else process.env[key] = previous;
+		}
+	}
+});
 const digest = (bytes: Buffer): Digest => ({ bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
 
 function git(root: string, ...args: string[]): string {

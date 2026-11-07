@@ -43,7 +43,7 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 
 	assert.equal(first.content, second.content);
 	assert.equal(first.sourceDigest, "08ed925cc9bf21dc89eff9789fa0d5f8eb8362c10ce8db61e90a3838219b557b");
-	assert.equal(first.outputHash, "8644cf1375b8cd6663444c15bbd25d1b1d5f4339142f2e3a8ed15e0fb907eb03");
+	assert.equal(first.outputHash, "45655fa980004f2c9c6bc6bae67bcccce918d3c782da0d6a67aa500fa5dd1c18");
 	assert.equal(first.path, "Knomo/Memos-2026-08.md");
 	assert.equal(first.content, [
 		"<!-- knomo:monthly-archive -->",
@@ -52,7 +52,7 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 		"## [[2026-08-01]]",
 		"- 08:00:00 first",
 		"## [[2026-08-02]]",
-		"-   09:30 second\n\tline ^kept-id",
+		"- 09:30 second\n  line ^kept-id",
 		"",
 	].join("\n\n").replace(/\n\n$/u, "\n"));
 	assert.equal(first.content.includes("^kept-id"), true);

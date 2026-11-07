@@ -173,7 +173,7 @@ export class DiaryMemoParser {
 	}
 }
 
-function parseDiaryMemoBlock(lines: readonly string[], startLine: number): ParsedDiaryMemoBlock | null {
+export function parseDiaryMemoBlock(lines: readonly string[], startLine: number): ParsedDiaryMemoBlock | null {
 	const firstLine = lines[startLine];
 	const match = firstLine?.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
 	if (match === null) {

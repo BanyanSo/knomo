@@ -735,7 +735,9 @@ Obsidian 1.14.4 API 类型声明固定到[官方仓库提交](https://github.com
 npm run test:file -- tests/<Name>.test.ts
 ```
 
-`npm test` / `npm run test:quiet` 运行产品行为、数据安全、同步 acceptance 及架构/产品契约测试。`npm run test:tooling` 运行测试 runner、验证工具和 benchmark trace validator 测试。`npm run test:all` 运行两者的完整集合；CI、发布检查和 `npm run verify` 使用全量集合。测试目录不变，新文件默认进入产品集合，`test:file` 可选择任一集合的文件。合成 trace 测试不替代真实设备性能验收。
+`npm test` / `npm run test:quiet` 运行产品行为、数据安全、同步 acceptance 及架构/产品契约测试。`npm run test:tooling` 运行测试 runner 和验证工具。`npm run test:node` 运行两者的集合，不含浏览器覆盖，并明确提示浏览器检查被跳过。`npm run test:browser` 运行真实浏览器测试文件；`npm run test:all` 运行产品、工具和浏览器的完整集合。后两者要求浏览器可启动，环境缺失时直接失败并显示安装方法。CI 使用相同的 Node／浏览器入口；发布检查和 `npm run verify` 必须通过 `test:all`。
+
+执行 `npm ci` 后，首次使用运行 `npm run test:browser:install` 安装固定 Playwright 对应的 Chromium；Linux CI 使用 `npx playwright install --with-deps chromium`。默认 Chromium 无需配置环境变量；仍可用 `KNOMO_LAYOUT_PLAYWRIGHT` 和 `KNOMO_LAYOUT_BROWSER` 指定其他已安装的模块／浏览器通道，缺失时强制检查会失败。测试目录不变，新文件默认进入产品集合，`test:file` 可选择任一集合的文件。浏览器及合成 trace 测试不替代 Obsidian 宿主或真实设备验收。
 
 persistence、migration、identity、数据安全及跨服务语义修改须先补有效回归，再运行 `npm run test:quiet` 和 `npm run typecheck`。需要验证构建产物时运行 `npm run build`。仅因新增修改、失败或未解决风险扩大或重复检查；未执行的检查单独说明。
 

@@ -51,6 +51,24 @@ test("紧凑两列格式保留正文引用关联，重复保存不更换主块 I
 	} finally { relations.dispose(); }
 });
 
+test("Catalog 缺省锚点计数不重复计算正文末项，整文件重复 ID 仍 unresolved", async () => {
+	const { catalog, seed, relations, store } = await fixture();
+	const raw = "- 09:00 intro\n  \n  - child ^child-anchor \t";
+	const parsed = new DiaryMemoParser().parseRevision({ sourcePath: "A.md", logicalDate: "2026-10-25", content: raw, sourceRevision: "a" });
+	try {
+		await catalog.replaceFile({ inventory: { sourcePath: "A.md", logicalDate: "2026-10-25", mtime: 1, size: raw.length },
+			sourceRevision: parsed.sourceRevision, observations: parsed.observations, parserVersion: 19, settingsFingerprint: "test", auditedAt: 1 });
+		const file = (await catalog.listFiles())[0];
+		assert.equal(file.relations!.anchors["child-anchor"], 1);
+		const key = observationHandleKey(parsed.observations[0]);
+		await seed("B.md", "- 10:00 [[A#^child-anchor|原有别名]]");
+		assert.equal((await relations.read()).referrers.get(key)?.length, 1);
+		await seed("A.md", raw + "\noutside ^child-anchor");
+		assert.equal((await relations.read()).referrers.has(key), false);
+		assert.equal((await store.query({ sourcePaths: ["B.md"], limit: 1 })).items[0].content, "[[A#^child-anchor|原有别名]]");
+	} finally { relations.dispose(); }
+});
+
 function holdFinalCoverage(store: InMemoryMemoCatalogStore) {
 	const coverage = store.getCoverage.bind(store);
 	let entered!: () => void, release!: () => void, calls = 0;

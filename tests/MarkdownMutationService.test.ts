@@ -24,6 +24,7 @@ import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 import { memoMarkdownConsistencyFixtures, expectedDailyMemo, expectedLegacyDailyMemo } from "./fixtures/memoMarkdownConsistency";
 import { formatServiceError } from "../src/utils/serviceText";
+import { MemoAnchorPreservationError } from "../src/services/MarkdownBlockService";
 
 const HEADINGS = ["## Memos"] as const;
 
@@ -98,22 +99,119 @@ test("B1 新建、编辑与引用后的正文保真，Daily 非目标区域逐�
 	for (const sample of memoMarkdownConsistencyFixtures) {
 		const fixture = createFixture({ initialFiles: { [path]: `${prefix}- 08:00 old ^existing-anchor${suffix}` } });
 		const target = (await fixture.parse("2026-08-22"))[1];
-		await fixture.service.edit({ observation: toHandle(target), content: sample.content });
-		const raw = fixture.vault.readText(path);
-		assert.ok(raw.startsWith(prefix), sample.name);
-		assert.ok(raw.endsWith(suffix), sample.name);
-		const saved = (await fixture.parse("2026-08-22"))[1];
-		assert.equal(saved.content, sample.content, sample.name);
-		assert.equal(saved.time, "08:00");
-		assert.equal(saved.existingBlockId, "existing-anchor");
-		await assert.rejects(() => fixture.service.edit({ observation: toHandle(target), content: "stale" }), MarkdownMutationStaleError);
-		assert.equal(fixture.vault.readText(path), raw);
+		// 隐式段落锚点不能随正文首块变更而迁移；各结构的原位保存由下面完整链路覆盖。
+		if (sample.layout !== "inline") {
+			await assert.rejects(() => fixture.service.edit({ observation: toHandle(target), content: sample.content }), MemoAnchorPreservationError);
+			assert.equal(fixture.vault.readText(path), `${prefix}- 08:00 old ^existing-anchor${suffix}`);
+		} else {
+			await fixture.service.edit({ observation: toHandle(target), content: sample.content });
+			const raw = fixture.vault.readText(path);
+			assert.ok(raw.startsWith(prefix), sample.name);
+			assert.ok(raw.endsWith(suffix), sample.name);
+			const saved = (await fixture.parse("2026-08-22"))[1];
+			assert.equal(saved.content, sample.content, sample.name);
+			assert.equal(saved.time, "08:00");
+			assert.equal(saved.existingBlockId, "existing-anchor");
+			await assert.rejects(() => fixture.service.edit({ observation: toHandle(target), content: "stale" }), MarkdownMutationStaleError);
+			assert.equal(fixture.vault.readText(path), raw);
+		}
 
 		const created = createFixture();
 		await created.service.create({ content: sample.content });
 		assert.equal((await created.getOnlyObservation("2026-08-22")).content, sample.content);
 		assert.equal(created.vault.readText(path), `## Memos\n${expectedDailyMemo(sample, "09:00")}\n`);
 	}
+});
+
+test("历史子块锚点原位保存、修改、引用复用及任务勾选均只保留一次", async () => {
+	const path = "Daily/2026-08-22.md";
+	for (const activeEditor of [false, true]) for (const eol of ["\n", "\r\n"]) {
+		for (const [header, indent] of [["- 08:00", "  "], ["-   08:00", "\t"]]) {
+			for (const primary of ["", " ^main-anchor"]) {
+				const raw = `${header} intro${primary}\n${indent}\n${indent}- [ ] child ^child-anchor \t`.replace(/\n/gu, eol);
+				const prefix = "## Memos" + eol;
+				const suffix = eol + "- 09:00 neighbor" + eol + "## Other" + eol + "keep" + eol;
+				const f = createFixture({ activeEditor, initialFiles: { [path]: prefix + raw + suffix } });
+				const expectedId = primary ? "main-anchor" : "child-anchor";
+				let body = "intro\n\n- [ ] child ^child-anchor \t";
+				let previous = "";
+				for (let save = 0; save < 3; save++) {
+					const before = (await f.parse("2026-08-22"))[0];
+					assert.equal(before.content, body);
+					const referenced = await f.service.createBlockReference({ observation: toHandle(before), sourcePath: "Other.md" });
+					assert.equal(referenced.blockId, expectedId);
+					await f.service.edit({ observation: toHandle(before), content: body });
+					const saved = (await f.parse("2026-08-22"))[0];
+					assert.equal(saved.content, body);
+					assert.equal(saved.existingBlockId, expectedId);
+					const disk = f.vault.readText(path);
+					assert.equal(disk.match(/\^child-anchor/gu)?.length, 1);
+					assert.ok(disk.startsWith(prefix) && disk.endsWith(suffix));
+					if (save > 0) assert.equal(disk, previous);
+					previous = disk;
+				}
+				const before = (await f.parse("2026-08-22"))[0];
+				body = body.replace("intro", "edited");
+				await f.service.edit({ observation: toHandle(before), content: body });
+				const saved = (await f.parse("2026-08-22"))[0];
+				const disk = f.vault.readText(path);
+				await f.service.toggleTask({ observation: toHandle(saved), taskIndex: 0, checked: true });
+				assert.equal(f.vault.readText(path), disk.replace("[ ]", "[x]"));
+			}
+		}
+	}
+});
+
+test("显式删除子块或 token 允许候选消失及变更，隐式主锚点保留", async () => {
+	const path = "Daily/2026-08-22.md";
+	for (const [raw, content, expected] of [
+		["- 08:00 intro\n  \n  - child ^child-anchor", "intro", null],
+		["- 08:00 intro\n  \n  - child ^child-anchor", "intro\n\n- child", null],
+		["- 08:00 intro ^main\n  \n  - child ^child-anchor", "intro", "main"],
+		["- 08:00 intro\n  \n  - first ^remaining\n  - child ^child-anchor", "intro\n\n- first ^remaining", "remaining"],
+	] as const) {
+		const f = createFixture({ initialFiles: { [path]: raw } });
+		const before = (await f.parse("2026-08-22"))[0];
+		await f.service.edit({ observation: toHandle(before), content });
+		const saved = (await f.parse("2026-08-22"))[0];
+		assert.equal(saved.content, content);
+		assert.equal(saved.existingBlockId, expected);
+		assert.doesNotMatch(f.vault.readText(path), /\^child-anchor/u);
+		await assert.rejects(() => f.service.edit({ observation: toHandle(before), content: "stale" }), MarkdownMutationStaleError);
+	}
+});
+
+test("首段锚点变更结构或重复输入时拒绝，独立头锚点保持原归属与尾随空白", async () => {
+	const path = "Daily/2026-08-22.md";
+	const initial = "- 08:00 first\n  last   ^main \t";
+	const f = createFixture({ initialFiles: { [path]: initial } });
+	let before = (await f.parse("2026-08-22"))[0];
+	for (const content of ["> quote", "# Heading", "text ^main", "text\n\n- child ^main"]) {
+		await assert.rejects(() => f.service.edit({ observation: toHandle(before), content }), MemoAnchorPreservationError);
+		assert.equal(f.vault.readText(path), initial);
+	}
+	await f.service.edit({ observation: toHandle(before), content: before.content });
+	assert.equal(f.vault.readText(path), initial);
+	const header = createFixture({ initialFiles: { [path]: "- 08:00 ^main \t\n  > quote" } });
+	before = (await header.parse("2026-08-22"))[0];
+	await header.service.edit({ observation: toHandle(before), content: "new paragraph" });
+	const saved = (await header.parse("2026-08-22"))[0];
+	assert.equal(saved.blockAnchor?.kind, "header");
+	assert.equal(saved.content, "new paragraph");
+	assert.match(header.vault.readText(path), /^-   08:00 \^main \t\n\t\n\tnew paragraph$/u);
+});
+
+test("引用复用检查整份 Daily 的重复 ID，编辑范围不越过裸空行", async () => {
+	const path = "Daily/2026-08-22.md";
+	const raw = "- 08:00 intro\n  - child ^child\n\noutside ^child\n";
+	const f = createFixture({ initialFiles: { [path]: raw } });
+	const before = (await f.parse("2026-08-22"))[0];
+	await assert.rejects(() => f.service.createBlockReference({ observation: toHandle(before), sourcePath: "Other.md" }), /more than once/u);
+	assert.equal(f.vault.readText(path), raw);
+	const bounded = createFixture({ initialFiles: { [path]: "- 08:00 body\n\n  outside\n- 09:00 neighbor" } });
+	const target = (await bounded.parse("2026-08-22"))[0];
+	await bounded.service.edit({ observation: toHandle(target), content: "edited" });
+	assert.equal(bounded.vault.readText(path), "- 08:00 edited\n\n  outside\n- 09:00 neighbor");
 });
 
 test("完整新建、引用、两次保存和任务操作保留正文、原生引用范围及相邻 Memo", async () => {
@@ -518,7 +616,6 @@ test("不安全插入及数量校验失败不提交 Daily 或后续状态", asyn
 			{ initial: ["---", "title: unfinished"], content: "new", position: "top" },
 			{ initial: ["## Memos", "```md", "unfinished"], content: "new", position: "bottom" },
 			{ initial: ["```md", "unfinished"], content: "new", position: "top" },
-			{ initial: ["## Memos"], content: " ^only-id", position: "bottom" },
 		] as const) {
 			await context.test(JSON.stringify({ activeEditor, eol, scenario }), async () => {
 				const path = "Daily/2026-08-22.md";
@@ -531,10 +628,6 @@ test("不安全插入及数量校验失败不提交 Daily 或后续状态", asyn
 					assert.equal(error.diagnostics.beforeCount, 0);
 					assert.doesNotMatch(formatServiceError(error), /observation|only-id|unfinished/u);
 					assert.match(formatServiceError(error), /Daily was not modified/u);
-					if (scenario.content === " ^only-id") {
-						assert.equal(error.diagnostics.afterCount, 0);
-						assert.equal(error.diagnostics.reason, "Create must add exactly one parsed memo observation.");
-					}
 					return true;
 				});
 				assert.deepEqual(Buffer.from(fixture.vault.readText(path)), Buffer.from(initial));
@@ -546,6 +639,24 @@ test("不安全插入及数量校验失败不提交 Daily 或后续状态", asyn
 			});
 		}
 	}
+});
+
+test("原为 ID token 的正文能够完整新建，插入数量校验仍拒绝损坏序列化结果", async () => {
+	for (const activeEditor of [false, true]) for (const content of ["^only-id", " ^only-id", "text ^custom-id", "^only-id \t"]) {
+		const f = createFixture({ activeEditor });
+		await f.service.create({ content });
+		assert.equal((await f.getOnlyObservation("2026-08-22")).content, content);
+	}
+	const f = createFixture();
+	const writer = (f.service as unknown as { blockService: { serializeObservation: () => { rawBlock: string; existingBlockId: null } } }).blockService;
+	writer.serializeObservation = () => ({ rawBlock: "- 09:00", existingBlockId: null });
+	await assert.rejects(() => f.service.create({ content: "new" }), (error: unknown) => {
+		assert.ok(error instanceof UnsafeDailyInsertError);
+		assert.equal(error.diagnostics.afterCount, 0);
+		return true;
+	});
+	assert.equal(f.writeCalls.process, 0);
+	assert.deepEqual(f.committedPartitions, []);
 });
 
 test("未闭合外层围栏之前仍可安全顶部插入", async () => {

@@ -69,17 +69,17 @@ test("必要分隔空行与历史正文空行存在字节歧义，不能借空�
 	assert.ok(blocks.buildMemoBlock(table, "12:34").startsWith("-   12:34\n"));
 });
 
-test("块 ID 不从原段落移走，不被旧两列规则吞掉或提升为另一个 Memo ID", () => {
+test("块 ID 与尾随空白使用两列，子块 ID 留在正文且不重复附加", () => {
 	assert.equal(blocks.buildMemoBlockWithBlockId("first\nsecond", "12:34", "memo"), "- 12:34 first\n  second ^memo");
 	const quote = blocks.buildMemoBlockWithBlockId("> quote", "12:34", "memo");
-	assert.equal(quote, "-   12:34 ^memo\n\t> quote");
-	const unsafeQuote = read("- 12:34 ^memo\n  > quote")[0];
-	assert.equal(unsafeQuote.existingBlockId, null);
-	assert.equal(unsafeQuote.content, "^memo\n> quote");
+	assert.equal(quote, "- 12:34 ^memo\n  > quote");
+	const parsedQuote = read(quote)[0];
+	assert.equal(parsedQuote.existingBlockId, "memo");
+	assert.equal(parsedQuote.content, "> quote");
 	for (const [body, blockId] of [["intro\n\n- child ^child", null], ["first\nsecond  ", "memo"]] as const) {
 		const raw = blocks.buildMemoBlockWithBlockId(body, "12:34", blockId);
-		assert.ok(raw.startsWith("-   12:34 "));
+		assert.ok(raw.startsWith("- 12:34 "));
 		assert.equal(read(raw)[0].content, body);
-		assert.equal(read(raw)[0].existingBlockId, blockId);
+		assert.equal(read(raw)[0].existingBlockId, blockId ?? "child");
 	}
 });

@@ -536,6 +536,8 @@ export const en: Record<TranslationKey, string> = {
 	"term.systemFolder": "Knomo system data folder",
 	"service.unknownError": "Unknown error",
 	"service.dailyInsertUnsafe": "Cannot save: the current Daily Markdown structure does not provide a safe insertion position. Daily was not modified; your input has been preserved.",
+	"service.memoAnchorPreservationFailed": "Cannot save while preserving the existing block reference. Keep the first paragraph and its reference unchanged, then try again. Daily was not modified.",
+	"service.memoReferenceAmbiguous": "This block reference appears more than once in the Daily note. Make the block identifiers unique before creating a reference. Daily was not modified.",
 	"service.dailyNotesUnavailable": "Daily Notes core plugin is unavailable; Knomo cannot resolve the daily note.",
 	"service.dailyNotesDisabled": "Enable the Daily Notes core plugin in Obsidian settings. Knomo will read the Daily Notes settings automatically; you do not need to configure the daily note path in Knomo.",
 	"service.dailyNotesEnabled": "Daily Notes core plugin is enabled.",

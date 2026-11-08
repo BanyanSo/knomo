@@ -534,6 +534,8 @@ export const zhCN = {
 	"term.systemFolder": "Knomo 系统数据目录",
 	"service.unknownError": "未知错误",
 	"service.dailyInsertUnsafe": "保存失败：当前 Daily Markdown 结构无法确定安全插入位置。Daily 未被修改，输入内容已保留。",
+	"service.memoAnchorPreservationFailed": "保存失败：无法在新正文结构中保留已有块引用。请保留首段及其引用后重试，Daily 未被修改。",
+	"service.memoReferenceAmbiguous": "当前日记中存在重复的块引用 ID。请先在日记中消除重复，再创建引用，Daily 未被修改。",
 	"service.dailyNotesUnavailable": "日记核心插件不可用，无法定位日记。",
 	"service.dailyNotesDisabled": "请先在 Obsidian 设置的核心插件中开启“日记”。开启后 Knomo 会自动读取日记设置，不需要在 Knomo 中配置日记路径。",
 	"service.dailyNotesEnabled": "日记核心插件已启用。",

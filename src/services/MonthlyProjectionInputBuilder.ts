@@ -10,6 +10,7 @@ import {
 	getMonthlyArchivePath,
 	getMonthlyCanonicalPeriod,
 	hasKnomoMonthlyArchiveMarker,
+	MONTHLY_OUTPUT_RULE_VERSION,
 } from "./MonthlyProjection";
 import type { MonthlyProjectionSettings } from "./MonthlyProjection";
 import type { DailyNotesConfig } from "./DailyNoteService";
@@ -137,6 +138,7 @@ export class MonthlyProjectionInputBuilder {
 			if (yieldController?.shouldYield()) await yieldController.yieldNow();
 		}
 		const sourceDigest = await sha256Text(canonicalJson({
+			outputRuleVersion: MONTHLY_OUTPUT_RULE_VERSION,
 			period,
 			daily: { config: dailyConfig, files: parsedFiles },
 			monthly: settings,
@@ -169,7 +171,7 @@ export class MonthlyProjectionInputBuilder {
 		const dailyConfig = await this.ensureDailyInventory();
 		return {
 			dailyScopeKey: buildDailyInventoryScopeKey(dailyConfig),
-			renderFingerprint: JSON.stringify(this.getSettings()),
+			renderFingerprint: JSON.stringify({ outputRuleVersion: MONTHLY_OUTPUT_RULE_VERSION, settings: this.getSettings() }),
 			dailyPeriods: this.dailyInventory.listPeriods(),
 		};
 	}

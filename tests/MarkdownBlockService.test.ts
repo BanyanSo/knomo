@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { parseDailyNoteDateFromPath } from "../src/utils/dailyNotes";
 import { hashMemoContent } from "../src/utils/hash";
+import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import {
 	buildQuoteCreatedMemoContent,
 	formatCreatedAtAlias,
@@ -43,8 +44,11 @@ test("builds task-list-leading memo content as nested memo content", () => {
 	);
 });
 
-test("hash ignores blockId", () => {
-	assert.equal(hashMemoContent("第一行"), hashMemoContent("第一行 ^abc123"));
+test("已解码逻辑正文的 hash 不受隐式主 ID 影响，可见 ID 字符仍参与校验", () => {
+	const read = (content: string) => new DiaryMemoParser().parseRevision({ sourcePath: "Daily.md", logicalDate: "2026-11-08",
+		content, sourceRevision: "revision" }).observations[0];
+	assert.equal(read("- 09:00 第一行").contentHash, read("- 09:00 第一行 ^abc123").contentHash);
+	assert.notEqual(hashMemoContent("第一行"), hashMemoContent("第一行 ^abc123"));
 });
 
 test("daily note creation returns existing file without applying template", async () => {
@@ -105,7 +109,7 @@ test("disabled Daily Notes cannot provide a creation path", async () => {
 test("appends blockId to list-leading memo content", () => {
 	assert.equal(
 		service.buildMemoBlockWithBlockId("- 第一项\n- 第二项", "12:00:00", "abc123"),
-		"-   12:00:00 ^abc123\n\t- 第一项\n\t- 第二项",
+		"- 12:00:00 ^abc123\n  - 第一项\n  - 第二项",
 	);
 });
 

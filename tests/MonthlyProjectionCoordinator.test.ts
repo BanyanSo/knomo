@@ -15,8 +15,78 @@ import { SelfWriteTracker } from "../src/services/SelfWriteTracker";
 import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 import type { LowPriorityWorkRunner } from "../src/services/LowPriorityWorkQueue";
 import { InMemoryVault } from "./helpers/InMemoryVault";
+import { MONTHLY_OUTPUT_RULE_VERSION } from "../src/services/MonthlyProjection";
+import { MemoCatalogService } from "../src/services/MemoCatalogService";
 
 const MONTHLY_PATH = "Memos/2026-08.md";
+
+for (const clearedCatalog of [false, true]) test(`输出规则升级独立调度历史月份，Catalog 清空保留 checkpoint：${clearedCatalog}`, async () => {
+	const store = new InMemoryMemoCatalogStore();
+	const catalog = new MemoCatalogService(store);
+	const initial = {
+		"Daily/2026-06-01.md": "- 09:00 June\n",
+		"Daily/2026-07-01.md": "-   09:00 ^main\n\t> July\n",
+		"Daily/2026-08-01.md": "- 09:00 August\n",
+		"Memos/2026-07.md": "<!-- knomo:monthly-archive -->\n\n-   09:00 ^main\n\t> July\n",
+		"Memos/2026-05.md": "<!-- knomo:monthly-archive -->\nold empty month\n",
+		"Memos/2026-04.md": "# User file\nkeep\n",
+	};
+	const listCatalogPeriods = async () => (await catalog.listDailyAggregates()).map(row => row.logicalDate.slice(0, 7));
+	const f = createFixture(initial, () => true, { checkpointStore: store, listCatalogPeriods });
+	const configuration = await f.inputBuilder.getConfigurationSnapshot();
+	assert.equal(JSON.parse(configuration.renderFingerprint).outputRuleVersion, MONTHLY_OUTPUT_RULE_VERSION);
+	await store.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, {
+		dailyScopeKey: configuration.dailyScopeKey, renderFingerprint: JSON.stringify(f.settings), discoveryPending: false,
+		pending: [], metadata: { "2026-07": { sourceDigest: "old", outputHash: createHash("sha256").update(initial["Memos/2026-07.md"]).digest("hex") } },
+	});
+	if (clearedCatalog) await store.clear([MONTHLY_PROJECTION_CHECKPOINT_META_KEY]);
+	const built: string[] = [];
+	const build = f.inputBuilder.build.bind(f.inputBuilder);
+	f.inputBuilder.build = async (...args) => { built.push(args[0]); return build(...args); };
+	await f.coordinator.initialize();
+	await f.coordinator.run(true);
+	assert.deepEqual(built.sort(), ["2026-05", "2026-06", "2026-07", "2026-08"]);
+	assert.match(f.replica.read("Memos/2026-07.md")!, /- 09:00 \^main\n  > July/u);
+	assert.match(f.replica.read("Memos/2026-06.md")!, /June/u);
+	assert.ok(f.replica.read("Memos/2026-05.md"), "普通重建不删除已有合法 Monthly");
+	assert.equal(f.replica.read("Memos/2026-04.md"), initial["Memos/2026-04.md"]);
+	for (const path of Object.keys(initial).filter(path => path.startsWith("Daily/"))) assert.equal(f.replica.read(path), initial[path as keyof typeof initial]);
+	const restarted = createFixture(f.replica.snapshot(), () => true, { checkpointStore: store, listCatalogPeriods });
+	const rebuilt: string[] = [];
+	const restartBuild = restarted.inputBuilder.build.bind(restarted.inputBuilder);
+	restarted.inputBuilder.build = async (...args) => { rebuilt.push(args[0]); return restartBuild(...args); };
+	let writes = 0;
+	const process = restarted.replica.app.vault.process.bind(restarted.replica.app.vault);
+	restarted.replica.app.vault.process = async (...args) => { writes++; return process(...args); };
+	await restarted.coordinator.initialize();
+	await restarted.coordinator.run(true);
+	assert.deepEqual(rebuilt, ["2026-08"]);
+	assert.equal(writes, 0);
+});
+
+test("输出规则升级遇到历史 Daily 不可读时保留旧 Monthly，显式重试后收敛", async () => {
+	const store = new InMemoryMemoCatalogStore();
+	const old = "<!-- knomo:monthly-archive -->\nold July\n";
+	const f = createFixture({ "Daily/2026-07-01.md": "- 09:00 July\n", "Memos/2026-07.md": old }, () => true,
+		{ checkpointStore: store, listCatalogPeriods: async () => [] });
+	const configuration = await f.inputBuilder.getConfigurationSnapshot();
+	await store.setMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY, { dailyScopeKey: configuration.dailyScopeKey,
+		renderFingerprint: JSON.stringify(f.settings), discoveryPending: false, pending: [], metadata: {} });
+	const read = f.replica.app.vault.readBinary.bind(f.replica.app.vault);
+	let unavailable = true;
+	f.replica.app.vault.readBinary = async file => {
+		if (unavailable && file.path.startsWith("Daily/")) throw new Error("Daily unavailable");
+		return read(file);
+	};
+	await f.coordinator.initialize();
+	await f.coordinator.run(true);
+	assert.equal(f.replica.read("Memos/2026-07.md"), old);
+	assert.equal(f.coordinator.getProjectionState(), "stale");
+	unavailable = false;
+	await f.coordinator.run(true);
+	assert.match(f.replica.read("Memos/2026-07.md")!, /- 09:00 July/u);
+	assert.equal(f.coordinator.getProjectionState(), "ready");
+});
 
 test("历史核验期间的 Catalog settle 共用文件读取，当前月先进入调度", async () => {
 	const fixture = createFixture({

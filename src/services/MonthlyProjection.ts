@@ -14,6 +14,9 @@ import { sha256Bytes, sha256Text } from "../utils/sha256";
 import { CooperativeYieldController, stableSortCooperatively } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
+// 解码、锚点或布局改变输出时独立递增，不能依赖 Catalog 重扫触发历史月份重建。
+export const MONTHLY_OUTPUT_RULE_VERSION = 1;
+
 export const MONTHLY_ARCHIVE_MARKER = "knomo:monthly-archive";
 const MONTHLY_ARCHIVE_COMMENT = `<!-- ${MONTHLY_ARCHIVE_MARKER} -->`;
 
@@ -78,11 +81,7 @@ export async function buildMonthlyProjection(
 		const heading = formatMonthlyDateHeading(input.settings.monthlyDateHeadingFormat, logicalDate, monthlyLocale);
 		const blocks: string[] = [];
 		for (const observation of byDate.get(logicalDate) ?? []) {
-			blocks.push(markdownBlockService.buildMemoBlockWithBlockId(
-				observation.content,
-				observation.time,
-				observation.existingBlockId,
-			));
+			blocks.push(markdownBlockService.serializeObservation(observation).rawBlock);
 			if (yieldController?.shouldYield()) await yieldController.yieldNow();
 		}
 		sections.push([heading, ...blocks].join("\n\n"));
@@ -110,10 +109,12 @@ export async function buildMonthlyProjection(
 				content: observation.content,
 				contentHash: observation.contentHash,
 				existingBlockId: observation.existingBlockId,
+				blockAnchor: observation.blockAnchor ?? null,
 			});
 			if (yieldController?.shouldYield()) await yieldController.yieldNow();
 		}
 		sourceDigest = await sha256Text(canonicalJson({
+			outputRuleVersion: MONTHLY_OUTPUT_RULE_VERSION,
 			period: input.period,
 			targetPath: getMonthlyArchivePath(input.settings, input.period),
 			fileFormat: input.settings.monthlyMemoFileFormat,

@@ -4,6 +4,7 @@ import { parseMarkdownReferences } from "./markdownReferences";
 import { parseMarkdownImages } from "./markdownImages";
 import type { MemoLinkSyntax } from "../types/memo";
 import type { MemoRelationTarget } from "../types/memoRelations";
+import type { MemoBlockAnchor } from "../types/catalog";
 
 // 仅供关联查询使用；既有引用显示、筛选与统计继续使用原提取规则。
 export function relationBody(content: string, excludeQuotes = true): string {
@@ -29,7 +30,10 @@ export function relationBody(content: string, excludeQuotes = true): string {
 		result += content.slice(start, range.from) + (range.masked ?? content.slice(range.from, range.to).replace(/[^\r\n]/gu, " "));
 		start = range.to;
 	}
-	return result + content.slice(start);
+	const visible = result + content.slice(start);
+	// 未闭合的宿主注释也隐藏余下文本；已闭合注释和代码在上面已遮罩。
+	const unclosed = visible.indexOf("%%");
+	return unclosed < 0 ? visible : visible.slice(0, unclosed) + visible.slice(unclosed).replace(/[^\r\n]/gu, " ");
 }
 
 export function parseMemoRelationTarget(target: string, syntax: MemoLinkSyntax): MemoRelationTarget | null {
@@ -67,6 +71,30 @@ export function collectRelationBlockAnchors(content: string): Record<string, num
 }
 
 export function memoLevelRelationBlockId(rawBlock: string): string | null {
+	return findMemoBlockAnchor(rawBlock)?.blockId ?? null;
+}
+
+export function findLeadingParagraphAnchor(content: string): MemoBlockAnchor | null {
+	if (!content.includes("^")) return null;
+	const first = parseSearchMarkdown(content).tree.topNode.firstChild;
+	return first?.name === "Paragraph" ? paragraphAnchor(content, first.from, first.to, relationBody(content)) : null;
+}
+
+function paragraphAnchor(content: string, from: number, to: number, body: string): MemoBlockAnchor | null {
+	const paragraph = content.slice(from, to);
+	// 通用语法树不识别宿主公式块和脚注定义，不能将其中的文字锚点提升。
+	if (/(?:^|\n)[\t ]*(?:\$\$|\[\^[^\]]+\]:)/u.test(paragraph)) return null;
+	const match = /(?:^|[\t ])\^([A-Za-z0-9-]+)[\t ]*$/u.exec(paragraph);
+	if (!match) return null;
+	const index = from + match.index + match[0].indexOf("^");
+	const end = index + match[1].length + 1;
+	const lineEnd = content.indexOf("\n", end);
+	const trailingWhitespace = content.slice(end, lineEnd === -1 ? content.length : lineEnd);
+	if (!/^[\t ]*$/u.test(trailingWhitespace) || body.slice(index, end) !== "^" + match[1]) return null;
+	return { blockId: match[1], kind: "paragraph", from: index, to: end, trailingWhitespace };
+}
+
+export function findMemoBlockAnchor(rawBlock: string): MemoBlockAnchor | null {
 	if (!rawBlock.includes("^")) return null;
 	const body = relationBody(rawBlock);
 	const tree = parseSearchMarkdown(rawBlock).tree;
@@ -74,20 +102,15 @@ export function memoLevelRelationBlockId(rawBlock: string): string | null {
 	const first = item?.firstChild?.nextSibling;
 	if (item?.name !== "ListItem" || first?.name !== "Paragraph") return null;
 	const hostBlockPattern = /(?:^|\n)[\t ]*(?:\$\$|\[\^[^\]]+\]:)/u;
-	const atParagraphEnd = (from: number, to: number): string | null => {
-		const paragraph = rawBlock.slice(from, to);
-		// 通用语法树不识别宿主公式块和脚注定义，不能将其中的文字锚点提升。
-		if (hostBlockPattern.test(paragraph)) return null;
-		const match = /(?:^|[\t ])\^([A-Za-z0-9-]+)[\t ]*$/u.exec(paragraph);
-		if (!match) return null;
-		const index = from + match.index + match[0].indexOf("^");
-		return body.slice(index, index + match[1].length + 1) === "^" + match[1] ? match[1] : null;
-	};
 	// 首段续行末尾的 ID 优先，不能被解析器提取到的末个子块 ID 遮蔽。
 	// 宿主公式和脚注会结束普通段落，保留这些结构之前正常写入的 Memo 级锚点。
 	const hostBlock = hostBlockPattern.exec(rawBlock.slice(first.from, first.to));
-	const firstId = atParagraphEnd(first.from, hostBlock ? first.from + hostBlock.index : first.to);
-	if (firstId) return firstId;
+	const firstId = paragraphAnchor(rawBlock, first.from, hostBlock ? first.from + hostBlock.index : first.to, body);
+	if (firstId) {
+		const header = !rawBlock.slice(0, firstId.from).includes("\n")
+			&& /^-(?: | {3})\d{2}:\d{2}(?::\d{2})? \^[A-Za-z0-9-]+[\t ]*(?:\n|$)/u.test(rawBlock);
+		return { ...firstId, kind: header ? "header" : "paragraph" };
+	}
 	const tail = rawBlock.trimEnd();
 	const match = /(?:^|[\t ])\^([A-Za-z0-9-]+)$/u.exec(tail);
 	if (!match) return null;
@@ -97,7 +120,8 @@ export function memoLevelRelationBlockId(rawBlock: string): string | null {
 		|| last.from < item.from || last.to > item.to || rawBlock.slice(last.to).trim() !== "") return null;
 	// 兼容旧版末行写法：末段或末个列表项的引用归到所属 Memo，原生链接目标不变。
 	// 首段锚点仍优先；非末行子块以及代码、引用块、表格中的文字不提升。
-	return atParagraphEnd(last.from, last.to);
+	const trailing = paragraphAnchor(rawBlock, last.from, last.to, body);
+	return trailing === null ? null : { ...trailing, kind: "body" };
 }
 
 export function extractMemoRelationSummary(content: string): { text: string; imageOnly: boolean } {

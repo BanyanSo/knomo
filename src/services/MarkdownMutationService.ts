@@ -90,10 +90,8 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		const createdAt = input.createdAt ?? this.now();
 		const logicalDate = input.targetLogicalDate ?? formatDatePart(createdAt);
 		const file = await this.options.getDailyFileForDate(logicalDate);
-		const rawBlock = this.blockService.buildMemoBlock(
-			content,
-			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
-		);
+		const { rawBlock } = this.blockService.serializeObservation({ content,
+			time: formatTimePart(createdAt, this.options.getMemoTimeFormat()), existingBlockId: null, blockAnchor: null });
 		return this.appendRawBlock(file, logicalDate, rawBlock, input.onDailyCommitted, input.validateImageSource);
 	}
 
@@ -105,6 +103,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		return this.withStaleRefresh([file.path], async () => {
 			let beforeObservation: MemoObservation | null = null;
 			let afterRawBlock = "";
+			let expectedBlockId: string | null = null;
 			const prepared = await this.dailyGateway.prepare({
 				file,
 				logicalDate,
@@ -113,15 +112,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				update: (currentContent, parsed) => {
 					input.validateImageSource?.(file.path);
 					beforeObservation = findObservation(parsed, input.observation, file.path);
-					afterRawBlock = this.blockService.buildMemoBlockWithBlockId(
-						content,
-						beforeObservation.time,
-						beforeObservation.existingBlockId,
-					);
+					const serialized = this.blockService.serializeObservation(beforeObservation, content);
+					afterRawBlock = serialized.rawBlock;
+					expectedBlockId = serialized.existingBlockId;
 					return replaceObservation(currentContent, beforeObservation, afterRawBlock, false);
 				},
 			});
-			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
+			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock, expectedBlockId);
 			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted, undefined, requireObservation(beforeObservation), changed);
 			return committedResult(changed, catalogUpdatePending);
 		});
@@ -152,7 +149,8 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					return replaceObservation(currentContent, beforeObservation, afterRawBlock, false);
 				},
 			});
-			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
+			const before = requireObservation(beforeObservation);
+			const changed = findReplacementObservation(prepared, before, afterRawBlock, before.existingBlockId);
 			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed);
 			return committedResult(changed, catalogUpdatePending);
 		});
@@ -174,12 +172,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
 					if (beforeObservation.existingBlockId !== null) {
 						blockId = beforeObservation.existingBlockId;
+						if (parsed.blockAnchors?.[blockId] !== 1) throw new KnomoError("memo_reference_ambiguous");
 						afterRawBlock = getRawBlock(content, beforeObservation);
 						return content;
 					}
 					if (blockId.length === 0) blockId = this.createUniqueBlockId(content);
 					if (hasBlockId(content, blockId)) throw new MarkdownMutationStaleError(file.path);
-					afterRawBlock = this.blockService.buildMemoBlockWithBlockId(beforeObservation.content, beforeObservation.time, blockId);
+					afterRawBlock = this.blockService.serializeObservation(beforeObservation, beforeObservation.content, blockId).rawBlock;
 					return replaceObservation(content, beforeObservation, afterRawBlock, false);
 				},
 			});
@@ -368,7 +367,7 @@ function findReplacementObservation(
 	prepared: PreparedDailyWrite,
 	before: MemoObservation,
 	afterRawBlock: string,
-	existingBlockId: string | null = before.existingBlockId,
+	existingBlockId: string | null,
 ): MemoObservation {
 	const matches = prepared.after.observations.filter((item) => item.startLine === before.startLine
 		&& item.existingBlockId === existingBlockId

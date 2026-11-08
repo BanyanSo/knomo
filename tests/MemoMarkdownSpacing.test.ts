@@ -45,8 +45,8 @@ test("可直接开启子块的语法紧接时间行，不机械添加空行", ()
 	for (const content of ["> quote\n> continued", "# Heading", "```js\nx\n```", "- first\n- second", "- [ ] task", "1. first\n2. second", "***"]) {
 		for (const blockId of [null, "anchor"]) {
 			const raw = blocks.buildMemoBlockWithBlockId(content, "12:34", blockId);
-			const prefix = blockId === null ? "- 12:34\n" : "-   12:34 ^anchor\n";
-			assert.equal(raw, prefix + content.split("\n").map(line => `${blockId === null ? "  " : "\t"}${line}`).join("\n"));
+			const prefix = blockId === null ? "- 12:34\n" : "- 12:34 ^anchor\n";
+			assert.equal(raw, prefix + content.split("\n").map(line => `  ${line}`).join("\n"));
 			assert.equal(read(raw).content, content);
 			assert.equal(read(raw).existingBlockId, blockId);
 		}
@@ -54,7 +54,7 @@ test("可直接开启子块的语法紧接时间行，不机械添加空行", ()
 });
 
 test("后续块和 Tab 不迫使安全的首段另起一行，有引用的普通多行也保持紧凑", () => {
-	for (const [content, prefix] of [["intro\n\n> quote", "- "], ["intro\n\n- first\n  - nested", "- "], ["intro\n\n```md\nliteral ^code", "-   "], ["first\n\tcontinued", "- "]]) {
+	for (const [content, prefix] of [["intro\n\n> quote", "- "], ["intro\n\n- first\n  - nested", "- "], ["intro\n\n```md\nliteral ^code", "- "], ["first\n\tcontinued", "- "]]) {
 		const raw = blocks.buildMemoBlock(content, "12:34");
 		assert.ok(raw.startsWith(prefix + "12:34 " + content.split("\n")[0] + "\n"), raw);
 		assert.equal(read(raw).content, content);
@@ -73,7 +73,7 @@ test("有引用的硬换行保留在正文中，ID 放在首段结束处且不�
 test("段落结束处的尾随空白仍完整保留，后续围栏中的 caret 不被识别为 Memo ID", () => {
 	const content = "first\nsecond \t\n\n```md\nliteral ^code";
 	const raw = blocks.buildMemoBlockWithBlockId(content, "12:34", "anchor");
-	assert.ok(raw.startsWith("-   12:34 first\n\tsecond \t ^anchor\n"), raw);
+	assert.ok(raw.startsWith("- 12:34 first\n  second \t ^anchor\n"), raw);
 	assert.equal(read(raw).content, content);
 	assert.equal(read(raw).existingBlockId, "anchor");
 });

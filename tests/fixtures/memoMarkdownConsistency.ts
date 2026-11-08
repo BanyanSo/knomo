@@ -7,16 +7,16 @@ export interface MemoMarkdownConsistencyFixture {
 	wide?: boolean;
 	anchorLine?: number;
 	anchoredWide?: boolean;
-	twoColumn?: "always" | "unanchored" | "never";
+	twoColumn?: "always" | "never";
 }
 
 export const memoMarkdownConsistencyFixtures: readonly MemoMarkdownConsistencyFixture[] = [
 	{ name: "prose", content: "first  \nsecond\\\nthird<br>fourth", layout: "inline", anchorLine: 2 },
 	{ name: "ordinary-multiline", content: "first\nsecond", layout: "inline", anchorLine: 1 },
 	{ name: "tabbed-prose", content: "first\n\tcontinued", layout: "inline", wide: true, anchorLine: 1 },
-	{ name: "single-trailing-spaces", content: "last  ", layout: "inline", anchoredWide: true, twoColumn: "unanchored" },
-	{ name: "nonbreaking-space", content: "last\u00a0", layout: "inline", anchoredWide: true, twoColumn: "unanchored" },
-	{ name: "paragraph-trailing-spaces", content: "first  \nsecond \t\n\n", layout: "inline", wide: true, anchorLine: 1, twoColumn: "unanchored" },
+	{ name: "single-trailing-spaces", content: "last  ", layout: "inline", anchoredWide: true },
+	{ name: "nonbreaking-space", content: "last\u00a0", layout: "inline", anchoredWide: true },
+	{ name: "paragraph-trailing-spaces", content: "first  \nsecond \t\n\n", layout: "inline", wide: true, anchorLine: 1 },
 	{ name: "literal-tab", content: "first\tsecond", layout: "inline", wide: true },
 	{ name: "quote", content: "> first\n> second", layout: "block" },
 	{ name: "callout", content: "> [!note]- Title\n> body\n>\n> second", layout: "block" },
@@ -38,15 +38,15 @@ export const memoMarkdownConsistencyFixtures: readonly MemoMarkdownConsistencyFi
 	{ name: "table", content: "| A | B |\n| --- | --- |\n| C | D |", layout: "separated" },
 	{ name: "indented-code", content: "    code\n\tsecond\n\n    third", layout: "separated" },
 	{ name: "three-space-heading", content: "   # Heading", layout: "block" },
-	{ name: "leading-trailing-blanks", content: "\n\nfirst\n\n\nlast  \n\n", layout: "separated", twoColumn: "unanchored" },
-	{ name: "space-only-leading-line", content: "  \nfirst\n\t\nlast", layout: "separated", twoColumn: "unanchored" },
-	{ name: "leading-blank-table", content: "\n| A | B |\n| --- | --- |\n| C | D |", layout: "separated", twoColumn: "unanchored" },
-	{ name: "leading-blank-task", content: "\n- [ ] task", layout: "separated", twoColumn: "unanchored" },
+	{ name: "leading-trailing-blanks", content: "\n\nfirst\n\n\nlast  \n\n", layout: "separated", twoColumn: "always" },
+	{ name: "space-only-leading-line", content: "  \nfirst\n\t\nlast", layout: "separated", twoColumn: "always" },
+	{ name: "leading-blank-table", content: "\n| A | B |\n| --- | --- |\n| C | D |", layout: "separated", twoColumn: "always" },
+	{ name: "leading-blank-task", content: "\n- [ ] task", layout: "separated", twoColumn: "always" },
 	{ name: "nested-blocks", content: "> - first\n>\n>   ```js\n>   x\n>   ```", layout: "block" },
-	{ name: "prose-then-code", content: "intro\n\n```md\nliteral ^code", layout: "inline", wide: true, twoColumn: "never" },
+	{ name: "prose-then-code", content: "intro\n\n```md\nliteral ^code", layout: "inline", wide: true },
 	{ name: "prose-then-table", content: "intro\n\n| A | B |\n| --- | --- |\n| C | D |", layout: "inline", wide: true },
 	{ name: "prose-then-list", content: "intro\n\n- first\n  - nested\n- second", layout: "inline", wide: true },
-	{ name: "multiline-prose-then-code", content: "first\nsecond\n\n```md\nliteral ^code", layout: "inline", wide: true, anchorLine: 1, twoColumn: "never" },
+	{ name: "multiline-prose-then-code", content: "first\nsecond\n\n```md\nliteral ^code", layout: "inline", wide: true, anchorLine: 1 },
 	{ name: "incomplete-heading", content: "#nospace\nplain", layout: "inline", anchorLine: 1 },
 	{ name: "math", content: "$$\nx + y\n$$", layout: "block" },
 	{ name: "comment", content: "%%\ncomment\n%%\nbody", layout: "block" },
@@ -55,8 +55,8 @@ export const memoMarkdownConsistencyFixtures: readonly MemoMarkdownConsistencyFi
 ];
 
 export function expectedDailyMemo(fixture: MemoMarkdownConsistencyFixture, time: string, blockId: string | null = null): string {
-	const mode = fixture.twoColumn ?? (fixture.layout === "inline" ? "always" : fixture.layout === "block" ? "unanchored" : "never");
-	if (mode === "never" || (mode === "unanchored" && blockId !== null)) return expectedLegacyDailyMemo(fixture, time, blockId);
+	const mode = fixture.twoColumn ?? (fixture.layout === "separated" ? "never" : "always");
+	if (mode === "never") return expectedLegacyDailyMemo(fixture, time, blockId);
 	const lines = fixture.content.split("\n");
 	const id = blockId === null ? "" : ` ^${blockId}`;
 	if (fixture.layout === "inline" && blockId !== null) lines[fixture.anchorLine ?? 0] += id;

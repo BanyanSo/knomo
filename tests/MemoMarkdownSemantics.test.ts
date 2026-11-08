@@ -15,6 +15,28 @@ function read(raw: string) {
 		content: raw, sourceRevision: "revision" }).observations;
 }
 
+test("旧式空时间行的首段 ID 保留逻辑前导空行及原生段落范围", () => {
+	for (const time of ["09:00", "09:00:12"]) {
+		const original = `- ${time} \n  text ^legacy-leading-space`;
+		let raw = original;
+		for (let save = 0; save < 2; save++) {
+			const memo = read(raw)[0];
+			assert.equal(memo.content, "\ntext");
+			assert.equal(memo.blockAnchor?.kind, "paragraph");
+			assert.equal(memo.endLine, 1);
+			raw = writer.serializeObservation(memo).rawBlock;
+			assert.equal(raw, original);
+			assert.equal(markdown.render(raw), markdown.render(original));
+		}
+		const edited = writer.serializeObservation(read(raw)[0], "\nchanged\ncontinued\n\n- [ ] task").rawBlock;
+		assert.equal(read(edited)[0].content, "\nchanged\ncontinued\n\n- [ ] task");
+		assert.equal(read(edited)[0].blockAnchor?.kind, "paragraph");
+		assert.match(edited, /continued \^legacy-leading-space/u);
+		assert.equal(read(edited)[0].time, time);
+		assert.throws(() => writer.serializeObservation(read(raw)[0], "\n\ntext"));
+	}
+});
+
 test("25 类目标 raw 与输入逐项对应，锚点源范围及任务偏移可直接核对", () => {
 	for (const target of memoPrefixTargets) {
 		const source = memoPrefixHistory[0].samples.find(sample => sample.category === target.category)!;

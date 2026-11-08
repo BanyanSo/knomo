@@ -377,6 +377,7 @@ test("宿主手机与浮动菜单的首次轻触通过真实导航往返全部�
 		["all", "random", "random"], ["all", "review", "review"],
 		["random", "all", "all"], ["review", "all", "all"],
 		["review", "random", "random"], ["random", "review", "review"],
+		["all", "things", "things"], ["things", "all", "all"],
 	];
 	for (const presentation of ["phone", "floating", "trailing-backdrop"] as const) {
 		for (const [from, mode, to] of routes) await t.test(`${presentation}: ${from} → ${to}`, async () => {
@@ -397,6 +398,7 @@ test("宿主手机与浮动菜单的首次轻触通过真实导航往返全部�
 					cancelCatalogDesktopCount: noop, cancelCatalogDesktopQuery: noop,
 					shouldDeferCardFlowForAllMemos: () => false,
 					renderUiState: noop, renderFilteredListState: noop,
+					renderScopeState: noop, syncSearchInputs: noop,
 					reloadCurrentCatalogQuery: async () => true,
 					mobileSearchController: { isOpen: false, resetState: noop, cancelPendingRequest: noop },
 					randomReunionController: { cancelPending: noop, getSnapshot: () => ({ status: "idle" }),
@@ -416,6 +418,19 @@ test("宿主手机与浮动菜单的首次轻触通过真实导航往返全部�
 				await h.f.click(item);
 				assert.deepEqual(h.scopes, [mode], "迟到的兼容 click 不再次导航");
 				assert.equal(randomLoads, to === "random" ? 1 : 0);
+				if (mode === "all" || mode === "things") {
+					for (const next of ["all", "things", "all", "things"] as const) {
+						h.view.toggleScopeMenu();
+						const current = h.menus.at(-1)!;
+						const target = current.items[TITLE_MODE_OPTIONS.findIndex(option => option.mode === next)].dom;
+						tap(h, target);
+						assert.equal(h.view.viewStateController.activeNav, next);
+						const count: number = h.scopes.length;
+						await h.f.click(item);
+						await h.f.click(target);
+						assert.equal(h.scopes.length, count, "旧菜单及兼容 click 不重复执行");
+					}
+				}
 			} finally { h.close(); }
 		});
 	}

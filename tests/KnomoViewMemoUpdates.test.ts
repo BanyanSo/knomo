@@ -96,6 +96,42 @@ test("任务勾选与正文引用提交同步全部已打开页面，不重新�
 	assert.equal(h.randomLoads(), 2);
 });
 
+test("任务写入区分过期、目标不可用和未知 I/O，列表补刷失败单独反馈", async t => {
+	const { Notice } = await import("obsidian");
+	const { t: translate } = await import("../src/i18n");
+	const notices = (Notice as unknown as { messages: string[] }).messages;
+	for (const failure of ["stale", "missing", "io-before", "io-after", "refresh"] as const) {
+		const h = await fixture({ body: "## Memos\n- 09:00 - [ ] task\n" });
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		const before = h.body();
+		const logs: unknown[][] = [];
+		const warn = t.mock.method(console, "warn", (...args: unknown[]) => { logs.push(args); });
+		Object.assign(h.view, { memoMarkdownRenderer: { syncTaskCheckboxesForMemo: () => {} }, reportViewRefreshFailure: () => {} });
+		Object.defineProperty(h.view, "mobileSearchResultsEl", { value: null });
+		if (failure === "refresh") {
+			h.failCatalog();
+			h.view.refresh = async () => { throw new Error("private body"); };
+		} else if (failure === "stale") {
+			await h.externalReplace(before + "- 10:00 concurrent\n");
+		} else if (failure === "missing") {
+			t.mock.method(app.vault, "getAbstractFileByPath", () => null);
+		} else {
+			const process = app.vault.process.bind(app.vault);
+			t.mock.method(app.vault, "process", async (file: TFile, update: (content: string) => string) => {
+				if (failure === "io-after") await process(file, update);
+				throw new Error("private body I/O");
+			});
+		}
+		notices.length = 0;
+		await h.view.handleCatalogTaskToggle(h.memos[0]!, 0, true);
+		assert.deepEqual(notices, [translate(failure === "stale" ? "task.targetChanged" : failure === "missing" ? "task.sourceUnavailable"
+			: failure.startsWith("io-") ? "task.updateFailed" : "task.refreshIncomplete")]);
+		assert.equal(h.body().includes("[x]"), failure === "refresh" || failure === "io-after");
+		assert.ok(!JSON.stringify(logs).includes("private body"));
+		warn.mock.restore();
+	}
+});
+
 test("删除、同文恢复和创建保持重逢本组，漫游同步独立 occurrence 与统计", async () => {
 	const h = await fixture();
 	const deleted = h.memos[2]!;
@@ -665,6 +701,7 @@ test("标签视图保存匹配或不匹配的新卡片均保留旧卡片 DOM、�
 			assert.equal(card.querySelector("img"), image);
 			assert.equal(card.querySelector("input"), checkbox);
 			assert.equal(checkbox.getAttribute("data-knomo-memo-id"), retained.id);
+			assert.equal(checkbox.getAttribute("data-knomo-source-revision"), retained.catalog!.observationHandle.sourceRevision);
 			assert.equal(dom.findMemo(retained.id), retained);
 			assert.equal(dom.root.scrollTop, 600);
 			assert.equal(dom.root.querySelectorAll(".knomo-card").length, content.endsWith("#keep") ? 2 : 1);

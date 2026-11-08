@@ -6,6 +6,29 @@ import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { composerMarkdownFixtures } from "./fixtures/composerMarkdown";
 
+test("任务失败只恢复相同版本的 checkbox，不回滚已更新的展示", async () => {
+	await ensureObsidianStub();
+	const { MemoMarkdownRenderer, prepareRenderedTaskCheckboxes } = await import("../src/ui/MemoMarkdownRenderer");
+	setDomGlobals();
+	const renderer = new MemoMarkdownRenderer({ app: {} as never, createComponent: () => new TestComponent() as never,
+		getDocument: () => ({} as Document), getGeneration: () => 0, concurrency: 1 });
+	const original = makeMemo({ contentSnapshot: "- [ ] task", catalog: {
+		observationHandle: { sourceRevision: "before" },
+	} as MemoViewItem["catalog"] });
+	const container = new TestElement("div");
+	const item = container.createEl("li", { cls: "task-list-item", attr: { "data-task": " " } });
+	const input = item.createEl("input", { attr: { type: "checkbox" } });
+	prepareRenderedTaskCheckboxes(container.asHtml(), original);
+	input.checked = true;
+	renderer.syncTaskCheckboxesForMemo([container.asHtml()], original);
+	assert.equal(input.checked, false);
+	input.setAttr("data-knomo-source-revision", "newer");
+	input.checked = true;
+	renderer.syncTaskCheckboxesForMemo([container.asHtml()], original);
+	assert.equal(input.checked, true);
+	renderer.clear();
+});
+
 test("复用未变卡片时，迟到的 Markdown 将任务绑定到已确认的新句柄", async () => {
 	await ensureObsidianStub();
 	const { MarkdownRenderer } = await import("obsidian");

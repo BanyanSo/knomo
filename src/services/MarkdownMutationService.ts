@@ -55,6 +55,13 @@ export class MarkdownMutationStaleError extends Error {
 	}
 }
 
+export class DailySourceUnavailableError extends Error {
+	constructor(path: string) {
+		super(`Daily file is unavailable: ${path}`);
+		this.name = "DailySourceUnavailableError";
+	}
+}
+
 export class UnsafeDailyInsertError extends KnomoError {
 	constructor(readonly diagnostics: {
 		reason: string;
@@ -297,7 +304,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 
 	private getSourceFile(sourcePath: string): TFile {
 		const file = this.app.vault.getAbstractFileByPath(normalizePath(sourcePath));
-		if (!(file instanceof TFile)) throw new Error(`Daily file is unavailable: ${sourcePath}`);
+		if (!(file instanceof TFile)) throw new DailySourceUnavailableError(sourcePath);
 		return file;
 	}
 

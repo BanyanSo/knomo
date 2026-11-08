@@ -84,7 +84,7 @@ test("启动读取旧迁移 completion 挂起时，生产命令仍可提交 Dail
 	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
 	Object.assign(h.plugin.app.vault, {
 		getAbstractFileByPath: (path: string) => path === file.path ? file : null,
-		cachedRead: async () => content,
+		read: async () => content,
 		process: async (_file: unknown, update: (value: string) => string) => { content = update(content); return content; },
 	});
 	Object.assign(h.plugin, { updateCommittedCatalogPartition: async () => {} });
@@ -128,7 +128,7 @@ for (const stage of ["read", "process", "committed"] as const) {
 		Object.assign(app.workspace, { getActiveViewOfType: () => null });
 		Object.assign(app.vault, {
 			getAbstractFileByPath: () => file,
-			cachedRead: async () => {
+			read: async () => {
 				if (stage === "read") { entered.resolve(); await release.promise; }
 				return content;
 			},

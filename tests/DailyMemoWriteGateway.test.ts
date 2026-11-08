@@ -7,6 +7,28 @@ import type { App, Editor, EditorPosition, EditorTransaction, MarkdownView } fro
 import { DailyMemoWriteGateway, StaleDailyWriteError } from "../src/services/DailyMemoWriteGateway";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 
+test("写前读取磁盘而非旧缓存，旧句柄和读取失败仍拒写", async () => {
+	const file = makeFile("Daily/2026-08-09.md");
+	const cached = "- 09:00 cached";
+	let disk = "- 09:00 current";
+	let failRead = false, writes = 0;
+	const app = { workspace: { getActiveViewOfType: () => null }, vault: {
+		getAbstractFileByPath: () => file,
+		cachedRead: async () => cached,
+		read: async () => { if (failRead) throw new Error("read failed"); return disk; },
+		process: async (_file: TFile, update: (content: string) => string) => { writes++; disk = update(disk); return disk; },
+	} } as unknown as App;
+	const gateway = makeGateway(app);
+	const revision = (text: string) => createHash("sha256").update(text).digest("hex");
+	const input = { file, logicalDate: "2026-08-09", expectedRevision: revision(disk), update: (text: string) => text.replace("current", "changed") };
+	await gateway.commit(await gateway.prepare(input));
+	assert.equal(disk, "- 09:00 changed");
+	await assert.rejects(gateway.prepare(input), StaleDailyWriteError);
+	failRead = true;
+	await assert.rejects(gateway.prepare({ ...input, expectedRevision: revision(cached) }), /read failed/u);
+	assert.equal(writes, 1);
+});
+
 test("active Daily writes through one editor transaction", async () => {
 	const file = makeFile("Daily/2026-08-09.md");
 	const editor = new MemoryEditor("## Memos\n- 09:00 before\n");
@@ -49,7 +71,7 @@ test("background Daily writes through Vault.process with a compare-and-swap guar
 		workspace: { getActiveViewOfType: () => null },
 		vault: {
 			getAbstractFileByPath: () => file,
-			cachedRead: async () => content,
+			read: async () => content,
 			process: async (_file: TFile, update: (current: string) => string) => {
 				processCalls += 1;
 				content = update(content);
@@ -111,7 +133,7 @@ test("Daily 写入网关为大文件解析传入协作式 runtime", async () => 
 		workspace: { getActiveViewOfType: () => null },
 		vault: {
 			getAbstractFileByPath: () => file,
-			cachedRead: async () => content,
+			read: async () => content,
 			process: async () => content,
 		},
 	} as unknown as App;
@@ -155,7 +177,7 @@ test("目标在准备、提交前或 process 回调前变化时拒绝写入，�
 						workspace: { getActiveViewOfType: () => mode === "active_editor" ? { file, editor } : null },
 						vault: {
 							getAbstractFileByPath: (lookup: string) => lookup === currentFile.path ? currentFile : null,
-							cachedRead: async () => disk,
+							read: async () => disk,
 							process: async (_file: TFile, update: (content: string) => string) => {
 								if (stage === "process") changeTarget();
 								disk = update(disk);

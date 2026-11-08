@@ -5,7 +5,7 @@ import { canFocusSurface, isKeyboardActivation, releaseNavigationFocus } from ".
 import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalComposerDraftStore";
 import { sha256Bytes } from "../utils/sha256";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
-import { MarkdownMutationStaleError } from "../services/MarkdownMutationService";
+import { DailySourceUnavailableError, MarkdownMutationStaleError } from "../services/MarkdownMutationService";
 import { observationHandleKey, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "../services/DailyMemoPresentationChange";
 import { ConfirmedMemoPresentation } from "./ConfirmedMemoPresentation";
 import { createCatalogCapabilities } from "../services/MemoCapabilityModel";
@@ -8337,16 +8337,18 @@ export class KnomoView extends ItemView {
 		let result: MemoSaveResult;
 		try {
 			result = await this.memoCommandService.toggleTask(await this.resolveCatalogMemo(memo), taskIndex, checked);
-		} catch {
+		} catch (error) {
 			if (this.trashViewClosed) return;
 			this.memoMarkdownRenderer.syncTaskCheckboxesForMemo([this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el ?? null], memo);
-			new Notice(t("task.updateFailed"));
+			logContinuationFailure("task", "write", error);
+			new Notice(t(error instanceof StaleDailyWriteError || error instanceof MarkdownMutationStaleError
+				? "task.targetChanged" : error instanceof DailySourceUnavailableError ? "task.sourceUnavailable" : "task.updateFailed"));
 			return;
 		}
-		await this.refreshPendingSave(result, memo);
+		await this.refreshPendingSave(result, memo, () => !this.trashViewClosed, "task");
 	}
 
-	private async refreshPendingSave(result: MemoSaveResult, previousMemo: MemoRecord | null = null, isCurrent = () => !this.trashViewClosed): Promise<void> {
+	private async refreshPendingSave(result: MemoSaveResult, previousMemo: MemoRecord | null = null, isCurrent = () => !this.trashViewClosed, operation = "save"): Promise<void> {
 		if (!result.localRefreshPending || this.trashViewClosed) return;
 		const generation = this.confirmedPresentationGeneration ?? 0;
 		const context = this.getPageFeedbackContext();
@@ -8369,7 +8371,13 @@ export class KnomoView extends ItemView {
 			}
 			stage = "refresh";
 			await this.refresh();
-		} catch (error) { if (valid()) this.reportViewRefreshFailure(error, stage); }
+		} catch (error) {
+			if (valid()) {
+				this.reportViewRefreshFailure(error, stage);
+				// 写入链返回不代表活动编辑器已落盘，补刷提示不擅自宣称任务已保存。
+				if (operation === "task") new Notice(t("task.refreshIncomplete"));
+			}
+		}
 	}
 
 	private findMemoForTaskCheckbox(input: HTMLInputElement): MemoRecord | null {

@@ -50,7 +50,12 @@ export function rebindMemoCard(card: HTMLElement, memo: MemoRecord): void {
 	rebindMemoImageOccurrence(card, memo);
 	for (const attribute of ["data-memo-id", "data-knomo-memo-id"]) {
 		for (const element of Array.from(card.querySelectorAll(`[${attribute}]`))) {
-			if (element.getAttribute(attribute) === previousId) element.setAttribute(attribute, memo.id);
+			if (element.getAttribute(attribute) === previousId) {
+				element.setAttribute(attribute, memo.id);
+				if (attribute === "data-knomo-memo-id" && memo.catalog) {
+					element.setAttribute("data-knomo-source-revision", memo.catalog.observationHandle.sourceRevision);
+				}
+			}
 		}
 	}
 }

@@ -19,6 +19,18 @@ import { memoMarkdownConsistencyFixtures } from "./fixtures/memoMarkdownConsiste
 import { memoPrefixHistory } from "./fixtures/memoPrefix/history";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 
+test("Monthly 可投影带逻辑首空行的旧式 paragraph 锚点", async () => {
+	const parser = new DiaryMemoParser();
+	const raw = "- 09:00 \n  text ^legacy-leading-space";
+	const observations = parser.parseRevision({ sourcePath: "Daily/2025-06-08.md", logicalDate: "2025-06-08", content: raw, sourceRevision: "daily" }).observations;
+	const projection = await buildMonthlyProjection({ period: "2025-06", settings: makeSettings(), observations });
+	assert.ok(projection.content.includes(raw));
+	const after = parser.parseRevision({ sourcePath: projection.path, logicalDate: "2025-06-08", content: projection.content, sourceRevision: projection.outputHash }).observations[0];
+	assert.equal(after.content, "\ntext");
+	assert.equal(after.blockAnchor?.kind, "paragraph");
+	assert.equal(after.existingBlockId, "legacy-leading-space");
+});
+
 test("Monthly 消费当前锚点源信息，不重复附加历史末项或移动主锚点", async () => {
 	const parser = new DiaryMemoParser();
 	for (const version of memoPrefixHistory) for (const sample of version.samples) for (const raw of [sample.raw, sample.anchoredRaw]) {

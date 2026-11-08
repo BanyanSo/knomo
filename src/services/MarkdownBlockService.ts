@@ -12,7 +12,7 @@ export interface MemoBlockSerialization {
 	existingBlockId: string | null;
 }
 
-type ImplicitAnchor = Pick<MemoBlockAnchor, "blockId" | "trailingWhitespace"> & { kind: "header" | "paragraph" | "auto" };
+type ImplicitAnchor = Pick<MemoBlockAnchor, "blockId" | "trailingWhitespace"> & { kind: "header" | "paragraph" | "auto"; leadingBlank?: boolean };
 
 export class MemoAnchorPreservationError extends KnomoError {
 	constructor() {
@@ -37,14 +37,15 @@ export class MarkdownBlockService {
 		if (appendBlockId !== null && observation.existingBlockId !== null
 			|| source === undefined && observation.existingBlockId !== null) throw new MemoAnchorPreservationError();
 		const implicit: ImplicitAnchor | null = appendBlockId !== null ? { blockId: appendBlockId, kind: "auto", trailingWhitespace: "" }
-			: source?.kind === "header" || source?.kind === "paragraph" ? { ...source, kind: source.kind } : null;
+			: source?.kind === "header" || source?.kind === "paragraph" ? { ...source, kind: source.kind,
+				leadingBlank: source.kind === "paragraph" && observation.content.split("\n")[0].trim().length === 0 } : null;
 		// 预期候选由用户输入及原锚点用途确定，不能从已接受的输出反填。
 		const existingBlockId = implicit?.blockId ?? contentAnchor(content, observation.time)?.blockId ?? null;
 		const expectedAnchors = collectRelationBlockAnchors(content);
 		if (implicit !== null) {
 			if (expectedAnchors[implicit.blockId]) throw new MemoAnchorPreservationError();
 			expectedAnchors[implicit.blockId] = 1;
-			if (implicit.kind === "paragraph" && !hasInlineParagraph(content)) throw new MemoAnchorPreservationError();
+			if (implicit.kind === "paragraph" && !hasInlineParagraph(content) && !implicit.leadingBlank) throw new MemoAnchorPreservationError();
 		}
 		const rawBlock = this.build(content, observation.time, implicit);
 		const lines = rawBlock.split("\n");
@@ -66,7 +67,9 @@ export class MarkdownBlockService {
 		const leadingBlank = firstLine.trim().length === 0;
 		const footnote = /^ {0,3}\[\^[^\]]+\]:/u.test(firstLine);
 		const hostBlock = footnote || /^ {0,3}(?:\$\$|%%)/u.test(firstLine);
-		const inlineParagraph = !leadingBlank && !hostBlock && firstBlock?.name === "Paragraph";
+		// 旧时间行末的空格可代表逻辑首空行；首段 ID 仍须留在同一原生段落。
+		// 仅为既有 paragraph 锚点尝试该布局，完整回读继续拒绝分段或改变锚点归属的输入。
+		const inlineParagraph = (!leadingBlank || anchor?.leadingBlank) && !hostBlock && firstBlock?.name === "Paragraph";
 		let inline = inlineParagraph && anchor?.kind !== "header";
 		let wide = !inline || lines.some(line => line.includes("\t"));
 		for (let block = firstBlock; block; block = block.nextSibling) {

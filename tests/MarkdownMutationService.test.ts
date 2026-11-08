@@ -162,6 +162,26 @@ test("历史子块锚点原位保存、修改、引用复用及任务勾选均�
 	}
 });
 
+test("旧首空行锚点连续编辑保留 ID、同文 occurrence、邻居及 stale 拒写", async () => {
+	const path = "Daily/2026-08-22.md";
+	const raw = "- 08:00 \n  text ^legacy-leading-space";
+	const suffix = "\n\n  outside\n- 09:00 neighbor\n- 08:00 \n  text ^other";
+	const f = createFixture({ initialFiles: { [path]: raw + suffix } });
+	const original = (await f.parse("2026-08-22"))[0];
+	for (let save = 0; save < 2; save++) {
+		const before = (await f.parse("2026-08-22"))[0];
+		await f.service.edit({ observation: toHandle(before), content: before.content });
+		assert.equal(f.vault.readText(path), raw + suffix);
+	}
+	await f.service.edit({ observation: toHandle(original), content: "\nchanged\ncontinued" });
+	assert.equal(f.vault.readText(path), "- 08:00 \n  changed\n  continued ^legacy-leading-space" + suffix);
+	const parsed = await f.parse("2026-08-22");
+	assert.equal(parsed.length, 3);
+	assert.equal(parsed[2].content, "\ntext");
+	assert.equal(parsed[0].blockAnchor?.kind, "paragraph");
+	await assert.rejects(f.service.edit({ observation: toHandle(original), content: "stale" }), MarkdownMutationStaleError);
+});
+
 test("显式删除子块或 token 允许候选消失及变更，隐式主锚点保留", async () => {
 	const path = "Daily/2026-08-22.md";
 	for (const [raw, content, expected] of [

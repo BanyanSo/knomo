@@ -71,7 +71,11 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 				for (const selector of selectors) {
 					const target = await page.locator(selector).first().evaluate((button: HTMLElement) => {
 						const rect = button.getBoundingClientRect();
-						return { width:rect.width, height:rect.height, x:rect.left,y:rect.top, hitElement:document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)?.outerHTML.slice(0,180), hit:button.contains(document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)) };
+						const panel = button.closest<HTMLElement>(".knomo-mobile-composer-content")!;
+						return { width:rect.width, height:rect.height, x:rect.left,y:rect.top,
+							panel: panel.getBoundingClientRect().toJSON(), clip: getComputedStyle(panel).clipPath,
+							animations: panel.getAnimations().map(animation => ({ state: animation.playState, time: animation.currentTime, end: animation.effect?.getComputedTiming().endTime })),
+							hitElement:document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)?.outerHTML.slice(0,180), hit:button.contains(document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)) };
 					});
 					assert.ok(target.width >= 44 && target.height >= 44 && target.hit, JSON.stringify({ theme, size, width, height, mode, selector, target }));
 				}

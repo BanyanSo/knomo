@@ -99,6 +99,7 @@ export class MobileSearchController {
 	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
 	private displayedCount: number | null = null;
+	private summaryPresentation: { key: string; text: string } | null = null;
 	private pendingQueryKey: string | null = null;
 	private get query(): string { return this.session.applied.input; }
 	private set query(value: string) { this.session.updateDraft(value); this.session.submit(); }
@@ -469,6 +470,7 @@ export class MobileSearchController {
 		this.displayedContext = null;
 		this.displayedMemos = null;
 		this.displayedCount = null;
+		this.summaryPresentation = null;
 		this.pendingQueryKey = null;
 		this.recordStatsFilter = null;
 		this.visibleCount = this.options.batchSize;
@@ -511,6 +513,7 @@ export class MobileSearchController {
 			this.cancelPendingRequest();
 			this.displayedMemos = null;
 			this.displayedCount = null;
+			this.summaryPresentation = null;
 			this.displayedContext = null;
 			this.session.result = null;
 			this.session.requestStatus = "idle";
@@ -601,10 +604,12 @@ export class MobileSearchController {
 				// 已读切片与本轮部分查询分开；旧 cursor 不能接到新的关系版本。
 				this.invalidateAcceptedResults();
 				this.displayedCount = null;
+				this.summaryPresentation = null;
 				this.session.requestStatus = "ready";
 				this.options.onResultsAccepted?.(page);
 				return;
 			}
+			if (!sameScope) this.summaryPresentation = null;
 			this.displayedContext = context;
 			const items = reset ? [...staged.values()] : [...new Map([...(this.displayedMemos ?? []), ...page.items]
 				.map(memo => [getMemoRenderKey(memo), memo])).values()];
@@ -628,6 +633,7 @@ export class MobileSearchController {
 			}
 			if (filter.hasReferrers) {
 				this.invalidateAcceptedResults(); this.displayedCount = null;
+				this.summaryPresentation = null;
 				const invalidated = error instanceof CatalogDiscoveryInvalidatedError || error instanceof MemoRelationsChangedError;
 				const failureKey = JSON.stringify([key, revision, coverageKey]);
 				const invalidatedKey = JSON.stringify([key, this.options.getCatalogRevision?.() ?? revision,
@@ -643,6 +649,8 @@ export class MobileSearchController {
 				}
 			}
 			logContinuationFailure("mobile-search", "query", error, run);
+			this.displayedCount = null;
+			this.summaryPresentation = null;
 			this.queryError = t("feedback.loadFailed");
 			this.session.requestStatus = "failed";
 		} finally {
@@ -711,7 +719,10 @@ export class MobileSearchController {
 	}
 
 	private async refreshCount(filter: CatalogQueryFilter, queryContextKey: string): Promise<void> {
-		if (!this.options.countRemoteResults || !this.session.result) return;
+		if (!this.options.countRemoteResults || !this.session.result) {
+			this.summaryPresentation = null;
+			return;
+		}
 		this.cancelCount();
 		const controller = new AbortController();
 		this.countController = controller;
@@ -743,10 +754,12 @@ export class MobileSearchController {
 			if (!controller.signal.aborted) console.warn("Knomo mobile search count failed", error);
 		} finally {
 			if (this.countController === controller) {
+				const current = isCurrent();
 				this.countController = null;
-				if (this.displayedCount === null) {
-					if (filter.hasReferrers) this.renderResults("content-change", true, true);
-					else this.resultsEl?.find(".knomo-search-result-count")?.remove();
+				if (current && this.displayedCount === null) {
+					const hadSummary = this.summaryPresentation !== null || this.resultsEl?.find(".knomo-search-result-count") != null;
+					this.summaryPresentation = null;
+					if (filter.hasReferrers || hadSummary) this.renderResults("content-change", true, true);
 				}
 			}
 		}
@@ -754,11 +767,13 @@ export class MobileSearchController {
 
 	updateCatalogProgress(coverage: CatalogCoverage): void {
 		if (!this.open || this.session.result === null) return;
+		const hadSummary = this.summaryPresentation !== null;
+		if (coverage.configurationComplete === false) this.summaryPresentation = null;
 		if (catalogCoverageKey(coverage) !== this.session.result.coverageKey) {
 			this.cancelCount();
 			this.invalidateAcceptedResults();
 		}
-		if (!isQueryCovered(coverage, this.getDisplayedFilter()) && this.displayedCount !== null) {
+		if (!isQueryCovered(coverage, this.getDisplayedFilter()) && (this.displayedCount !== null || hadSummary)) {
 			this.displayedCount = null;
 			this.renderResults("content-change", true, true);
 		}
@@ -791,7 +806,7 @@ export class MobileSearchController {
 		if (!areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
 			? this.displayedCount + current.length - previous.length : null;
 		if (this.session.result) this.session.requestStatus = "ready";
-		if (!this.reconcileCommittedCards(changes)) this.renderResults();
+		if (!this.reconcileCommittedCards(changes)) this.renderResults("content-change", true);
 		// 提交通知使旧查询失效后，继续完成用户已提交的新搜索条件。
 		if (resumeSearch) void this.refreshAppliedResults();
 	}
@@ -978,7 +993,6 @@ export class MobileSearchController {
 		if (reconcile && visibleMemos.length === 0) {
 			for (const card of departing) release(card);
 			this.renderedCards = [];
-			resultsEl.find(".knomo-search-result-count")?.remove();
 		}
 		this.renderedStatus = status;
 		this.renderedPending = waiting;
@@ -998,6 +1012,7 @@ export class MobileSearchController {
 		if (memos.length === 0 && status) { completeRender(); return; }
 		if (memos.length === 0 && relationQuery && (readStatus?.complete === false || this.acceptedResultsInvalidated)) { completeRender(); return; }
 		if (memos.length === 0) {
+			this.syncResultMetadata(0, 0, false);
 			resultsEl.createDiv({
 				cls: "knomo-mobile-search-empty",
 				text: this.getResultCopy(0)?.emptyTitle,
@@ -1097,19 +1112,22 @@ export class MobileSearchController {
 		const results = this.resultsEl;
 		if (!results) return;
 		const total = this.getDisplayedCount();
-		// 旧计数不参与当前查询，但可随旧切片保留展示，直至当前结果或计数接续完成。
-		const retainSummary = (this.displayedCount !== null && (this.acceptedResultsInvalidated || this.session.requestStatus === "pending"))
-			|| this.countController !== null;
-		if (total === null && !retainSummary) results.find(".knomo-search-result-count")?.remove();
-		if (updateSummary && total !== null && this.session.result !== null) {
-			const summary = this.getResultCopy(total)?.summary;
-			if (summary) {
-				const previous = results.find(".knomo-search-result-count");
-				if (previous) previous.setText(summary);
-				else {
-					const element = renderKnomoListSummary(results, summary);
-					element.addClass("knomo-search-result-count"); results.prepend(element);
-				}
+		const key = this.getDisplayedRequestKey();
+		const blocked = this.queryError !== null || this.options.getResultStatus?.(this.getDisplayedFilter()).blocked === true;
+		if (blocked || (total === 0 && !this.acceptedResultsInvalidated)) this.summaryPresentation = null;
+		else if (updateSummary && total !== null && key !== null) {
+			const text = this.getResultCopy(total)?.summary;
+			this.summaryPresentation = text ? { key, text } : null;
+		}
+		// 快照只接续已接纳范围的摘要，不能参与分页或当前查询计数。
+		const summary = this.summaryPresentation?.key === key ? this.summaryPresentation.text : null;
+		if (!summary) results.find(".knomo-search-result-count")?.remove();
+		else {
+			const previous = results.find(".knomo-search-result-count");
+			if (previous) previous.setText(summary);
+			else {
+				const element = renderKnomoListSummary(results, summary);
+				element.addClass("knomo-search-result-count"); results.prepend(element);
 			}
 		}
 		if (!updateMore) return;

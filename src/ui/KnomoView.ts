@@ -2681,6 +2681,8 @@ export class KnomoView extends ItemView {
 				this.renderUiState(); return false;
 			}
 			const message = formatServiceError(error, t("empty.cardFlowFailed"));
+			this.catalogDesktopTotalCount = null;
+			this.catalogDesktopCountPresentation = null;
 			this.viewStateController.search.requestStatus = "failed";
 			if (!this.hasCommittedCatalogDesktopQuery && !this.confirmedDailyMemos?.pending && this.memos.length === 0) {
 				this.memos = [];
@@ -2867,6 +2869,7 @@ export class KnomoView extends ItemView {
 		this.cancelCatalogDesktopCount();
 		const controller = new AbortController();
 		this.catalogDesktopCountController = controller;
+		const coverageKey = catalogCoverageKey(this.catalogCoverage);
 		let accepted = false;
 		try {
 			const result = await this.countCatalogFeature(options.loadAll, controller.signal);
@@ -2891,12 +2894,15 @@ export class KnomoView extends ItemView {
 		} finally {
 			if (this.catalogDesktopCountController === controller) {
 				this.catalogDesktopCountController = null;
-				if (!accepted && !controller.signal.aborted && !this.trashViewClosed && this.isReferrerQuery()
+				if (!accepted && !controller.signal.aborted && !this.trashViewClosed
 					&& options.sourceGeneration === this.memoSourceGeneration && options.queryRun === this.catalogDesktopQueryRun
+					&& coverageKey === catalogCoverageKey(this.catalogCoverage)
 					&& this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll)) {
 					const previousCardFlowKey = this.getCardFlowStateKey();
+					this.catalogDesktopTotalCount = null;
 					this.catalogDesktopCountPresentation = null;
 					this.renderCardFlowIfChanged(previousCardFlowKey);
+					if (this.isReferrerQuery()) this.removeRelationResultCount();
 				}
 			}
 		}
@@ -2951,9 +2957,8 @@ export class KnomoView extends ItemView {
 			const previousDesktopCount = this.catalogDesktopTotalCount;
 			if (!isQueryCovered(coverage, this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true))) this.catalogDesktopTotalCount = null;
 			this.catalogDesktopCountRun += 1;
-			if (hadDesktopTotalCount && (this.activeNav === "things"
-				|| ((this.activeNav === "all" || this.activeNav === "review")
-					&& this.getCatalogPresentationTotalCount() !== previousDesktopCount))) this.renderCardFlow();
+			if (hadDesktopTotalCount && ["all", "things", "review"].includes(this.activeNav)
+				&& this.getCatalogPresentationTotalCount() !== previousDesktopCount) this.renderCardFlow();
 			const shouldRender = !this.libraryIndexesInvalidatedByCoverage || !this.libraryIndexesUpdating;
 			if (!this.libraryIndexesInvalidatedByCoverage) {
 				this.libraryIndexesInvalidatedByCoverage = true;
@@ -4029,29 +4034,40 @@ export class KnomoView extends ItemView {
 				this.containerEl.win.cancelAnimationFrame(this.timeBuoyBatchFrameId!);
 				this.timeBuoyBatchFrameId = null;
 			}
-			this.removeTimeBuoyLoadMore();
 			const scrollTop = this.getCardFlowScrollTop();
 			const existing = new Map(Array.from(panel.querySelectorAll<HTMLElement>(".knomo-card"))
 				.map(card => [card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id"), card]));
 			const previous = new Map(this.timeBuoyRenderItems.map(item => [getMemoRenderKey(item.memo), item]));
 			const count = Math.min(nextItems.length, Math.max(this.getInitialCardBatchSize(), existing.size, this.timeBuoyRenderedCount));
+			const canRetain = (item: TimeBuoyTabItem) => {
+				const key = getMemoRenderKey(item.memo), before = previous.get(key);
+				return existing.has(key) && before && this.canReuseRenderedMemo(before.memo, item.memo)
+					&& before.primaryTargetDate === item.primaryTargetDate
+					&& JSON.stringify(before.targetDates) === JSON.stringify(item.targetDates);
+			};
+			const retainedCards = new Set(nextItems.slice(0, count).filter(canRetain).map(item => existing.get(getMemoRenderKey(item.memo))!));
+			const handoff = new ReadyCardImageHandoff([...existing.values()].filter(card => !retainedCards.has(card)), cardFlow);
+			const seedPlaceholder = createMemoRenderPlaceholders([...existing].flatMap(([key, card]) => {
+				const memo = key ? previous.get(key)?.memo : null;
+				return memo ? [{ memo, card }] : [];
+			}));
+			this.removeTimeBuoyLoadMore();
 			const cards: HTMLElement[] = [];
 			for (const [index, item] of nextItems.slice(0, count).entries()) {
-				const key = getMemoRenderKey(item.memo), before = previous.get(key);
+				const key = getMemoRenderKey(item.memo);
 				let card = existing.get(key);
-				if (!card || !before || !this.canReuseRenderedMemo(before.memo, item.memo)
-					|| before.primaryTargetDate !== item.primaryTargetDate
-					|| JSON.stringify(before.targetDates) !== JSON.stringify(item.targetDates)) {
-					this.appendTimeBuoyBatchItems(panel, [item], index, this.renderGeneration);
+				if (!canRetain(item)) {
+					this.appendTimeBuoyBatchItems(panel, [item], index, this.renderGeneration, handoff);
 					card = panel.lastElementChild as HTMLElement;
+					seedPlaceholder(item.memo, card);
 				}
-				cards.push(card);
+				cards.push(card!);
 			}
 			const retained = new Set(cards);
 			for (const card of existing.values()) if (!retained.has(card)) {
 				this.memoMarkdownRenderer.releaseCard(card, "card-flow");
 				this.renderedCardMemos.delete(card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id")!);
-				this.removeCardElement(card);
+				this.removeCardElement(card, false);
 			}
 			let following: HTMLElement | null = null;
 			for (const card of [...cards].reverse()) {
@@ -4142,6 +4158,7 @@ export class KnomoView extends ItemView {
 		items: readonly TimeBuoyTabItem[],
 		renderIndexStart: number,
 		generation: number,
+		handoff?: ReadyCardImageHandoff,
 	): void {
 		appendTimeBuoyItems(panel, items, renderIndexStart, (container, item, renderIndex) => {
 			const today = formatTimeBuoyDate(new Date());
@@ -4162,6 +4179,7 @@ export class KnomoView extends ItemView {
 				null,
 				null,
 				{ status, label },
+				handoff,
 			);
 			this.renderedCardMemos.set(getMemoRenderKey(item.memo), item.memo);
 		});
@@ -4366,7 +4384,8 @@ export class KnomoView extends ItemView {
 			const queryCovered = this.catalogCoverage !== null && isQueryCovered(this.catalogCoverage,
 				this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true));
 			if (["all", "things", "review"].includes(this.activeNav) && !queryCovered
-				&& (this.activeNav === "things" || presentation.type === "empty") && headers.length === 0) {
+				&& (this.activeNav === "things" || presentation.type === "empty") && headers.length === 0
+				&& matchedTotalCount === null) {
 				headers.push({ type: "summary", text: t("catalog.incompleteResults") });
 			}
 			if (this.catalogStatus.relations?.complete === false && this.isReferrerQuery()
@@ -4380,9 +4399,14 @@ export class KnomoView extends ItemView {
 	}
 
 	private getCatalogPresentationTotalCount(): number | null {
-		if (this.catalogStatus.relations?.complete === false) return null;
+		if (this.catalogStatus.relations?.complete === false || this.catalogCoverage?.configurationComplete === false
+			|| hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage)
+			|| this.viewStateController.search.requestStatus === "failed") {
+			this.catalogDesktopCountPresentation = null;
+			return null;
+		}
 		if (typeof this.catalogDesktopTotalCount === "number") {
-			if (this.hasCommittedCatalogDesktopQuery && (this.activeNav === "all" || this.activeNav === "review")) {
+			if (this.hasCommittedCatalogDesktopQuery && ["all", "things", "review"].includes(this.activeNav)) {
 				// 首次展示就保留摘要，避免查询先于进度通知返回时将其撤下。
 				this.catalogDesktopCountPresentation = {
 					queryKey: getCatalogQueryKey(this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true)),
@@ -4391,10 +4415,9 @@ export class KnomoView extends ItemView {
 			}
 			return this.catalogDesktopTotalCount;
 		}
-		if (this.activeNav !== "all" && this.activeNav !== "review") return null;
+		if (!["all", "things", "review"].includes(this.activeNav)) return null;
 		const cached = this.catalogDesktopCountPresentation;
-		return cached && this.catalogCoverage?.configurationComplete !== false
-			&& cached.queryKey === getCatalogQueryKey(this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true))
+		return cached && cached.queryKey === getCatalogQueryKey(this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true))
 			&& (cached.queryKey === this.getCatalogQueryFingerprint(true) || cached.queryKey === this.getCatalogQueryFingerprint(false))
 			? cached.count : null;
 	}
@@ -4520,16 +4543,6 @@ export class KnomoView extends ItemView {
 		}
 		this.cardFlowCoordinator.clearMobileBatchContinuation(this.containerEl.win);
 		this.prepareRecentTimeFlow();
-		this.cardFlowCoordinator.removeSentinel();
-		const headers = this.renderCardFlowHeaders(cardFlow, presentation.headers);
-		for (const child of Array.from(cardFlow.children)) {
-			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card") && !headers.includes(child)) {
-				for (const card of child.findAll(".knomo-card")) {
-					this.removeCardImageTargets(card);
-				}
-				child.remove();
-			}
-		}
 
 		const existingCards = new Map(
 			this.getDirectCardElements(cardFlow)
@@ -4550,6 +4563,15 @@ export class KnomoView extends ItemView {
 		const handoff = presentation.mode === "memo" ? new ReadyCardImageHandoff(
 			[...existingCards].filter(([key]) => !desiredKeys.has(key)).map(([, card]) => card), cardFlow,
 		) : undefined;
+		// 先读完整旧布局，再撤下分组与头部，避免浏览器锚定临时收缩的列表。
+		this.cardFlowCoordinator.removeSentinel();
+		const headers = this.renderCardFlowHeaders(cardFlow, presentation.headers);
+		for (const child of Array.from(cardFlow.children)) {
+			if (child.instanceOf(HTMLElement) && !child.hasClass("knomo-card") && !headers.includes(child)) {
+				for (const card of child.findAll(".knomo-card")) this.removeCardImageTargets(card);
+				child.remove();
+			}
+		}
 		const renderedCards: HTMLElement[] = [];
 
 		for (const [index, memo] of visibleMemos.entries()) {
@@ -4581,7 +4603,7 @@ export class KnomoView extends ItemView {
 
 		for (const [renderKey, card] of existingCards) {
 			if (!desiredKeys.has(renderKey)) {
-				this.removeCardElement(card);
+				this.removeCardElement(card, false);
 				this.renderedCardMemos.delete(renderKey);
 			}
 		}
@@ -4685,8 +4707,9 @@ export class KnomoView extends ItemView {
 		return this.cardFlowEl === null ? 0 : this.getDirectCardElements(this.cardFlowEl).length;
 	}
 
-	private removeCardElement(card: HTMLElement): void {
-		this.cardImageCache.capture(card, Platform.isMobile ? this.cardFlowEl : null);
+	private removeCardElement(card: HTMLElement, measureViewport = true): void {
+		// 同批接续已按旧布局选好图片，不再读取分组重建期间的临时几何。
+		this.cardImageCache.capture(card, measureViewport && Platform.isMobile ? this.cardFlowEl : null);
 		this.memoMarkdownRenderer.releaseCard(card, "card-flow");
 		this.relationCards?.release(card);
 		this.removeCardImageTargets(card);
@@ -4906,7 +4929,7 @@ export class KnomoView extends ItemView {
 			read: this.catalogReadService, getHost: () => this.cardFlowEl?.parentElement ?? null,
 			canFocus: () => !this.trashViewClosed && this.app.workspace.getActiveViewOfType(KnomoView) === this,
 			isMobile: () => this.currentLayout === "mobile",
-			renderCard: (container, memo, index) => this.renderMemoCardInContainer(container, memo, this.relationsPage!.generation, index, true, false, "relations"),
+			renderCard: (container, memo, index, handoff) => this.renderMemoCardInContainer(container, memo, this.relationsPage!.generation, index, true, false, "relations", null, null, undefined, handoff),
 			releaseCard: card => this.releaseRelationCard(card),
 			retainCard: (card, memo) => { this.memoMarkdownRenderer.retainCard(card, memo); this.ensureRelationCards().observe(card, memo); },
 			onChanged: open => {
@@ -4937,7 +4960,8 @@ export class KnomoView extends ItemView {
 		this.memoMarkdownRenderer.releaseCard(container, "relations");
 		for (const images of Array.from(container.querySelectorAll<HTMLElement>(".knomo-card-images"))) this.cardImageLoadQueue.forget(images, true);
 		this.relationCards?.release(container);
-		const released = new Set(Array.from(container.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]"))
+		const released = new Set([...(container.matches(".knomo-card[data-memo-id]") ? [container] : []),
+			...Array.from(container.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]"))]
 			.map(card => card.getAttribute("data-memo-id")!));
 		this.retainMemoCardPreviews(released);
 	}
@@ -6324,9 +6348,11 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		element.scrollTop = scrollTop;
+		const appliedScrollTop = element.scrollTop;
 		const generation = this.renderGeneration;
 		this.containerEl.win.requestAnimationFrame(() => {
-			if (element.isConnected && !this.trashViewClosed && (isCurrent?.() ?? true) && (element !== this.cardFlowEl || generation === this.renderGeneration)) {
+			if (element.isConnected && element.scrollTop === appliedScrollTop && !this.trashViewClosed
+				&& (isCurrent?.() ?? true) && (element !== this.cardFlowEl || generation === this.renderGeneration)) {
 				element.scrollTop = scrollTop;
 			}
 		});

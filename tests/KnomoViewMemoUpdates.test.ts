@@ -507,6 +507,57 @@ test("多页被引用筛选保存普通 Memo 后保留摘要与卡片，计数�
 	}
 });
 
+test("Things 任务提交在 Daily、Catalog 和真实分页计数接续中保留摘要，连续修改也可收尾", async () => {
+	for (const tagged of [false, true]) for (const total of [2, 51]) {
+		const catalogGate = deferred<void>(), countGate = deferred<void>();
+		const h = await fixture({ immediate: true, catalogGate: catalogGate.promise,
+			body: "## Memos\n" + Array.from({ length: total }, (_, index) => `- 09:00 - [ ] task-${index}${tagged ? " #keep" : ""}\n`).join("") });
+		const { toCatalogMemoView } = await import("../src/types/memoView");
+		const production = Object.getPrototypeOf(h.view);
+		h.view.viewStateController.activeNav = "things";
+		if (tagged) { h.view.viewStateController.activeTag = "keep"; h.view.viewStateController.activeTagKey = "keep"; }
+		const query = production.buildCatalogActiveQuery.call(h.view, true);
+		const initial = await h.read.query({ ...query, limit: 50 });
+		h.view.memos = initial.items.map(toCatalogMemoView);
+		h.view.viewStateController.search.commitResult(query, initial.catalogRevision, "complete");
+		const counts: Promise<void>[] = [];
+		Object.assign(h.view, {
+			memoSourceGeneration: 0, catalogDesktopCountRun: 0, catalogDesktopTotalCount: total,
+			catalogDesktopQueryFingerprint: production.getCatalogQueryFingerprint.call(h.view, true),
+			catalogCoverage: initial.coverage, catalogRevision: initial.catalogRevision, catalogStatus: initial.status,
+			cardFlowError: null, shouldShowTodayTimeBuoys: () => false,
+			trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) },
+			getCatalogReadService: () => h.read, reloadMemos: production.reloadMemos,
+			retainMemoCardPreviews: () => {}, syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {},
+			syncSearchControls: () => {}, getMobileSearchStateKey: () => "closed", renderMobileSearchResultsIfChanged: () => {},
+			countCatalogFeature: async () => { const result = await h.read.count(query); await countGate.promise; return result; },
+			refreshCatalogDesktopTotalCount: (...args: unknown[]) => {
+				const promise = production.refreshCatalogDesktopTotalCount.apply(h.view, args) as Promise<void>; counts.push(promise); return promise;
+			},
+		});
+		const dom = attachCardFlow(h.view, false, true), summary = dom.root.querySelector(".knomo-list-summary")!;
+		Object.assign(h.view, { getCardFlowStateKey: () => JSON.stringify(h.view.getCurrentCardFlowPresentation()) });
+		const observer = new dom.window.MutationObserver(() => {}); observer.observe(dom.root, { childList: true, subtree: true });
+		let toggling: Promise<unknown> | null = null;
+		try {
+			toggling = h.view.handleCatalogTaskToggle(h.view.memos[0]!, 0, true);
+			await new Promise<void>(resolve => setImmediate(resolve)); await Reflect.get(h.view, "presentationChangeQueue");
+			assert.match(h.body(), /\[x\]/);
+			assert.equal(Reflect.get(h.view, "catalogDesktopTotalCount"), null);
+			assert.equal(dom.root.querySelector(".knomo-list-summary"), summary);
+			catalogGate.resolve(); await toggling; await h.view.refresh();
+			assert.equal(dom.root.querySelector(".knomo-list-summary"), summary);
+			await h.view.handleCatalogTaskToggle(h.view.memos[0]!, 0, false); await h.view.refresh();
+			assert.equal(dom.root.querySelector(".knomo-list-summary"), summary);
+			countGate.resolve(); await Promise.all(counts);
+			assert.equal(Reflect.get(h.view, "catalogDesktopTotalCount"), total);
+			assert.match(summary.textContent!, new RegExp(String(total)));
+			assert.equal(counts.length > 0, total > 50);
+			assert.ok(!observer.takeRecords().some(record => Array.from(record.removedNodes).includes(summary)));
+		} finally { catalogGate.resolve(); countGate.resolve(); await toggling; await Promise.all(counts); observer.disconnect(); dom.dispose(); }
+	}
+});
+
 test("新建匹配当前标签时只触发一次增量展示，索引接续不重复重绘", async () => {
 	const gate = deferred<void>();
 	const h = await fixture({ immediate: true, catalogGate: gate.promise, body: "## Memos\n- 09:00 kept #keep\n" });
@@ -829,6 +880,33 @@ test("浮标当前分组匹配时增量插入，不匹配时保留原面板，�
 		assert.equal(dom.root.scrollTop, 600);
 		dom.dispose();
 	}
+});
+
+test("浮标真实任务勾选在 Catalog 等待和接续后保留已就绪图片与新句柄", async () => {
+	const gate = deferred<void>();
+	const h = await fixture({ immediate: true, catalogGate: gate.promise,
+		body: "## Memos\n- 09:00 - [ ] task @2099-12-31 ![[image.png]]\n" });
+	h.view.viewStateController.activeNav = "time-buoy";
+	h.buoy.setActiveTab("upcoming"); await h.buoy.loadInitial();
+	const dom = attachCardFlow(h.view, true, false, true);
+	const image = dom.root.querySelector("img"), oldMemo = h.view.memos[0]!;
+	assert.ok(image);
+	let toggling: Promise<unknown> | null = null;
+	try {
+		toggling = h.view.handleCatalogTaskToggle(oldMemo, 0, true);
+		await new Promise<void>(resolve => setImmediate(resolve)); await Reflect.get(h.view, "presentationChangeQueue");
+		assert.match(h.body(), /\[x\]/);
+		assert.equal(dom.root.querySelector("img"), image);
+		assert.equal(dom.imageLoads(), 1);
+		const currentId = dom.root.querySelector(".knomo-card")!.getAttribute("data-memo-id")!;
+		assert.notEqual(currentId, oldMemo.id);
+		assert.equal(dom.root.querySelector(".knomo-card-image-button")!.getAttribute("data-memo-id"), currentId);
+		assert.equal(dom.findMemo(currentId)?.catalog?.observationHandle.sourceRevision,
+			createHash("sha256").update(h.body()).digest("hex"));
+		gate.resolve(); await toggling; await h.buoy.loadInitial(); dom.render();
+		assert.equal(dom.root.querySelector("img"), image);
+		assert.equal(dom.imageLoads(), 1);
+	} finally { gate.resolve(); await toggling; dom.dispose(); }
 });
 
 test("首次 Catalog 读取失败后保存仍立即显示真实卡片，不被旧错误或历史构建占位遮盖", async () => {
@@ -1414,7 +1492,11 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		timeBuoyLoadMoreObserver: null,
 		prepareRecentTimeFlow: () => { Object.assign(view, { recentTimeFlowContext: { enabled: false, dates: [], pinnedKeys: new Set() },
 			recentDecorations: { next: () => null } }); },
-		renderCardForMode: renderCard, renderMemoCardInContainer: renderCard, removeCardElement: (card: HTMLElement) => card.remove(),
+		renderCardForMode: renderCard,
+		renderMemoCardInContainer: (container: HTMLElement, memo: MemoViewItem, generation: number, index: number,
+			_actions: unknown, _random: unknown, _surface: unknown, _body: unknown, _images: unknown, _buoy: unknown, handoff?: ReadyCardImageHandoff) =>
+			renderCard(container, memo, generation, index, undefined, undefined, undefined, handoff),
+		removeCardElement: (card: HTMLElement) => card.remove(),
 		renderTimeBuoyIntro: () => null, renderCardFlowSentinelIfNeeded: () => {}, renderHistoryLoadMore: () => {},
 		syncCardMenuState: () => {}, restorePendingCardFlowScrollTop: () => {},
 		getCardFlowScrollTop: () => root.scrollTop, restoreCardFlowScrollTop: (scroll: number) => { root.scrollTop = scroll; },

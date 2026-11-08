@@ -716,14 +716,8 @@ test("所有标题入口和日期筛选在索引过渡期间保留已提交卡�
 		const before = view.getCurrentCardFlowPresentation();
 		view.updateCatalogProgress({ ...completeCoverage(), kind: "partial", coveredFromDate: null, pendingFileCount: 1 });
 		const after = view.getCurrentCardFlowPresentation();
-		if (option.mode === "things") {
-			assert.equal(after.type, "items");
-			if (after.type === "items") assert.equal(after.headers.length, 1, "保留 Things 原有的覆盖不足提示，不叠加旧摘要");
-			assert.equal(renders(), 1);
-		} else {
-			assert.deepEqual(after, before);
-			assert.equal(renders(), 0);
-		}
+		assert.deepEqual(after, before);
+		assert.equal(renders(), 0);
 	});
 	for (const option of SEARCH_DATE_OPTIONS) await t.test(option.filter, async () => {
 		const { view, state, renders } = await progressPresentationHarness();
@@ -740,6 +734,28 @@ test("所有标题入口和日期筛选在索引过渡期间保留已提交卡�
 		state.activeNav = nav;
 		view.updateCatalogProgress({ ...completeCoverage(), kind: "partial", coveredFromDate: null, pendingFileCount: 1 });
 		assert.equal(renders(), 0, "独立页面不因普通列表计数失效而重绘");
+	});
+});
+
+test("Things 与普通摘要的计数终结但不可用时清除旧数字，真实覆盖故障仍提示", async t => {
+	for (const things of [false, true]) for (const failed of [false, true]) await t.test(`${things}:${failed}`, async () => {
+		const { view, state } = await progressPresentationHarness();
+		state.activeNav = things ? "things" : "all";
+		state.activeTag = "keep"; state.activeTagKey = "keep";
+		assert.equal(view.getCurrentCardFlowPresentation().headers?.length, 1);
+		const runtime = view as unknown as QueryView;
+		Object.assign(runtime, { memoSourceGeneration: 0, catalogDesktopQueryRun: 1, catalogDesktopCountRun: 0, trashViewClosed: false,
+			catalogDesktopQueryFingerprint: runtime.getCatalogQueryFingerprint(true),
+			catalogDesktopTotalCount: null, getCardFlowStateKey: () => "cards", renderCardFlowIfChanged: () => {},
+			countCatalogFeature: async () => { if (failed) throw new Error("count unavailable"); return { ...makeCatalogCount(1, 1), count: null, complete: false }; },
+		});
+		if (failed) t.mock.method(console, "warn", () => {});
+		await runtime.refreshCatalogDesktopTotalCount({ loadAll: true, queryFingerprint: runtime.getCatalogQueryFingerprint(true),
+			queryRun: 1, sourceGeneration: 0, catalogRevision: 1 });
+		assert.deepEqual(view.getCurrentCardFlowPresentation().headers, []);
+		Object.assign(runtime, { catalogCoverage: { ...completeCoverage(), kind: "partial", pendingFileCount: 1 },
+			catalogStatus: { content: "ready", catalog: "partial", projection: "ready", scan: { state: "waiting-retry" } } });
+		assert.ok((view.getCurrentCardFlowPresentation().headers?.length ?? 0) > 0);
 	});
 });
 

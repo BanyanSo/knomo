@@ -1,3 +1,4 @@
+import { normalizeImagePath, getImagePathBasename } from "../utils/imagePath";
 import type { App, TFile } from "obsidian";
 
 export interface ImageResourceCacheValue {
@@ -45,16 +46,16 @@ export class ImageResourceCache {
 	}
 
 	invalidateImagePaths(paths: readonly string[]): void {
-		const normalizedPaths = new Set(paths.map(normalizeComparablePath));
-		const basenames = new Set([...normalizedPaths].map(getPathBasename));
+		const normalizedPaths = new Set(paths.map(normalizeImagePath));
+		const basenames = new Set([...normalizedPaths].map(getImagePathBasename));
 		for (const [key, entry] of this.entries) {
 			const resolvedPath = entry.value.resourcePath;
-			if (resolvedPath !== undefined && normalizedPaths.has(normalizeComparablePath(resolvedPath))) {
+			if (resolvedPath !== undefined && normalizedPaths.has(normalizeImagePath(resolvedPath))) {
 				this.entries.delete(key);
 				continue;
 			}
-			const rawPath = normalizeComparablePath(entry.rawPath);
-			if (normalizedPaths.has(rawPath) || basenames.has(getPathBasename(rawPath))) {
+			const rawPath = normalizeImagePath(entry.rawPath);
+			if (normalizedPaths.has(rawPath) || basenames.has(getImagePathBasename(rawPath))) {
 				this.entries.delete(key);
 			}
 		}
@@ -97,13 +98,4 @@ function appendResourceVersion(url: string, modifiedAt: number | undefined): str
 
 function encodeParts(parts: readonly string[]): string {
 	return parts.map((part) => `${part.length}:${part}`).join("");
-}
-
-function normalizeComparablePath(path: string): string {
-	return path.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
-}
-
-function getPathBasename(path: string): string {
-	const separatorIndex = path.lastIndexOf("/");
-	return separatorIndex === -1 ? path : path.slice(separatorIndex + 1);
 }

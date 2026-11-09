@@ -28,7 +28,8 @@ export class MarkdownBlockService {
 	}
 
 	buildMemoBlockWithBlockId(content: string, time: string, blockId: string | null): string {
-		return this.build(content, time, blockId === null ? null : { blockId, kind: "auto", trailingWhitespace: "" });
+		content = splitMarkdownLines(content).join("\n");
+		return this.serializeObservation({ content, time, existingBlockId: null, blockAnchor: null }, content, blockId).rawBlock;
 	}
 
 	serializeObservation(observation: Pick<MemoObservation, "content" | "time" | "existingBlockId" | "blockAnchor">,
@@ -41,13 +42,13 @@ export class MarkdownBlockService {
 				leadingBlank: source.kind === "paragraph" && observation.content.split("\n")[0].trim().length === 0 } : null;
 		// 预期候选由用户输入及原锚点用途确定，不能从已接受的输出反填。
 		const existingBlockId = implicit?.blockId ?? contentAnchor(content, observation.time)?.blockId ?? null;
-		const expectedAnchors = collectRelationBlockAnchors(content);
+		const expectedAnchors = collectRelationBlockAnchors(content, "memo");
 		if (implicit !== null) {
 			if (expectedAnchors[implicit.blockId]) throw new MemoAnchorPreservationError();
 			expectedAnchors[implicit.blockId] = 1;
 			if (implicit.kind === "paragraph" && !hasInlineParagraph(content) && !implicit.leadingBlank) throw new MemoAnchorPreservationError();
 		}
-		const rawBlock = this.build(content, observation.time, implicit);
+		const rawBlock = this.build(content, observation.time, implicit, existingBlockId);
 		const lines = rawBlock.split("\n");
 		const parsed = parseDiaryMemoBlock(lines, 0);
 		if (parsed?.content !== content || parsed.blockId !== existingBlockId || parsed.endLine !== lines.length - 1
@@ -56,9 +57,8 @@ export class MarkdownBlockService {
 		return { rawBlock, existingBlockId };
 	}
 
-	private build(content: string, time: string, anchor: ImplicitAnchor | null): string {
+	private build(content: string, time: string, anchor: ImplicitAnchor | null, expectedBlockId: string | null): string {
 		const blockId = anchor?.blockId ?? null;
-		const expectedBlockId = blockId ?? contentAnchor(content, time)?.blockId ?? null;
 		const lines = splitMarkdownLines(content);
 		const firstLine = lines[0] ?? "";
 		const text = lines.join("\n");
@@ -77,7 +77,7 @@ export class MarkdownBlockService {
 		}
 		const anchorLine = inline ? text.slice(0, firstBlock!.to).split("\n").length - 1 : 0;
 		const headerCollision = inline && ((anchor === null && findLeadingParagraphAnchor(text) !== null)
-			|| /^\^[A-Za-z0-9-]+[\t ]*$/u.test(firstLine) && (blockId === null || anchorLine > 0));
+			|| /^\^[A-Za-z0-9-]+[\t ]*$/u.test(firstLine));
 		if (headerCollision) inline = false;
 		if (!inline) wide = true;
 		const indent = wide ? (line: string) => `\t${line}` : indentMemoContinuationLine;

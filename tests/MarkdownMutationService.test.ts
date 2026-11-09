@@ -28,6 +28,21 @@ import { MemoAnchorPreservationError } from "../src/services/MarkdownBlockServic
 
 const HEADINGS = ["## Memos"] as const;
 
+test("分隔线内的正文锚点经新建和编辑保留，邻居不变", async () => {
+	const path = "Daily/2026-08-22.md";
+	const prefix = "## Memos\n- 07:00 neighbor\n";
+	const f = createFixture({ initialFiles: { [path]: prefix } });
+	const content = "---\n\ntext ^inside\n\n---";
+	await f.service.create({ content });
+	const created = (await f.parse("2026-08-22")).find(memo => memo.content === content)!;
+	assert.ok(created);
+	const edited = content.replace("text", "changed");
+	await f.service.edit({ observation: toHandle(created), content: edited });
+	assert.equal((await f.parse("2026-08-22")).find(memo => memo.content === edited)?.content, edited);
+	assert.ok(f.vault.readText(path).startsWith(prefix));
+	assert.equal(f.vault.readText(path).match(/\^inside/gu)?.length, 1);
+});
+
 test("空格缩进的四列 Memo 编辑与任务勾选保持正文和非目标区域", async () => {
 	const path = "Daily/2026-08-22.md";
 	const prefix = "## Memos\r\n- 07:00 before\r\n";

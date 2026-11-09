@@ -4,6 +4,12 @@ import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { collectRelationBlockAnchors } from "../src/utils/memoRelations";
 
+test("文件 frontmatter 被排除，Memo 分隔线内锚点保留", () => {
+	const text = "---\n\ntext ^inside\n\n---";
+	assert.deepEqual({ ...collectRelationBlockAnchors(text) }, {});
+	assert.deepEqual({ ...collectRelationBlockAnchors(text, "memo") }, { inside: 1 });
+});
+
 const parser = new DiaryMemoParser();
 const cases: Array<[string, string, string | null]> = [
 	["单行", "- 10:00 text ^memo", "memo"],

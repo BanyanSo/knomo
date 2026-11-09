@@ -19,6 +19,15 @@ import { memoMarkdownConsistencyFixtures } from "./fixtures/memoMarkdownConsiste
 import { memoPrefixHistory } from "./fixtures/memoPrefix/history";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 
+test("Monthly 保留分隔线内的正文锚点", async () => {
+	const raw = "-   09:00\n\t\n\t---\n\t\n\ttext ^inside\n\t\n\t---";
+	const parser = new DiaryMemoParser();
+	const observations = parser.parseRevision({ sourcePath: "Daily/2026-08-01.md", logicalDate: "2026-08-01", content: raw, sourceRevision: "daily" }).observations;
+	const result = await buildMonthlyProjection({ period: "2026-08", settings: makeSettings(), observations });
+	assert.ok(result.content.includes(raw));
+	assert.equal(result.content.match(/\^inside/gu)?.length, 1);
+});
+
 test("Monthly 可投影带逻辑首空行的旧式 paragraph 锚点", async () => {
 	const parser = new DiaryMemoParser();
 	const raw = "- 09:00 \n  text ^legacy-leading-space";
@@ -72,7 +81,7 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 
 	assert.equal(first.content, second.content);
 	// 输出规则版本与锚点源信息进入输入摘要，投影字节及 outputHash 仍保持原有固定值。
-	assert.equal(first.sourceDigest, "761716e6077bab4b0c1e6690d989a2da4208b061a7e9dc767c0e53d82a633722");
+	assert.equal(first.sourceDigest, "ccc661c3d0cdf4c563898f10afd69efe667ca93596061f05fc44a6bb5cbe3a4e");
 	assert.equal(first.outputHash, "45655fa980004f2c9c6bc6bae67bcccce918d3c782da0d6a67aa500fa5dd1c18");
 	assert.equal(first.path, "Knomo/Memos-2026-08.md");
 	assert.equal(first.content, [

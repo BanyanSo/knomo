@@ -1009,7 +1009,7 @@ export class MobileSearchController {
 			completeRender();
 			return;
 		}
-		if (memos.length === 0 && status) { completeRender(); return; }
+		if (memos.length === 0 && status) { this.syncResultMetadata(0, 0, false, false); completeRender(); return; }
 		if (memos.length === 0 && relationQuery && (readStatus?.complete === false || this.acceptedResultsInvalidated)) { completeRender(); return; }
 		if (memos.length === 0) {
 			this.syncResultMetadata(0, 0, false);

@@ -4065,7 +4065,6 @@ export class KnomoView extends ItemView {
 			}
 			const retained = new Set(cards);
 			for (const card of existing.values()) if (!retained.has(card)) {
-				this.memoMarkdownRenderer.releaseCard(card, "card-flow");
 				this.renderedCardMemos.delete(card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id")!);
 				this.removeCardElement(card, false);
 			}

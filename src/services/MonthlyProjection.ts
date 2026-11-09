@@ -15,7 +15,7 @@ import { CooperativeYieldController, stableSortCooperatively } from "./Cooperati
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 
 // 解码、锚点或布局改变输出时独立递增，不能依赖 Catalog 重扫触发历史月份重建。
-export const MONTHLY_OUTPUT_RULE_VERSION = 1;
+export const MONTHLY_OUTPUT_RULE_VERSION = 2;
 
 export const MONTHLY_ARCHIVE_MARKER = "knomo:monthly-archive";
 const MONTHLY_ARCHIVE_COMMENT = `<!-- ${MONTHLY_ARCHIVE_MARKER} -->`;

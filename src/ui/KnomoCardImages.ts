@@ -1,3 +1,5 @@
+export { normalizeImagePath } from "../utils/imagePath";
+import { normalizeImagePath } from "../utils/imagePath";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CardImageLoadItem } from "./CardImageLoadQueue";
 import type { MemoPreviewImage } from "./MemoCardPreview";
@@ -63,9 +65,7 @@ export class ReadyCardImageHandoff {
 	}
 }
 
-export function normalizeImagePath(path: string): string {
-	return path.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
-}
+
 
 // 仅缓存当前视图移除的已就绪节点；取出即转移所有权，按图片数量保持有界。
 export class MemoCardImageCache {

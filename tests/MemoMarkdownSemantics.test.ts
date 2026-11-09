@@ -10,6 +10,18 @@ import { memoPrefixTargets } from "./fixtures/memoPrefix/targets";
 const parser = new DiaryMemoParser();
 const writer = new MarkdownBlockService();
 const markdown = new MarkdownIt({ html: true });
+test("Memo 分隔线不是文件 frontmatter，正文锚点可创建并重复保存", () => {
+	const content = "---\n\ntext ^inside\n\n---";
+	let raw = writer.serializeObservation({ content, time: "09:00", existingBlockId: null, blockAnchor: null }).rawBlock;
+	for (let save = 0; save < 2; save++) {
+		const memo = read(raw)[0];
+		assert.equal(memo.content, content);
+		raw = writer.serializeObservation(memo).rawBlock;
+		assert.equal(read(raw)[0].content, content);
+		assert.equal((raw.match(/\^inside/gu) ?? []).length, 1);
+	}
+});
+
 function read(raw: string) {
 	return parser.parseRevision({ sourcePath: "Daily/2026-11-08.md", logicalDate: "2026-11-08",
 		content: raw, sourceRevision: "revision" }).observations;

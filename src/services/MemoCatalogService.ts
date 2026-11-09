@@ -144,7 +144,7 @@ function createCatalogPartition(input: CatalogPartitionInput): CatalogFilePartit
 	};
 	// 非扫描调用也可构建完整分区；生产扫描传入整份 Daily 的锚点计数。
 	if (input.blockAnchors === undefined) for (const memo of input.observations) {
-		for (const [id, count] of Object.entries(collectRelationBlockAnchors(memo.content))) file.relations!.anchors[id] = (file.relations!.anchors[id] ?? 0) + count;
+		for (const [id, count] of Object.entries(collectRelationBlockAnchors(memo.content, "memo"))) file.relations!.anchors[id] = (file.relations!.anchors[id] ?? 0) + count;
 		if (memo.existingBlockId && memo.blockAnchor?.kind !== "body") {
 			file.relations!.anchors[memo.existingBlockId] = (file.relations!.anchors[memo.existingBlockId] ?? 0) + 1;
 		}

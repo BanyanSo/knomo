@@ -9,7 +9,6 @@ export function getMemoRenderRevision(memo: MemoRecord): string {
 	return encodeParts([
 		getMemoRenderKey(memo),
 		memo.id,
-		memo.updatedAt,
 		memo.createdAt,
 		memo.updatedAt,
 		memo.contentHash,

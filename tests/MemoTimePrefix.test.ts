@@ -3,7 +3,7 @@ import test from "node:test";
 import MarkdownIt from "markdown-it";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
-import { memoLevelRelationBlockId } from "../src/utils/memoRelations";
+import { findMemoBlockAnchor } from "../src/utils/memoRelations";
 import { memoMarkdownConsistencyFixtures, expectedLegacyDailyMemo } from "./fixtures/memoMarkdownConsistency";
 
 const blocks = new MarkdownBlockService();
@@ -18,7 +18,7 @@ test("两列候选和保留的四列格式均保留实际 Markdown、代码空�
 		const raw = blocks.buildMemoBlockWithBlockId(fixture.content, "12:34", blockId);
 		const legacy = expectedLegacyDailyMemo(fixture, "12:34", blockId);
 		assert.equal(markdown.render(raw), markdown.render(legacy), fixture.name);
-		assert.equal(memoLevelRelationBlockId(raw), memoLevelRelationBlockId(legacy), fixture.name);
+		assert.equal(findMemoBlockAnchor(raw)?.blockId ?? null, findMemoBlockAnchor(legacy)?.blockId ?? null, fixture.name);
 		const parsed = read(`${raw}\n- 13:00 neighbor`);
 		assert.equal(parsed.length, 2, fixture.name);
 		assert.equal(parsed[0].content, fixture.content, fixture.name);

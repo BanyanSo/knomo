@@ -261,6 +261,23 @@ test("移动删除最后已加载成员时不以窗口长度当总数，新范�
 	} finally { gate.resolve(count); h.close(); }
 });
 
+test("受阻状态下删除最后已加载成员清除旧摘要", async () => {
+	let blocked = false;
+	const h = await searchFixture({ query: "memo" }, {
+		getResultStatus: () => ({ headers: blocked ? [{ type: "summary", text: "unavailable" }] : [], complete: !blocked, blocked }),
+	});
+	try {
+		const root = h.controller.results!;
+		assert.ok(root.querySelector(".knomo-search-result-count"));
+		blocked = true;
+		h.controller.applyMemoChanges(new Map([[h.memo.id, null]]));
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(root.querySelectorAll(".knomo-card").length, 0);
+		assert.equal(root.querySelector(".knomo-search-result-count"), null);
+		assert.match(root.querySelector(".knomo-search-result-feedback")!.textContent!, /unavailable/u);
+	} finally { h.close(); }
+});
+
 async function searchFixture(
 	scenario: { query?: string; date?: SearchDateFilter; stats?: RecordStatsSearchFilter; things?: boolean; referenced?: boolean },
 	overrides: Partial<ConstructorParameters<typeof import("../src/ui/MobileSearchController").MobileSearchController>[0]> = {},

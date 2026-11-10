@@ -190,7 +190,7 @@ function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable
 	let bootstrap: InstanceType<typeof Bootstrap> | undefined;
 	let saved: unknown = p2 ? { dailyHeading: "## Capture", memoTimeFormat: "HH:mm" } : { timeBuoyEnabled: false };
 	const app = {
-		vault: { configDir: ".obsidian", getName: () => t.name, on: () => ({}),
+		vault: { configDir: ".obsidian", getName: () => t.name, on: () => ({}), offref() {},
 			adapter: { read: async () => { throw new Error("Daily unavailable"); } },
 			getConfig: () => [], setConfig: async () => undefined },
 		metadataCache: { on: () => ({}) },

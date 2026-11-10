@@ -3,6 +3,7 @@ import type { App, CachedMetadata } from "obsidian";
 import { buildTagDisplayMapCooperatively, normalizeTagDisplay, normalizeTagKey } from "../utils/tags";
 import type { TagDisplaySource } from "../utils/tags";
 import { CooperativeYieldController, stableSortCooperatively, type CooperativeTaskRuntime } from "./CooperativeTask";
+import { ObsidianExcludeService, type TagCandidatePolicy } from "./ObsidianExcludeService";
 
 interface FileTagSnapshot {
 	mtime: number;
@@ -14,10 +15,11 @@ export interface VaultTagSnapshot {
 	status: "idle" | "building" | "ready" | "partial";
 	displayByKey: ReadonlyMap<string, string>;
 	suggestions: readonly string[];
+	exclusionState: "current" | "degraded";
 }
 
 export class VaultTagIndex extends Component {
-	private snapshot: VaultTagSnapshot = { revision: 0, status: "idle", displayByKey: new Map(), suggestions: [] };
+	private snapshot: VaultTagSnapshot = { revision: 0, status: "idle", displayByKey: new Map(), suggestions: [], exclusionState: "current" };
 	private readonly fileSnapshots = new Map<string, FileTagSnapshot>();
 	private readonly missingCachePaths = new Set<string>();
 	private readonly pendingPaths = new Set<string>();
@@ -34,10 +36,20 @@ export class VaultTagIndex extends Component {
 	private yieldOverride?: () => Promise<void>;
 	private readonly interactionPauses = new Set<object>();
 	private readonly interactionWaiters = new Set<{ resolve: () => void; reject: (error: Error) => void }>();
+	private readonly exclusions: ObsidianExcludeService;
+	private candidatePolicy: TagCandidatePolicy | null = null;
+	private exclusionError: string | null = null;
+	private exclusionVersion = 0;
+	private readonly eligibility = new Map<string, { eligible: boolean; fingerprint: string }>();
+	private readonly diagnostics = new Map<string, string>();
+	private retryAt = 0;
+	private retryDelay = 1000;
+	private readonly suggestionSessions = new Set<() => void>();
 
-	constructor(private readonly app: App) { super(); }
+	constructor(private readonly app: App) { super(); this.exclusions = new ObsidianExcludeService(app); }
 
 	onload(): void {
+		this.register(this.exclusions.subscribe(() => this.refreshExclusions()));
 		this.registerEvent(this.app.metadataCache.on("changed", (file, _data, cache) => {
 			if (!this.stopped) this.setFileSnapshot(file, cache, true);
 		}));
@@ -50,6 +62,64 @@ export class VaultTagIndex extends Component {
 	}
 
 	getSnapshot(): VaultTagSnapshot { return this.snapshot; }
+
+	private refreshExclusions(allowRetry = false): void {
+		if (this.stopped) return;
+		const retry = allowRetry && this.snapshot.exclusionState === "degraded" && Date.now() >= this.retryAt
+			&& this.buildPromise === null && this.timer === null;
+		try {
+			const policy = this.exclusions.readTagCandidatePolicy();
+			if (this.candidatePolicy?.fingerprint === policy.fingerprint && this.exclusionError === null && !retry) return;
+			this.candidatePolicy = policy;
+			this.exclusionError = null;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (this.exclusionError === message && !retry) return;
+			this.candidatePolicy = null;
+			this.exclusionError = message;
+			this.reportFailure("exclusions", error);
+		}
+		this.exclusionVersion++;
+		this.markChanged("");
+	}
+
+	private reportFailure(kind: string, error: unknown): void {
+		const message = error instanceof Error ? error.message : String(error);
+		if (this.diagnostics.has(kind)) return;
+		this.diagnostics.set(kind, message);
+		console.error(`[Knomo] Tag index ${kind} unavailable; retaining usable tags`, error);
+	}
+
+	watchSuggestions(listener: () => void, doc: Document): () => void {
+		if (this.stopped) return () => {};
+		const win = doc.defaultView;
+		let timer: number | null = null;
+		let stopped = false;
+		const unsubscribe = this.subscribe(listener);
+		const check = () => {
+			if (stopped) return;
+			if (timer !== null) win?.clearTimeout(timer);
+			timer = null;
+			if (doc.hidden) return;
+			this.refreshExclusions(true);
+			// 仅候选会话存活且窗口可见时兜底比较规则，不扫描正文。
+			timer = win?.setTimeout(check, 1000) ?? null;
+		};
+		const stop = () => {
+			if (stopped) return;
+			stopped = true;
+			if (timer !== null) win?.clearTimeout(timer);
+			unsubscribe();
+			doc.removeEventListener("visibilitychange", check);
+			win?.removeEventListener("focus", check);
+			this.suggestionSessions.delete(stop);
+		};
+		this.suggestionSessions.add(stop);
+		doc.addEventListener("visibilitychange", check);
+		win?.addEventListener("focus", check);
+		check();
+		return stop;
+	}
 
 	// 键盘/输入法关键阶段暂停下一片；多个视图分别释放，不取消或重建已有索引。
 	pauseForInteraction(): () => void {
@@ -75,6 +145,7 @@ export class VaultTagIndex extends Component {
 
 	ensureReady(yieldToUi?: () => Promise<void>): Promise<VaultTagSnapshot> {
 		if (this.stopped) return Promise.reject(new Error("Vault tag index is unloaded."));
+		this.refreshExclusions(true);
 		if (this.publishedGeneration >= this.generation) return Promise.resolve(this.snapshot);
 		this.started = true;
 		if (yieldToUi && this.buildPromise === null) this.yieldOverride = yieldToUi;
@@ -87,6 +158,7 @@ export class VaultTagIndex extends Component {
 
 	onunload(): void {
 		this.stopped = true;
+		for (const stop of this.suggestionSessions) stop();
 		const win = this.app.workspace.containerEl.win;
 		if (this.timer !== null) win.clearTimeout(this.timer);
 		this.timer = null;
@@ -166,32 +238,71 @@ export class VaultTagIndex extends Component {
 		}
 		// 此后到达的事件只影响下一批，当前批始终有发布机会。
 		const generation = this.generation;
+		const exclusionVersion = this.exclusionVersion;
+		const policy = this.candidatePolicy;
+		let degraded = policy === null;
+		const decisions = new Map<string, { entry: FileTagSnapshot; eligible: boolean; fingerprint: string }>();
 		const partial = this.missingCachePaths.size > 0;
 		const entries = await stableSortCooperatively([...this.fileSnapshots.entries()], ([left], [right]) => left.localeCompare(right), runtime);
 		const sources: TagDisplaySource[] = [];
+		const candidateSources: TagDisplaySource[] = [];
 		const suggestionByKey = new Map<string, string>();
 		let order = 0;
-		for (const [, entry] of entries) {
+		for (const [path, entry] of entries) {
+			let eligible = this.eligibility.get(path)?.eligible ?? true;
+			try {
+				if (policy !== null) {
+					eligible = !policy.isIgnored(path);
+					decisions.set(path, { entry, eligible, fingerprint: policy.fingerprint });
+				}
+			}
+			catch (error) {
+				degraded = true;
+				this.reportFailure("exclusions", error);
+			}
 			for (const tag of entry.tags) {
-				sources.push({ tag, modifiedTime: entry.mtime, order: order++ });
+				const source = { tag, modifiedTime: entry.mtime, order: order++ };
+				sources.push(source);
+				if (eligible) candidateSources.push(source);
 				const key = normalizeTagKey(tag);
-				if (key.length > 0 && !suggestionByKey.has(key)) suggestionByKey.set(key, tag);
+				if (eligible && key.length > 0 && !suggestionByKey.has(key)) suggestionByKey.set(key, tag);
 				if (controller.shouldYield()) await controller.yieldNow();
 			}
-		}
-		const displayByKey = await buildTagDisplayMapCooperatively(sources, runtime);
-		const candidates: string[] = [];
-		for (const [key, tag] of suggestionByKey) {
-			candidates.push(displayByKey.get(key) ?? tag);
 			if (controller.shouldYield()) await controller.yieldNow();
 		}
-		const suggestions = await stableSortCooperatively(candidates, (left, right) => left.localeCompare(right, "zh"), runtime);
+		const displayByKey = await buildTagDisplayMapCooperatively(sources, runtime);
+		const candidateDisplayByKey = candidateSources.length === sources.length ? displayByKey
+			: await buildTagDisplayMapCooperatively(candidateSources, runtime);
+		const candidates: string[] = [];
+		for (const [key, tag] of suggestionByKey) {
+			candidates.push(candidateDisplayByKey.get(key) ?? tag);
+			if (controller.shouldYield()) await controller.yieldNow();
+		}
+		let suggestions: readonly string[] = await stableSortCooperatively(candidates, (left, right) => left.localeCompare(right, "zh"), runtime);
 		this.checkActive();
+		this.refreshExclusions();
+		// 规则变化使整批资格失效，旧结果不得发布或唤醒候选等待者。
+		if (exclusionVersion !== this.exclusionVersion) return;
+		// 只提交仍属于本批文件的判定，删除、改名或替换不能被迟到任务复活。
+		for (const [path, decision] of decisions) {
+			if (this.fileSnapshots.get(path) === decision.entry) this.eligibility.set(path, { eligible: decision.eligible, fingerprint: decision.fingerprint });
+		}
+		if (degraded) {
+			this.retryAt = Date.now() + this.retryDelay;
+			this.retryDelay = Math.min(30000, this.retryDelay * 2);
+		} else {
+			this.retryAt = 0;
+			this.retryDelay = 1000;
+			this.diagnostics.delete("exclusions");
+		}
+		if (!partial) this.diagnostics.delete("metadata");
+		if (suggestions.length === this.snapshot.suggestions.length
+			&& suggestions.every((tag, index) => tag === this.snapshot.suggestions[index])) suggestions = this.snapshot.suggestions;
 		this.publishedGeneration = generation;
 		this.snapshot = {
 			revision: this.snapshot.revision + 1,
 			status: generation < this.generation ? "building" : partial ? "partial" : "ready",
-			displayByKey, suggestions,
+			displayByKey, suggestions, exclusionState: degraded ? "degraded" : "current",
 		};
 		for (let index = this.waiters.length - 1; index >= 0; index--) {
 			if (this.waiters[index].generation <= generation) this.waiters.splice(index, 1)[0].resolve(this.snapshot);
@@ -208,24 +319,32 @@ export class VaultTagIndex extends Component {
 
 	private readFile(file: TFile, event = false): void {
 		if (this.stopped) return;
-		const cache = this.app.metadataCache.getFileCache(file);
+		let cache: CachedMetadata | null;
+		try { cache = this.app.metadataCache.getFileCache(file); }
+		catch (error) { this.reportFailure("metadata", error); this.markMissing(file.path, event); return; }
 		if (cache !== null) this.setFileSnapshot(file, cache, event);
-		else {
-			const removed = this.fileSnapshots.delete(file.path);
-			const missing = this.missingCachePaths.has(file.path);
-			this.missingCachePaths.add(file.path);
-			if (event && (removed || !missing)) this.markChanged(file.path);
-		}
+		else this.markMissing(file.path, event);
+	}
+
+	private markMissing(path: string, event: boolean): void {
+		const missing = this.missingCachePaths.has(path);
+		this.missingCachePaths.add(path);
+		if (event && !missing) this.markChanged(path);
 	}
 
 	private setFileSnapshot(file: TFile, cache: CachedMetadata, event = false): void {
 		if (file.extension !== "md") { this.removePath(file.path); return; }
-		const tags = [...new Set((getAllTags(cache) ?? []).map(normalizeTagDisplay).filter(tag => tag.length > 0))];
+		let tags: string[];
+		try { tags = [...new Set((getAllTags(cache) ?? []).map(normalizeTagDisplay).filter(tag => tag.length > 0))]; }
+		catch (error) { this.reportFailure("metadata", error); this.markMissing(file.path, event); return; }
+		const recovered = this.missingCachePaths.delete(file.path);
 		const previous = this.fileSnapshots.get(file.path);
 		if (previous?.mtime === file.stat.mtime && previous.tags.length === tags.length
-			&& previous.tags.every((tag, index) => tag === tags[index])) return;
+			&& previous.tags.every((tag, index) => tag === tags[index])) {
+			if (event && recovered) this.markChanged(file.path);
+			return;
+		}
 		this.fileSnapshots.set(file.path, { mtime: file.stat.mtime, tags });
-		this.missingCachePaths.delete(file.path);
 		if (event) this.markChanged(file.path);
 	}
 
@@ -233,14 +352,20 @@ export class VaultTagIndex extends Component {
 		if (this.stopped) return;
 		const removed = this.fileSnapshots.delete(path);
 		const missing = this.missingCachePaths.delete(path);
+		this.eligibility.delete(path);
 		if (removed || missing || !this.scanned) this.markChanged(path);
 	}
 
 	private handleRename(file: TAbstractFile, oldPath: string): void {
 		if (this.stopped) return;
 		if (file instanceof TFile) {
+			const previous = this.fileSnapshots.get(oldPath);
 			this.removePath(oldPath);
-			if (file.extension === "md") this.readFile(file, true);
+			if (file.extension === "md") {
+				if (previous) this.fileSnapshots.set(file.path, previous);
+				this.markChanged(file.path);
+				this.readFile(file, true);
+			}
 			return;
 		}
 		if (!(file instanceof TFolder)) return;
@@ -252,6 +377,7 @@ export class VaultTagIndex extends Component {
 			const nextPath = `${newPrefix}${path.slice(oldPrefix.length)}`;
 			this.removePath(path);
 			this.fileSnapshots.set(nextPath, snapshot);
+			this.missingCachePaths.add(nextPath);
 			this.markChanged(nextPath);
 		}
 		for (const path of [...this.missingCachePaths]) {
@@ -266,7 +392,7 @@ export class VaultTagIndex extends Component {
 				if (child instanceof TFolder) visit(child);
 				else if (child instanceof TFile && child.extension === "md") {
 					this.removePath(`${oldPrefix}${child.path.slice(file.path.length + 1)}`);
-					if (!this.fileSnapshots.has(child.path) && !this.missingCachePaths.has(child.path)) this.readFile(child, true);
+					this.readFile(child, true);
 				}
 			}
 		};

@@ -22,7 +22,7 @@ test("detached tag and link surfaces initialize, update in place and release the
 			getWikiLinkSourcePath: () => "Daily/2026-10-21.md",
 		});
 		Object.assign(view.tagSuggest, { vaultTagIndex: {
-			getSnapshot: () => ({ status: "ready", revision: 1, suggestions: ["one", "two"] }),
+			watchSuggestions: () => () => {}, getSnapshot: () => ({ status: "ready", revision: 1, suggestions: ["one", "two"] }),
 		} });
 		Object.assign((f.view as unknown as { app: { vault: object } }).app.vault, {
 			getMarkdownFiles: () => [{ path: "Notes/Alpha.md", basename: "Alpha", extension: "md" }],

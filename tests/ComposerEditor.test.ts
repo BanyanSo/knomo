@@ -499,7 +499,7 @@ test("Tag Suggest uses the same editor transaction and preserves IME and save sh
 	prototype.scrollIntoView = () => undefined;
 	let selections = 0;
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
-		getSnapshot: () => ({ revision: 1, suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
+		watchSuggestions: () => () => {}, getSnapshot: () => ({ revision: 1, suggestions: ["alpha", "beta"] }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	try {
@@ -654,7 +654,7 @@ test("mobile Tag Suggest accepts row taps and rejects stale or scrolling gesture
 	let tags = ["alpha"];
 	let tagRevision = 1;
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => { selections++; }, {
-		getSnapshot: () => ({ revision: tagRevision, suggestions: tags }), ensureReady: async () => undefined,
+		watchSuggestions: () => () => {}, getSnapshot: () => ({ revision: tagRevision, suggestions: tags }), ensureReady: async () => undefined,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	const initial = "before #alph after";
@@ -1887,7 +1887,7 @@ test("真实保存回调在关闭后清理对应草稿，旧保存不能清理�
 	}
 });
 
-test("Tag Suggest reuses calculations for the current revision and query, including empty results", async () => {
+test("Tag Suggest reuses calculations for unchanged candidates and query, including empty results", async () => {
 	await ensureObsidianStub();
 	const { KnomoTagSuggest } = await import("../src/ui/KnomoTagSuggest");
 	const { editor, win, close } = environment("#");
@@ -1909,7 +1909,7 @@ test("Tag Suggest reuses calculations for the current revision and query, includ
 	} });
 	const snapshot = { revision: 1, status: "ready", suggestions: tags };
 	const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
-		getSnapshot: () => snapshot, ensureReady: async () => snapshot,
+		watchSuggestions: () => () => {}, getSnapshot: () => snapshot, ensureReady: async () => snapshot,
 	} as never);
 	const unregister = suggest.registerLifecycle();
 	try {
@@ -1925,7 +1925,13 @@ test("Tag Suggest reuses calculations for the current revision and query, includ
 			assert.equal(win.document.querySelector(".suggestion-container"), popup);
 			snapshot.revision++;
 			suggest.refresh();
-			assert.ok(reads > baseline, "新索引版本必须重新计算");
+			assert.equal(reads, baseline, "无关索引发布不重复过滤候选");
+			snapshot.suggestions = new Proxy(["alpha", "beta"], { get(target, key, receiver) {
+				if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+				return Reflect.get(target, key, receiver);
+			} });
+			suggest.refresh();
+			assert.ok(reads > baseline, "新候选结果必须重新计算");
 			const updated = reads;
 			suggest.close(); suggest.open();
 			assert.ok(reads > updated, "关闭后释放查询结果");
@@ -1961,11 +1967,12 @@ test("Tag Suggest cold readiness renders current candidates through keyup and ca
 			let requests = 0;
 			const realIndex = action === "real-index" ? new VaultTagIndex({
 				workspace: { containerEl: { win } },
-				vault: { getMarkdownFiles: () => [Object.assign(new TFile(), { path: "Tags.md", extension: "md" })] },
+				vault: { getConfig: () => [], getMarkdownFiles: () => [Object.assign(new TFile(), { path: "Tags.md", extension: "md" })] },
 				metadataCache: { getFileCache: () => ({ allTags: ["alpha", "beta"] }) },
 			} as never) : null;
 			const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
 			const suggest = new KnomoTagSuggest({} as never, editor.input, () => {}, {
+				watchSuggestions: () => () => {},
 				getSnapshot: () => realIndex?.getSnapshot() ?? { revision: status === "ready" ? 1 : 0, suggestions: tags, status },
 				ensureReady: () => { requests++; return realIndex?.ensureReady() ?? pending; },
 			} as never);

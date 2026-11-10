@@ -26,14 +26,18 @@ export class KnomoTagSuggest {
 	private suggestions: TagSuggestion[] = [];
 	private selectedIndex = 0;
 	private renderedQuery: string | null = null;
-	private calculated: { revision: number; query: string; suggestions: TagSuggestion[] } | null = null;
+	private calculated: { tags: readonly string[]; query: string; suggestions: TagSuggestion[] } | null = null;
 	private requestGeneration = 0;
 	private pendingRequest: number | null = null;
+	private failedRevision: number | null = null;
 	private readonly popoverId: string;
 	private dismissed: ReturnType<ComposerInput["composer"]["capture"]> | null = null;
 	private clearTouchClickGuard: (() => void) | null = null;
 	private clearGesture: (() => void) | null = null;
 	private releaseGlassSurface: (() => void) | null = null;
+	private releaseCandidateSession: (() => void) | null = null;
+	private lifecycleActive = false;
+	private candidateSessionGeneration = 0;
 
 	constructor(
 		app: App,
@@ -46,12 +50,19 @@ export class KnomoTagSuggest {
 		this.popoverId = `${inputEl.getAttribute("aria-labelledby") ?? "knomo-composer"}-tag-suggestions`;
 	}
 
-	open(): void { this.dismissed = null; this.refresh(); }
+	open(): void { this.dismissed = null; this.failedRevision = null; this.refresh(); }
 	close(): void {
+		this.failedRevision = null;
 		this.dismissed = this.inputEl.composer.capture();
 		this.calculated = null;
 		this.cancelRequest();
+		this.stopCandidateSession();
 		this.clearPopover();
+	}
+	private stopCandidateSession(): void {
+		this.candidateSessionGeneration++;
+		this.releaseCandidateSession?.();
+		this.releaseCandidateSession = null;
 	}
 	private cancelRequest(): void {
 		this.requestGeneration++;
@@ -74,10 +85,13 @@ export class KnomoTagSuggest {
 	}
 	openForCurrentTrigger(): void {
 		this.dismissed = null;
+		this.failedRevision = null;
 		this.refresh();
 	}
 	private prepareSuggestions(): void {
-		const status = this.vaultTagIndex.getSnapshot().status;
+		const snapshot = this.vaultTagIndex.getSnapshot();
+		const status = snapshot.status;
+		if (this.failedRevision === snapshot.revision) return;
 		if (this.pendingRequest !== null || (status !== "idle" && status !== "building")) return;
 		const generation = ++this.requestGeneration;
 		this.pendingRequest = generation;
@@ -90,7 +104,8 @@ export class KnomoTagSuggest {
 		}).catch((error: unknown) => {
 			if (generation !== this.requestGeneration) return;
 			this.pendingRequest = null;
-			if (context.sameSession()) this.close();
+			// 意外构建失败保留可用列表与恢复订阅，避免 refresh 连续重试。
+			this.failedRevision = this.vaultTagIndex.getSnapshot().revision;
 			console.error("[Knomo] Tag suggestions could not be loaded", error);
 		});
 	}
@@ -102,16 +117,28 @@ export class KnomoTagSuggest {
 		if (this.dismissed?.valid() && this.dismissed.anchor === current.anchor && this.dismissed.head === current.head) return;
 		this.dismissed = null;
 		if (getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart) === null) {
+			this.failedRevision = null;
 			this.calculated = null;
 			this.cancelRequest();
+			this.stopCandidateSession();
 			this.clearPopover();
 			return;
+		}
+		if (this.lifecycleActive && this.releaseCandidateSession === null) {
+			const context = this.inputEl.composer.capture();
+			const generation = this.candidateSessionGeneration;
+			this.releaseCandidateSession = this.vaultTagIndex.watchSuggestions(() => {
+				if (!this.lifecycleActive || generation !== this.candidateSessionGeneration) return;
+				if (context.sameSession()) this.refresh();
+				else this.close();
+			}, this.inputEl.ownerDocument);
 		}
 		this.prepareSuggestions();
 		const selected = this.suggestions[this.selectedIndex]?.tag;
 		const suggestions = this.getSuggestions();
 		const query = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart)?.query ?? null;
 		const sameQuery = query === this.renderedQuery;
+		const scrollTop = sameQuery ? this.listEl?.scrollTop ?? 0 : 0;
 		// 导航和松键不重建候选 DOM，保留滚动位置与鼠标目标。
 		if (this.popoverEl && sameQuery && (suggestions === this.suggestions
 			|| suggestions.length === this.suggestions.length
@@ -173,10 +200,12 @@ export class KnomoTagSuggest {
 				if (event.pointerType === "mouse") this.setSelectedIndex(index, false);
 			});
 		}
+		list.scrollTop = scrollTop;
 		this.inputEl.setAttribute("aria-activedescendant", `${this.popoverId}-${this.selectedIndex}`);
 		this.queuePopoverReposition();
 	}
 	registerLifecycle(): () => void {
+		this.lifecycleActive = true;
 		const keydown = (event: KeyboardEvent) => { this.handleKeydown(event); };
 		const keyup = (event: KeyboardEvent) => { if (!(event.ctrlKey || event.metaKey)) this.refresh(); };
 		const close = () => this.close();
@@ -187,6 +216,7 @@ export class KnomoTagSuggest {
 		this.inputEl.addEventListener("compositionstart", close);
 		this.inputEl.addEventListener("composer-reset", reset);
 		return () => {
+			this.lifecycleActive = false;
 			this.inputEl.removeEventListener("keydown", keydown, true);
 			this.inputEl.removeEventListener("keyup", keyup);
 			this.inputEl.removeEventListener("blur", close);
@@ -231,7 +261,7 @@ export class KnomoTagSuggest {
 			return [];
 		}
 		const snapshot = this.vaultTagIndex.getSnapshot();
-		if (this.calculated?.revision === snapshot.revision && this.calculated.query === range.query) {
+		if (this.calculated?.tags === snapshot.suggestions && this.calculated.query === range.query) {
 			return this.calculated.suggestions;
 		}
 		const tags = snapshot.suggestions;
@@ -239,7 +269,7 @@ export class KnomoTagSuggest {
 			? tags.map((tag) => ({ tag, result: null }))
 			: this.getFuzzySuggestions(tags, range.query);
 		// 只保留当前查询，空结果也复用；关闭与 trigger 失效时释放。
-		this.calculated = { revision: snapshot.revision, query: range.query, suggestions };
+		this.calculated = { tags, query: range.query, suggestions };
 		if (suggestions.length > 0) {
 			this.queuePopoverReposition();
 		}
@@ -258,6 +288,8 @@ export class KnomoTagSuggest {
 	}
 
 	selectSuggestion(value: TagSuggestion, event?: MouseEvent | KeyboardEvent): void {
+		// 已发布的新结果优先于旧 DOM 或延迟触摸事件。
+		if (!value || !this.getSuggestions().some(suggestion => suggestion.tag === value.tag)) { this.refresh(); return; }
 		const range = getTagQueryAtCursor(this.inputEl.value, this.inputEl.selectionStart);
 		if (range === null) {
 			this.close();

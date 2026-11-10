@@ -535,7 +535,7 @@ test("body-mounted Tag and Wiki candidates share typography with real measuremen
 				win.editor.view.focus();
 				const tags = Array.from({ length: 12 }, (_, i) => `#${i}_长标签_${"中文English".repeat(12)}`);
 				win.tagSuggest = new win.KnomoTypographyFixture.KnomoTagSuggest({} as import("obsidian").App, win.editor.input, () => {}, {
-					getSnapshot: () => ({ status: "ready", revision: 1, suggestions: tags }),
+					watchSuggestions: () => () => {}, getSnapshot: () => ({ status: "ready", revision: 1, suggestions: tags }),
 				} as unknown as import("../src/services/VaultTagIndex").VaultTagIndex);
 				win.tagSuggest.open();
 			}, mobile);

@@ -66,7 +66,7 @@ async function fixture(kind: "tag" | "link") {
 	const backdrop = layer.querySelector<HTMLElement>(".knomo-mobile-composer-backdrop")!;
 	const names = ["Alpha", "Beta", "Gamma"];
 	const files = names.map(basename => ({ basename, path: `Notes/${basename}.md`, extension: "md" }));
-	view.tagSuggest.vaultTagIndex = { getSnapshot: () => ({ status: "ready", revision: 1, suggestions: names.map(name => name.toLowerCase()) }) };
+	view.tagSuggest.vaultTagIndex = { watchSuggestions: () => () => {}, getSnapshot: () => ({ status: "ready", revision: 1, suggestions: names.map(name => name.toLowerCase()) }) };
 	view.app.vault.getMarkdownFiles = () => files;
 	view.app.metadataCache = { fileToLinktext: (file: { basename: string }) => file.basename,
 		getFirstLinkpathDest: (text: string) => files.find(file => file.basename === text) ?? null };
@@ -184,7 +184,7 @@ test("真实浏览器触摸选择保留光标和输入层，候选仍可原生�
 						releaseSuggest?.();
 						suggest?.destroy?.(); suggest?.close();
 						input.composer.reset(kind === "tag" ? "prefix # suffix" : "prefix [[]] suffix"); input.setSelectionRange(kind === "tag" ? 8 : 9, kind === "tag" ? 8 : 9); input.composer.view.focus();
-						suggest = kind === "tag" ? new api.KnomoTagSuggest(app, input, () => {}, { getSnapshot: () => ({ status: "ready", revision: 1, suggestions: names }) })
+						suggest = kind === "tag" ? new api.KnomoTagSuggest(app, input, () => {}, { watchSuggestions: () => () => {}, getSnapshot: () => ({ status: "ready", revision: 1, suggestions: names }) })
 							: new api.KnomoWikiLinkSuggest(app, input, { listboxId: "browser-links", getSourcePath: () => "Daily/today.md", onInputChanged() {}, closeTagSuggest() {}, registerVaultEvent() {} });
 						if (kind === "tag") { releaseSuggest = suggest.registerLifecycle(); suggest.open(); } else { releaseSuggest = undefined; suggest.openForCurrentRange(); }
 						activePopup = document.querySelector(".knomo-native-suggest");

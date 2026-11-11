@@ -334,10 +334,10 @@ function deferred<T>() {
 }
 
 test("新范围首批卡片与摘要同批出现，延迟计数只更新数字节点", async t => {
-	for (const referenced of [false, true]) for (const outcome of ["ready", "unavailable", "failed"] as const) await t.test(`${referenced}:${outcome}`, async () => {
+	for (const source of ["search", "things", "referenced"]) for (const outcome of ["ready", "unavailable", "failed"] as const) await t.test(`${source}:${outcome}`, async () => {
 		const firstPage = deferred<MobileSearchPage>(), count = deferred<CatalogMemoCountResult>(), started = deferred<void>();
 		if (outcome === "failed") t.mock.method(console, "warn", () => {});
-		const h = await searchFixture({ query: "memo 2026 {{count}}", referenced }, {
+		const h = await searchFixture({ query: "memo 2026 {{count}}", things: source === "things", referenced: source === "referenced" }, {
 			loadRemoteResults: () => firstPage.promise,
 			countRemoteResults: async () => { started.resolve(); const result = await count.promise; if (outcome === "failed") throw new Error("count unavailable"); return result; },
 		});

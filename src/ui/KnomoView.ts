@@ -2561,14 +2561,12 @@ export class KnomoView extends ItemView {
 		this.syncSearchInputs();
 		this.syncSearchControls();
 		this.syncRootState();
-		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
 		const filter = this.buildCatalogActiveQuery(true);
-		if (session.requestStatus === "ready" && session.result?.key === getCatalogQueryKey(filter)
-			&& session.result.catalogRevision === this.catalogRevision && session.result.coverageKey === catalogCoverageKey(this.catalogCoverage)) {
-			// 等价条件沿用已有数据与计数，列表已按旧流程恢复展示。
-			return;
-		}
-		this.refreshCatalogActiveQuery();
+		const canReuseResult = session.requestStatus === "ready" && session.result?.key === getCatalogQueryKey(filter)
+			&& session.result.catalogRevision === this.catalogRevision && session.result.coverageKey === catalogCoverageKey(this.catalogCoverage);
+		// 等价条件沿用已有数据；新查询先建立等待状态，再绘制对应摘要。
+		if (!canReuseResult) this.refreshCatalogActiveQuery();
+		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private syncSearchControls(): void {
@@ -5243,10 +5241,10 @@ export class KnomoView extends ItemView {
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
+		this.refreshCatalogActiveQuery();
 		this.renderUiState({
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
 		});
-		this.refreshCatalogActiveQuery();
 	}
 
 	private async runTrashActionById(action: TrashAction, memoId: string | null): Promise<void> {
@@ -5529,8 +5527,8 @@ export class KnomoView extends ItemView {
 		this.compactSearchOpen = false;
 		this.activeMenuMemoId = null;
 		this.randomReunionController.cancelPending();
-		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
+		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private registerMobileBackHandler(): void {
@@ -5954,8 +5952,8 @@ export class KnomoView extends ItemView {
 			this.catalogDesktopCountPresentation = null;
 			this.initialCatalogQueryPending = true;
 		}
-		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
+		this.renderFilteredListState(true, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private getLibraryIndexContextKey(): string {
@@ -6038,8 +6036,8 @@ export class KnomoView extends ItemView {
 		this.invalidateSearchDraft();
 		this.syncSearchInputs();
 		this.syncRootState();
-		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
 		this.refreshCatalogActiveQuery();
+		this.renderFilteredListState(false, this.getCardFlowChangeIntent(previousViewStateKey));
 	}
 
 	private queueSearchQuery(query: string): void {
@@ -6126,6 +6124,9 @@ export class KnomoView extends ItemView {
 			this.shuffleDayController.clearSelection();
 		}
 		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
+		if (result.reloadCatalogQuery) {
+			void this.reloadCurrentCatalogQuery(nav === "all");
+		}
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
@@ -6136,9 +6137,6 @@ export class KnomoView extends ItemView {
 		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
-		}
-		if (result.reloadCatalogQuery) {
-			void this.reloadCurrentCatalogQuery(nav === "all");
 		}
 		if (result.refreshRandomReunion) {
 			if (this.randomReunionController.getSnapshot().status === "idle") {
@@ -6188,6 +6186,9 @@ export class KnomoView extends ItemView {
 		this.cancelCatalogDesktopQuery();
 		this.applyViewStateTransitionEffects(result);
 		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
+		if (result.reloadCatalogQuery) {
+			void this.reloadCurrentCatalogQuery();
+		}
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
@@ -6199,9 +6200,6 @@ export class KnomoView extends ItemView {
 		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
-		}
-		if (result.reloadCatalogQuery) {
-			void this.reloadCurrentCatalogQuery();
 		}
 		if (result.refreshRandomReunionIfEmpty) {
 			if (this.randomReunionController.getSnapshot().status === "idle") {

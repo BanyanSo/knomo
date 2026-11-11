@@ -3553,18 +3553,20 @@ body .knomo-mobile-create-fab.is-hidden {
 	transform: translate3d(0, calc(0px - var(--knomo-mobile-composer-bottom-offset, 0px)), 0);
 }
 
-/* 可见边缘从窗口底部升起，正文和工具栏按实际键盘位置停靠。 */
-.knomo-mobile-composer-layer:where(.is-active:is(.is-open, .is-closing)) .knomo-mobile-composer-content {
-	animation: knomo-mobile-composer-enter var(--knomo-mobile-composer-enter-motion);
-}
-
-@keyframes knomo-mobile-composer-enter {
-	from {
-		clip-path: inset(calc(100% + var(--knomo-mobile-composer-fill-height)) 0
-			calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+/* 默认保留透明度过渡；支持圆角裁剪时，可见边缘从窗口底部升起。 */
+@supports (clip-path: inset(calc(100% + 1px) 0 -1px round 18px 18px 0 0)) {
+	.knomo-mobile-composer-layer:where(.is-active:is(.is-open, .is-closing)) .knomo-mobile-composer-content {
+		animation: knomo-mobile-composer-enter var(--knomo-mobile-composer-enter-motion);
 	}
-	to {
-		clip-path: inset(-40px 0 calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+
+	@keyframes knomo-mobile-composer-enter {
+		from {
+			clip-path: inset(calc(100% + var(--knomo-mobile-composer-fill-height)) 0
+				calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+		}
+		to {
+			clip-path: inset(-40px 0 calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+		}
 	}
 }
 

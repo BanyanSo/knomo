@@ -315,7 +315,7 @@ function updateMemoCardImage(
 	index: number,
 	hiddenCount: number,
 ): void {
-	const button = item.find(".knomo-card-image-button")!;
+	const button = item.find(".knomo-card-image-button");
 	const imageEl = previewNodes.get(item);
 	button.setAttr("data-memo-id", memo.id);
 	button.setAttr("data-image-index", String(index));

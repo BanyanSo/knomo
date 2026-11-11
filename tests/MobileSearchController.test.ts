@@ -100,7 +100,7 @@ test("移动被引用钻取分页失效后后台重查首屏，等待期间无�
 		assert.equal(h.controller.session.requestStatus, "ready");
 		assert.doesNotMatch(h.root.getText(), /could not load|Retry|failed|Updating|Pending update/iu);
 		assert.equal(h.controller.getDisplayedCount(), null);
-		assert.equal(h.root.find(".knomo-search-result-count"), null);
+		assert.match(h.root.find(".knomo-search-result-count")!.getText(), /—/u);
 		for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
 		await settle(); assert.equal(requests.at(-1), null, "失效后丢弃旧 cursor，从新首屏开始");
 		const fresh = makeRemotePage([memos[1]]); fresh.status.relations = { complete: true, failed: false };
@@ -683,7 +683,9 @@ test("普通搜索的新计数不可用时移除旧总数，保留新快照的�
 		assert.ok(finishCount);
 		finishCount({ count: null, complete: false, catalogRevision: 2, coverage: makeRemotePage([]).coverage });
 		await settle();
-		assert.equal(summary(), null);
+		assert.equal(summary(), oldSummary);
+		assert.match(summary()!.getText(), /—/u);
+		assert.doesNotMatch(summary()!.getText(), /90/u);
 		assert.equal(root.find(".knomo-card"), card);
 		assert.equal(controller.getDisplayedCount(), null);
 	} finally {
@@ -1177,6 +1179,18 @@ test("移动搜索提交即时更新深处卡片，保留其它 DOM、滚动与�
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
 	const dom = new JSDOM("<body></body>");
+	Object.assign(dom.window.HTMLElement.prototype, {
+		empty(this: HTMLElement) { this.replaceChildren(); },
+		createSpan(this: HTMLElement, options: { cls?: string; text?: string; attr?: Record<string, string> } = {}) {
+			const span = this.ownerDocument.createElement("span"); span.className = options.cls ?? ""; span.textContent = options.text ?? "";
+			for (const [name, value] of Object.entries(options.attr ?? {})) span.setAttribute(name, value);
+			this.appendChild(span); return span;
+		},
+		setText(this: HTMLElement, text: string) { this.textContent = text; },
+		setAttr(this: HTMLElement, key: string, value: string) { this.setAttribute(key, value); },
+		addClass(this: HTMLElement, cls: string) { this.classList.add(cls); },
+		removeClass(this: HTMLElement, cls: string) { this.classList.remove(cls); },
+	});
 	const root = dom.window.document.createElement("div");
 	Object.assign(root, {
 		find: (selector: string) => root.querySelector(selector),

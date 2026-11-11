@@ -5,13 +5,15 @@ import type { RandomReunionStatus } from "./RandomReunionController";
 import type { ShuffleDaySnapshot } from "./ShuffleDayController";
 import { getEmptyStateTitle } from "./viewNavigation";
 import type { SidebarNav } from "./viewNavigation";
+import type { ResultCountSummary } from "./ResultCountSummary";
 
 export interface CardFlowRegularFilterCopy {
-	summary: string;
+	summary: ResultCountSummary;
 	emptyTitle: string;
 }
 
 export type CardFlowHeader =
+	| { type: "result-summary"; summary: ResultCountSummary; relationCount?: boolean }
 	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean; relationCount?: boolean }
 	| { type: "random-toolbar"; count: number }
 	| { type: "trash-toolbar"; count: number; busy: boolean }
@@ -42,6 +44,7 @@ export interface CardFlowPresentationOptions {
 	randomDay?: ShuffleDaySnapshot;
 	memos: MemoRecord[];
 	matchedTotalCount: number | null;
+	countPending?: boolean;
 	regularFilterCopy: CardFlowRegularFilterCopy | null;
 	trashLoading: boolean;
 	trashError: string | null;
@@ -113,15 +116,15 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 	}
 
 	const headers: CardFlowHeader[] = [];
-	if (options.activeNav === "review" && options.matchedTotalCount !== null) {
-		headers.push({ type: "summary", text: t("list.reviewSummary", { count: options.matchedTotalCount }) });
+	if (options.activeNav === "review") {
+		headers.push({ type: "result-summary", summary: { template: "list.reviewSummary", params: {}, count: options.matchedTotalCount, pending: options.matchedTotalCount === null && (options.countPending ?? false) } });
 	}
 	if (options.activeNav === "random") {
 		headers.push({ type: "random-toolbar", count: options.memos.length });
 		if (options.randomReunionError) headers.push({ type: "summary", text: options.randomReunionError, feedback: true });
 	}
 	if (options.regularFilterCopy !== null) {
-		headers.push({ type: "summary", text: options.regularFilterCopy.summary });
+		headers.push({ type: "result-summary", summary: options.regularFilterCopy.summary });
 	}
 	return {
 		type: "items",

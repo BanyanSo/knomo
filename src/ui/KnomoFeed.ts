@@ -2,6 +2,7 @@ import { setIcon } from "obsidian";
 import { getKnomoLocale, t } from "../i18n";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import type { ShuffleDayStats } from "../utils/shuffleDay";
+import { renderResultCountSummary, syncResultCountSummary } from "./ResultCountSummary";
 
 type LoadMoreAction = "load-more" | "load-more-mobile-search" | "load-more-time-buoy-cards";
 
@@ -80,6 +81,7 @@ export function syncKnomoCardFlowHeaders(container: HTMLElement, headers: CardFl
 	const occurrences = new Map<string, number>();
 	const keys = headers.map(header => {
 		const key = header.type === "random-toolbar" ? header.type
+			: header.type === "result-summary" ? "result-summary"
 			: header.type === "random-day" ? `${header.type}:${header.selectedDate}`
 			: header.type === "summary" && header.action?.action === "retry-random-day" ? header.action.action
 			: header.type === "summary" && !header.action ? `summary:${header.feedback ? "feedback" : header.relationCount ? "relation-count" : "plain"}` : null;
@@ -118,6 +120,12 @@ export function renderKnomoCardFlowHeaders(container: HTMLElement, headers: Card
 	lastFeedback.set(container, feedback);
 	return headers.map((header, index) => {
 		const existing = reused[index];
+		if (header.type === "result-summary") {
+			const element = existing ?? renderResultCountSummary(container, header.summary);
+			if (existing) syncResultCountSummary(element, header.summary);
+			element.toggleClass("knomo-relation-result-count", !!header.relationCount);
+			return element;
+		}
 		if (header.type === "random-day") {
 			if (existing) {
 				updateHeaderText(existing.querySelector(".knomo-shuffle-day-date"), formatShuffleDayDateTitle(header.selectedDate));

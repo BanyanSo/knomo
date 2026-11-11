@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
 import type { Browser, Page } from "playwright";
@@ -8,9 +8,9 @@ import type * as Fixture from "./helpers/viewRefreshBrowserFixture";
 
 declare global { interface Window { refreshFixture: typeof Fixture } }
 
-async function browserFixture() {
+async function browserFixture(locale = "en") {
 	const bundle = await build({
-		stdin: { contents: 'import * as fixture from "./tests/helpers/viewRefreshBrowserFixture"; window.refreshFixture = fixture; fixture.installDomHelpers();', resolveDir: process.cwd() },
+		stdin: { contents: `import { getLanguage } from "obsidian"; getLanguage.set(${JSON.stringify(locale)}); import("./tests/helpers/viewRefreshBrowserFixture").then(fixture => { window.refreshFixture = fixture; fixture.installDomHelpers(); });`, resolveDir: process.cwd() },
 		alias: { obsidian: path.resolve(".tmp/knomo-tests/node_modules/obsidian/index.js") },
 		bundle: true, write: false, format: "iife", platform: "browser",
 		loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" },
@@ -28,8 +28,53 @@ async function browserFixture() {
 		#flow { height:600px; width:700px; }
 	` });
 	await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
+	await page.waitForFunction(() => !!window.refreshFixture);
 	return { page, close: () => browser.close() };
 }
+
+test("普通列表与移动搜索的摘要保持中英文自然数字间距与换行，过渡只产生原句布局变化", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const traces: unknown[] = [];
+	for (const locale of ["en", "zh-CN"]) {
+		const h = await browserFixture(locale);
+		try {
+			for (const mobile of [false, true]) for (const options of [
+				{ width: 700, fontSize: 14, position: 0, count: 7 },
+				{ width: 700, fontSize: 14, position: 400, count: 999999 },
+				{ width: 320, fontSize: 14, position: 0, count: 12345 },
+				{ width: 320, fontSize: 24, position: 400, count: 999999 },
+				{ width: 245, fontSize: 24, position: 0, count: 999999 },
+				{ width: 320, fontSize: 24, position: 400, count: null },
+			]) {
+				const result = await h.page.evaluate(options => window.refreshFixture.resultSummaryGeometry(options), { ...options, mobile });
+				traces.push({ locale, mobile, options, result });
+				const evidence = JSON.stringify({ locale, mobile, options, result });
+				assert.equal(result.locale, locale, evidence);
+				assert.equal(result.sameSummary, true, evidence); assert.equal(result.sameFixed, true, evidence);
+				assert.equal(result.sameSlot, true, evidence); assert.equal(result.sameCard, true, evidence);
+				assert.ok(result.countWidthError <= 1, evidence);
+				const first = result.samples[0]!;
+				for (const [index, sample] of result.samples.entries()) {
+					const naturalHeight = (index < 4 ? result.pendingLayout : result.finalLayout).height;
+					assert.ok(Math.abs(sample.height - naturalHeight) <= 1, evidence);
+					const naturalShift = naturalHeight - result.pendingLayout.height;
+					assert.ok(Math.abs(sample.offset - first.offset + sample.scroll - first.scroll - naturalShift) <= 1, evidence);
+					assert.ok(sample.dots + sample.value >= 0.95 || options.count === null, evidence);
+				}
+				if (options.count !== null) assert.ok(result.samples.some(sample => sample.dots > 0 && sample.dots < 1 && sample.value > 0 && sample.value < 1), evidence);
+				assert.ok(result.maxNaturalLayoutError <= 1, evidence);
+				if (options.width === 320 && options.count === 12345) await h.page.screenshot({ path: `.tmp/result-summary-${locale}-${mobile ? "mobile" : "desktop"}.png` });
+			}
+			await h.page.emulateMedia({ reducedMotion: "reduce" });
+			const reduced = await h.page.evaluate(() => window.refreshFixture.resultSummaryGeometry({ mobile: true, width: 320, fontSize: 24, position: 0, count: 12345 }));
+			traces.push({ locale, reducedMotion: true, result: reduced });
+			assert.equal(reduced.dotAnimation, "none"); assert.equal(reduced.revealAnimation, "none");
+			assert.equal(reduced.samples.at(-1)!.value, 1); assert.equal(reduced.samples.at(-1)!.dots, 0);
+		} finally {
+			await h.close();
+			writeFileSync(".tmp/result-summary-layout.json", JSON.stringify(traces, null, 2));
+		}
+	}
+});
 
 test("日期流与今日之外重复接纳新 Daily revision 时不累计滚动漂移", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const h = await browserFixture();

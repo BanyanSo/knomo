@@ -2893,16 +2893,16 @@ export class KnomoView extends ItemView {
 			if (!controller.signal.aborted) console.warn("Knomo search count failed", error);
 		} finally {
 			if (this.catalogDesktopCountController === controller) {
-				this.catalogDesktopCountController = null;
-				if (!accepted && !controller.signal.aborted && !this.trashViewClosed
+				const ownsPresentation = !accepted && !controller.signal.aborted && !this.trashViewClosed
 					&& options.sourceGeneration === this.memoSourceGeneration && options.queryRun === this.catalogDesktopQueryRun
 					&& coverageKey === catalogCoverageKey(this.catalogCoverage)
-					&& this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll)) {
-					const previousCardFlowKey = this.getCardFlowStateKey();
+					&& this.isCatalogQueryCurrent(options.queryFingerprint, options.loadAll);
+				const previousCardFlowKey = ownsPresentation ? this.getCardFlowStateKey() : null;
+				this.catalogDesktopCountController = null;
+				if (ownsPresentation) {
 					this.catalogDesktopTotalCount = null;
 					this.catalogDesktopCountPresentation = null;
-					this.renderCardFlowIfChanged(previousCardFlowKey);
-					if (this.isReferrerQuery()) this.removeRelationResultCount();
+					this.renderCardFlowIfChanged(previousCardFlowKey!);
 				}
 			}
 		}
@@ -3053,7 +3053,7 @@ export class KnomoView extends ItemView {
 				if (this.isReferrerQuery()) {
 					this.catalogCursor = null; this.catalogDesktopTotalCount = null; this.catalogDesktopCountPresentation = null;
 					this.catalogStatus = { ...this.catalogStatus, relations: { complete: false, failed: false, stale: true } };
-					this.removeRelationResultCount(); this.queueRelationQueryRefresh(queryFingerprint, true); return false;
+					this.syncRelationResultCount(); this.queueRelationQueryRefresh(queryFingerprint, true); return false;
 				}
 				return this.reloadMemos(false, true);
 			}
@@ -3080,7 +3080,7 @@ export class KnomoView extends ItemView {
 			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) return false;
 			if (this.isReferrerQuery() && (error instanceof MemoRelationsChangedError || error instanceof CatalogDiscoveryInvalidatedError)) {
 				this.catalogCursor = null; this.catalogDesktopTotalCount = null; this.catalogDesktopCountPresentation = null;
-				this.removeRelationResultCount(); this.queueRelationQueryRefresh(queryFingerprint, true); return false;
+				this.syncRelationResultCount(); this.queueRelationQueryRefresh(queryFingerprint, true); return false;
 			}
 			throw error;
 		} finally {
@@ -4342,6 +4342,7 @@ export class KnomoView extends ItemView {
 				? [] : this.getFilteredMemos(), todayItems)
 			: [];
 		const matchedTotalCount = this.getCatalogPresentationTotalCount();
+		const countPending = this.catalogDesktopCountController != null || this.catalogDesktopQueryController != null;
 		let presentation = getCardFlowPresentation({
 			cardFlowError: this.activeNav === "shuffleDay" ? null : this.cardFlowError,
 			activeNav: this.activeNav,
@@ -4351,9 +4352,10 @@ export class KnomoView extends ItemView {
 			randomDay: this.randomDayOpen ? this.randomDayController.getSnapshot() : undefined,
 			memos,
 			matchedTotalCount,
+			countPending,
 			regularFilterCopy: shouldLoadListMemos
 				&& (this.activeNav === "all" || this.activeNav === "things")
-				&& matchedTotalCount !== null ? getRegularFilterCopy({
+				? getRegularFilterCopy({
 				activeNav: this.activeNav,
 				activeTag: this.activeTag,
 				activeTagKey: this.activeTagKey,
@@ -4361,7 +4363,7 @@ export class KnomoView extends ItemView {
 				searchDateFilter: this.viewStateController.search.result ? this.viewStateController.search.result.shortcut : this.searchDateFilter,
 				recordStatsSearchFilter: this.recordStatsSearchFilter,
 				scopeFilter: this.scopeFilter,
-			}, matchedTotalCount) : null,
+			}, matchedTotalCount, countPending) : null,
 			trashLoading: trashSnapshot.trashLoading,
 			trashError: trashSnapshot.trashError,
 			trashMemos: trashSnapshot.trashMemos,
@@ -4372,7 +4374,7 @@ export class KnomoView extends ItemView {
 			presentation = { type: "items", memos: [], mode: "memo", headers: [] };
 		}
 		if (this.isReferrerQuery() && presentation.type === "items") {
-			presentation = { ...presentation, headers: presentation.headers.map(header => header.type === "summary" && !header.action && !header.feedback
+			presentation = { ...presentation, headers: presentation.headers.map(header => header.type === "result-summary"
 				? { ...header, relationCount: true } : header) };
 		}
 		if (this.cardFlowError === null && this.activeNav !== "trash") {
@@ -6069,8 +6071,8 @@ export class KnomoView extends ItemView {
 		}, 45);
 	}
 
-	private removeRelationResultCount(): void {
-		for (const element of Array.from(this.cardFlowEl?.querySelectorAll(".knomo-relation-result-count") ?? [])) element.remove();
+	private syncRelationResultCount(): void {
+		this.renderCardFlow();
 	}
 
 	private clearSearchDebounce(): void {

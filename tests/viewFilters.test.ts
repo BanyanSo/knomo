@@ -13,14 +13,14 @@ test("被引用固定筛选提供摘要与完成态空文案", () => {
 	const state = { activeTag: null, activeTagKey: null, searchQuery: "", searchDateFilter: null,
 		recordStatsSearchFilter: null, scopeFilter: "referenced" as const };
 	assert.deepEqual(getRegularFilterConditions(state), [{ type: "scope", text: "Referenced", filter: "referenced" }]);
-	assert.equal(getRegularFilterCopy(state, 2)?.summary, "Referenced: 2 Memos");
+	assert.deepEqual(getRegularFilterCopy(state, 2)?.summary, { template: "filterSummary.label", params: { label: "Referenced" }, count: 2, pending: false });
 	assert.equal(getRegularFilterCopy(state, 0)?.emptyTitle, "No referenced notes yet");
 });
 
 test("Things 摘要包含所有 AND 条件", () => {
 	const state = { activeNav: "things" as const, activeTag: "project", activeTagKey: "project", searchQuery: "release", searchDateFilter: "week" as const, recordStatsSearchFilter: null, scopeFilter: "all" as const };
 	assert.deepEqual(getRegularFilterConditions(state).map(item => item.type), ["things", "tag", "search", "date"]);
-	assert.match(getRegularFilterCopy(state, 3)!.summary, /Things/);
+	assert.match(String(getRegularFilterCopy(state, 3)!.summary.params.conditions), /Things/);
 	assert.match(getRegularFilterCopy(state, 0)!.emptyTitle, /Things/);
 });
 
@@ -46,7 +46,7 @@ test("builds regular filter copy from active filters", () => {
 		{ type: "scope", text: "With links", filter: "with-link" },
 	]);
 	assert.deepEqual(getRegularFilterCopy(state, 3), {
-		summary: "#Project/Knomo · 2026-06-01 to 2026-06-30 · With images · “alpha” · Last 7 days · With links: 3 Memos",
+		summary: { template: "filterSummary.comboSearch", params: { conditions: "#Project/Knomo · 2026-06-01 to 2026-06-30 · With images · “alpha” · Last 7 days · With links" }, count: 3, pending: false },
 		emptyTitle: "#Project/Knomo · 2026-06-01 to 2026-06-30 · With images · “alpha” · Last 7 days · With links: 3 Memos",
 	});
 });

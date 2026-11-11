@@ -85,7 +85,7 @@ test("presents regular empty state and filtered empty copy", async () => {
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		regularFilterCopy: {
-			summary: "Tagged memos",
+			summary: { template: "filterSummary.tag", params: { tag: "#tag" }, count: 0, pending: false },
 			emptyTitle: "No tagged memos",
 		},
 	}), {
@@ -104,14 +104,14 @@ test("presents memo list with regular filter summary", async () => {
 		...baseOptions(),
 		memos,
 		regularFilterCopy: {
-			summary: "2 filtered memos",
+			summary: { template: "filterSummary.tag", params: { tag: "#tag" }, count: 2, pending: false },
 			emptyTitle: "No filtered memos",
 		},
 	}), {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "summary", text: "2 filtered memos" }],
+		headers: [{ type: "result-summary", summary: { template: "filterSummary.tag", params: { tag: "#tag" }, count: 2, pending: false } }],
 	});
 });
 
@@ -129,7 +129,7 @@ test("presents review and random list headers", async () => {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "summary", text: "90 memos were written on this day" }],
+		headers: [{ type: "result-summary", summary: { template: "list.reviewSummary", params: {}, count: 90, pending: false } }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),

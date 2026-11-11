@@ -499,7 +499,8 @@ test("多页被引用筛选保存普通 Memo 后保留摘要与卡片，计数�
 			assert.ok(counting);
 			assert.equal(dom.root.querySelector(".knomo-relation-result-count"), summary, "首屏已返回、计数仍在查询时不撤下摘要");
 			countGate.resolve(); await counting;
-			assert.equal(dom.root.querySelector(".knomo-relation-result-count"), countFails ? null : summary);
+			assert.equal(dom.root.querySelector(".knomo-relation-result-count"), summary);
+			if (countFails) assert.equal(summary.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
 			assert.equal(card.parentElement, dom.root);
 			assert.equal(card.querySelector("img"), image);
 			assert.equal(h.view.getFilteredMemos().some(memo => memo.contentSnapshot === "ordinary new memo"), false);
@@ -1426,6 +1427,7 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		setText(this: HTMLElement, text: string) { this.textContent = text; },
 		addClass(this: HTMLElement, name: string) { this.classList.add(name); },
 		removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+		toggleClass(this: HTMLElement, name: string, active: boolean) { this.classList.toggle(name, active); },
 		setCssProps(this: HTMLElement, props: Record<string, string>) {
 			for (const [name, value] of Object.entries(props)) this.style.setProperty(name, value);
 		},

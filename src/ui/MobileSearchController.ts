@@ -15,7 +15,7 @@ import { buildSearchSourceScope } from "./SearchSourceScope";
 import { bindSearchInput } from "./SearchInputBinding";
 import {
 	getRegularFilterCopy,
-	formatMobileSearchSummary,
+	getMobileSearchResultSummary,
 	formatMobileSearchEmptyTitle,
 	type RecordStatsSearchFilter,
 	type SearchDateFilter,
@@ -27,6 +27,7 @@ import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import { renderKnomoMobileSearchPage } from "./KnomoMobileSearchPage";
 import type { CardFlowChangeIntent } from "./KnomoViewStateKeys";
 import { catalogCoverageKey } from "./KnomoViewStateKeys";
+import { renderResultCountSummary, syncResultCountSummary, type ResultCountSummary } from "./ResultCountSummary";
 
 type MobileSearchSurface = "mobile-search";
 type ThingsSearchContext = { activeNav: "things"; activeTag: string | null; activeTagKey: string | null };
@@ -99,7 +100,7 @@ export class MobileSearchController {
 	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
 	private displayedCount: number | null = null;
-	private summaryPresentation: { key: string; text: string } | null = null;
+	private summaryPresentation: { key: string; summary: ResultCountSummary } | null = null;
 	private pendingQueryKey: string | null = null;
 	private get query(): string { return this.session.applied.input; }
 	private set query(value: string) { this.session.updateDraft(value); this.session.submit(); }
@@ -1114,19 +1115,26 @@ export class MobileSearchController {
 		const total = this.getDisplayedCount();
 		const key = this.getDisplayedRequestKey();
 		const blocked = this.queryError !== null || this.options.getResultStatus?.(this.getDisplayedFilter()).blocked === true;
+		const pending = !blocked && ((this.countController !== null && key === this.getRequestKey(this.getAppliedFilter()))
+			|| (this.queryController !== null && this.pendingQueryKey === key));
 		if (blocked || (total === 0 && !this.acceptedResultsInvalidated)) this.summaryPresentation = null;
-		else if (updateSummary && total !== null && key !== null) {
-			const text = this.getResultCopy(total)?.summary;
-			this.summaryPresentation = text ? { key, text } : null;
+		else if (updateSummary && key !== null && (total !== null || matchedCount > 0)) {
+			// 只允许同范围已展示的真实数量接续；新范围首批结果立即建立固定摘要。
+			const retained = this.summaryPresentation?.key === key && this.summaryPresentation.summary.count !== null;
+			if (total !== null || !retained) {
+				const summary = this.getResultCopy(total, pending)?.summary;
+				this.summaryPresentation = summary ? { key, summary } : null;
+			}
 		}
 		// 快照只接续已接纳范围的摘要，不能参与分页或当前查询计数。
-		const summary = this.summaryPresentation?.key === key ? this.summaryPresentation.text : null;
+		const summary = this.summaryPresentation?.key === key ? this.summaryPresentation.summary
+			: matchedCount > 0 && key !== null ? this.getResultCopy(null, pending)?.summary : null;
 		if (!summary) results.find(".knomo-search-result-count")?.remove();
 		else {
 			const previous = results.find(".knomo-search-result-count");
-			if (previous) previous.setText(summary);
+			if (previous) syncResultCountSummary(previous, summary);
 			else {
-				const element = renderKnomoListSummary(results, summary);
+				const element = renderResultCountSummary(results, summary);
 				element.addClass("knomo-search-result-count"); results.prepend(element);
 			}
 		}
@@ -1176,7 +1184,7 @@ export class MobileSearchController {
 			|| this.session.hasConditions || this.recordStatsFilter !== null;
 	}
 
-	private getResultCopy(count: number) {
+	private getResultCopy(count: number | null, pending = false) {
 		const query = (this.session.result?.input ?? this.query).trim();
 		const date = this.session.result ? this.session.result.shortcut : this.dateFilter;
 		const context = this.displayedContext ? this.displayedContext.things : this.options.getThingsContext?.();
@@ -1185,8 +1193,8 @@ export class MobileSearchController {
 		return context || scope !== "all" ? getRegularFilterCopy({
 			activeNav: "all", activeTag: null, activeTagKey: null, ...context,
 			searchQuery: query, searchDateFilter: date, recordStatsSearchFilter: stats, scopeFilter: scope,
-		}, count) : {
-			summary: formatMobileSearchSummary(query, date, count, stats),
+		}, count, pending) : {
+			summary: getMobileSearchResultSummary(query, date, count, pending, stats),
 			emptyTitle: formatMobileSearchEmptyTitle(query, date, stats),
 		};
 	}

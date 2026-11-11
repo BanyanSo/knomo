@@ -93,6 +93,7 @@ function getChangeIntent(previousViewStateKey: string, currentViewStateKey: stri
 
 function getCardFlowHeadersStateKey(headers: readonly CardFlowHeader[]): string {
 	return headers.map((header) => {
+		if (header.type === "result-summary") return getStateKey([header.type, JSON.stringify(header.summary)]);
 		if (header.type === "summary") {
 			return getStateKey([header.type, header.text, header.action?.label ?? "", header.action?.action ?? ""]);
 		}

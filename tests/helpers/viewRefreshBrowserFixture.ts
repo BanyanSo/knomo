@@ -8,6 +8,12 @@ import { MemoRelationWindow } from "../../src/ui/MemoRelationWindow";
 import type { MemoRelationNode } from "../../src/types/memoRelations";
 import type { MemoViewItem } from "../../src/types/memoView";
 import type { CardImageLoadRequest } from "../../src/ui/CardImageLoadQueue";
+import { syncKnomoCardFlowHeaders } from "../../src/ui/KnomoFeed";
+import { syncResultCountSummary } from "../../src/ui/ResultCountSummary";
+import { getRegularFilterCopy } from "../../src/ui/viewFilters";
+import { MobileSearchController, type MobileSearchPage } from "../../src/ui/MobileSearchController";
+import { createCatalogCapabilities } from "../../src/services/MemoCapabilityModel";
+import { getKnomoLocale, t } from "../../src/i18n";
 
 export function installDomHelpers(): void {
 	Object.assign(HTMLElement.prototype, {
@@ -213,4 +219,104 @@ export async function scrollRestoreRace() {
 	flow.scrollTop = 400;
 	await frames();
 	return flow.scrollTop;
+}
+
+export async function resultSummaryGeometry(options: { mobile: boolean; width: number; fontSize: number; position: number; count: number | null }) {
+	const h = fixture(options.mobile), { view, flow } = h;
+	h.context.enabled = false;
+	const root = flow.parentElement!;
+	root.classList.toggle("is-layout-mobile", options.mobile);
+	root.classList.toggle("is-layout-desktop-wide", !options.mobile);
+	root.style.width = flow.style.width = `${options.width}px`;
+	root.style.setProperty("--knomo-text-ui-base", `${options.fontSize}px`);
+	const query = "memo 2026 {{count}} 长条件 Long condition with words and 日期筛选";
+	const memos = Array.from({ length: 35 }, (_, i) => h.makeMemo(i, 0, false));
+	const copy = getRegularFilterCopy({ activeNav: "all", activeTag: null, activeTagKey: null, searchQuery: query,
+		searchDateFilter: null, recordStatsSearchFilter: null, scopeFilter: "all" }, null, true)!;
+	const summary = copy.summary;
+	let finishCount!: (result: { count: number | null; complete: boolean; catalogRevision: number; coverage: MobileSearchPage["coverage"] }) => void;
+	let countStarted!: () => void;
+	const counting = new Promise<void>(resolve => { countStarted = resolve; });
+	let controller: MobileSearchController | undefined;
+	const render = () => view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [{ type: "result-summary", summary }], memos }, null);
+	if (!options.mobile) {
+		view.renderCardFlowHeaders = (container: HTMLElement, headers: Parameters<typeof syncKnomoCardFlowHeaders>[1]) => syncKnomoCardFlowHeaders(container, headers, "summary");
+		render();
+	} else {
+		const coverage = { kind: "complete" as const, coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
+		controller = new MobileSearchController({
+			batchSize: 50, debounceMs: 10, getWindow: () => window, getDocument: () => document,
+			getRootEl: () => root, isMobileLayout: () => true, registerDomEvent: () => {}, createHiddenText: (_container, name) => name,
+			filterMemos: items => [...items], renderMemoCard: (container, memo, generation, index) => view.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search"),
+			clearMarkdown: () => {}, clearImages: () => {}, setCardFlowPaused: () => {}, closeSurroundingChrome: () => {}, closeCardMenu: () => {},
+			syncRootState: () => {}, getCardFlowScrollTop: () => 0, restoreCardFlowScrollTop: () => {}, restoreElementScrollTop: () => {},
+			handleMarkdownInternalLinkClick: () => {}, handleTaskCheckboxClick: () => {}, handleTaskCheckboxChange: () => {},
+			loadRemoteResults: async () => ({ items: memos, catalogRevision: 1, coverage, readState: "ready", invalidated: false, degraded: false,
+				nextCursor: { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } },
+				status: { content: "ready", catalog: "complete", projection: "ready" }, capabilities: createCatalogCapabilities(coverage),
+				lifecycle: { state: "ready", persistent: true, writable: true, reason: null } }),
+			countRemoteResults: () => new Promise(resolve => { finishCount = resolve; countStarted(); }),
+		});
+		Object.assign(controller, { resultsEl: flow, open: true });
+		controller.searchQuery = query;
+		await counting;
+	}
+	await h.settle();
+	const element = flow.querySelector<HTMLElement>(".knomo-result-summary")!;
+	const fixed = element.firstChild, slot = element.querySelector<HTMLElement>(".knomo-result-summary-count")!;
+	const card = flow.querySelector<HTMLElement>(".knomo-card")!;
+	const reference = root.createDiv({ cls: "knomo-list-summary" });
+	reference.style.position = "fixed";
+	reference.style.visibility = "hidden";
+	const naturalLayout = (count: number | null, pending: boolean) => {
+		const text = count === null ? pending ? "..." : "—" : String(count);
+		reference.style.width = `${element.getBoundingClientRect().width}px`;
+		reference.textContent = t(summary.template, { ...summary.params, count: text });
+		const before = t(summary.template, { ...summary.params, count: "\u0000count\u0000" }).split("\u0000count\u0000")[0]!;
+		const range = document.createRange();
+		range.setStart(reference.firstChild!, before.length);
+		range.setEnd(reference.firstChild!, before.length + text.length);
+		return { height: reference.getBoundingClientRect().height, countWidth: range.getBoundingClientRect().width };
+	};
+	flow.scrollTop = options.position; await frames();
+	const anchor = [...flow.querySelectorAll<HTMLElement>(".knomo-card")].find(item => item.getBoundingClientRect().bottom > flow.getBoundingClientRect().top)!;
+	const sample = () => ({ height: element.getBoundingClientRect().height, offset: anchor.getBoundingClientRect().top - flow.getBoundingClientRect().top,
+		scroll: flow.scrollTop, value: Number(getComputedStyle(slot.querySelector(".knomo-result-summary-value")!).opacity),
+		dots: Number(getComputedStyle(slot.querySelector(".knomo-result-summary-dots")!).opacity) });
+	const pendingLayout = naturalLayout(null, true);
+	const samples = [sample()];
+	for (let index = 0; index < 3; index++) { await new Promise(resolve => setTimeout(resolve, 35)); samples.push(sample()); }
+	const dotAnimation = getComputedStyle(slot.querySelector(".knomo-result-summary-dots > span")!).animationName;
+	summary.count = options.count; summary.pending = false;
+	if (controller) {
+		finishCount({ count: options.count, complete: options.count !== null, catalogRevision: 1,
+			coverage: { kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 } });
+		await Promise.resolve(); await Promise.resolve();
+	} else render();
+	const revealAnimation = getComputedStyle(slot.querySelector(".knomo-result-summary-value")!).animationName;
+	const finalLayout = naturalLayout(options.count, false);
+	const countWidthError = Math.abs(slot.getBoundingClientRect().width - finalLayout.countWidth);
+	samples.push(sample());
+	for (let index = 0; index < 6; index++) { await new Promise(resolve => setTimeout(resolve, 30)); samples.push(sample()); }
+	// 扫过连续窄宽度，覆盖数量槽临近换行边界的情况。
+	flow.scrollTop = 0;
+	const widthChanges: number[] = [];
+	const naturalLayoutErrors: number[] = [];
+	for (let width = 240; width <= 460; width++) {
+		root.style.width = flow.style.width = `${width}px`;
+		syncResultCountSummary(element, { ...summary, count: null, pending: true });
+		const before = [element.getBoundingClientRect().height, card.getBoundingClientRect().top];
+		naturalLayoutErrors.push(Math.abs(before[0]! - naturalLayout(null, true).height));
+		syncResultCountSummary(element, { ...summary, count: options.count, pending: false });
+		widthChanges.push(element.getBoundingClientRect().height - before[0], card.getBoundingClientRect().top - before[1]);
+		const natural = naturalLayout(options.count, false);
+		naturalLayoutErrors.push(Math.abs(element.getBoundingClientRect().height - natural.height), Math.abs(slot.getBoundingClientRect().width - natural.countWidth));
+	}
+	root.style.width = flow.style.width = `${options.width}px`;
+	reference.remove();
+	controller?.removePage();
+	return { locale: getKnomoLocale(), samples, pendingLayout, finalLayout, countWidthError, dotAnimation, revealAnimation,
+		maxWidthShift: Math.max(...widthChanges.map(Math.abs)), maxNaturalLayoutError: Math.max(...naturalLayoutErrors),
+		sameSummary: element === flow.querySelector(".knomo-result-summary"), sameFixed: fixed === element.firstChild,
+		sameSlot: slot === element.querySelector(".knomo-result-summary-count"), sameCard: card === flow.querySelector(".knomo-card") };
 }

@@ -263,6 +263,11 @@ interface CatalogRefreshWindow {
 	todayCount: number;
 }
 
+interface CardFlowReadingAnchor {
+	renderKeys: string[];
+	offset: number;
+}
+
 const CARD_BATCH_SIZE = 50;
 const CATALOG_PAGE_SIZE = 50;
 const TRASH_MEMO_WINDOW_LIMIT = 150;
@@ -506,7 +511,6 @@ export class KnomoView extends ItemView {
 	private presentationHidden = false;
 	private presentationVisibilityRevision = 0;
 	private resumePresentationAfterRefresh = false;
-	private preserveRefreshWindow = false;
 	private mobileBackgroundPaused = false;
 	private pendingViewRefresh: boolean | undefined;
 	private pendingReferenceRefresh: DeferredRefreshPaths;
@@ -1765,11 +1769,14 @@ export class KnomoView extends ItemView {
 			this.catalogDesktopTotalCount = created && typeof this.catalogDesktopTotalCount === "number"
 				? this.catalogDesktopTotalCount + current.memos.length - previousPresentation.memos.length : null;
 		}
+		const readingAnchor = !sameMemos && !this.isPresentationHidden() && (!Platform.isMobile || !this.composerOpen || this.presentingConfirmedSave)
+			? this.captureCardFlowReadingAnchor(changes) : null;
 		try {
 			this.renderUiState({ renderMobileSearchResults: false, renderCardFlow: !sameMemos
 				|| previousPresentation.timeBuoyState !== current.timeBuoyState
 				|| previousPresentation.error !== (this.cardFlowError ?? null)
 				|| (previousPresentation.waitingForCatalog && this.hasConfirmedMemoPresentation) });
+			if (!sameMemos) this.restoreCardFlowReadingAnchor(readingAnchor);
 			return true;
 		} catch (error) { this.reportViewRefreshFailure(error, "render"); return false; }
 	}
@@ -1811,7 +1818,6 @@ export class KnomoView extends ItemView {
 		if (hidden) {
 			this.presentationVisibilityRevision++;
 			this.resumePresentationAfterRefresh = false;
-			this.preserveRefreshWindow = true;
 			if (this.presentationRefreshRun || this.catalogDesktopCountController) this.pendingViewRefresh ??= false;
 			if (this.catalogDesktopQueryController || this.mobileSearchController.isOpen) {
 				this.pendingViewRefresh ??= false;
@@ -1847,7 +1853,6 @@ export class KnomoView extends ItemView {
 					try {
 						if (force !== undefined) {
 							retry = !await this.refreshVisiblePresentation(force);
-							if (!retry) this.preserveRefreshWindow = false;
 						}
 					}
 					catch (error) {
@@ -1940,7 +1945,7 @@ export class KnomoView extends ItemView {
 		}
 		await this.waitForAllMemosLoading();
 		if (!canContinue()) return false;
-		const loaded = await this.reloadMemos(false, forceRebuild, this.preserveRefreshWindow);
+		const loaded = await this.reloadMemos(false, forceRebuild, true);
 		if (!canContinue()) return false;
 		if (this.settingsService.getSettings().timeBuoyEnabled && !this.shouldShowTodayTimeBuoys()) {
 			await this.timeBuoyViewController.loadTodayOnly();
@@ -2582,7 +2587,8 @@ export class KnomoView extends ItemView {
 		if (acceptedKey !== undefined && acceptedKey === this.getCatalogQueryFingerprint(true, queryDate)) loadAll = true;
 		let queryFingerprint = this.getCatalogQueryFingerprint(loadAll, queryDate);
 		const window: CatalogRefreshWindow | undefined = acceptedKey === queryFingerprint ? {
-			memoCount: this.memos.length,
+			// 即时保存可能暂存不匹配本页的新 Memo，不让它扩大已读取的筛选窗口。
+			memoCount: filterCatalogMemos(this.memos, this.buildCatalogActiveQuery(loadAll, queryDate)).length,
 			todayCount: this.catalogTodayTimeBuoys?.today.length ?? 0,
 		} : undefined;
 		const previousQueryFingerprint = this.catalogDesktopQueryFingerprint;
@@ -3575,7 +3581,7 @@ export class KnomoView extends ItemView {
 
 	private async restoreCardFlowAfterMobileSearch(): Promise<void> {
 		// 仍读取当前查询并更新 occurrence；未变化的显示沿用增量比较，不强制重建卡片。
-		await this.reloadMemos(false);
+		await this.reloadMemos(false, false, true);
 	}
 
 	private removeMobileSearchPage(): void {
@@ -4033,6 +4039,7 @@ export class KnomoView extends ItemView {
 				this.timeBuoyBatchFrameId = null;
 			}
 			const scrollTop = this.getCardFlowScrollTop();
+			const readingAnchor = this.captureCardFlowReadingAnchor();
 			const existing = new Map(Array.from(panel.querySelectorAll<HTMLElement>(".knomo-card"))
 				.map(card => [card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id"), card]));
 			const previous = new Map(this.timeBuoyRenderItems.map(item => [getMemoRenderKey(item.memo), item]));
@@ -4077,7 +4084,7 @@ export class KnomoView extends ItemView {
 			for (const item of nextItems.slice(0, count)) this.renderedCardMemos.set(getMemoRenderKey(item.memo), item.memo);
 			syncTimeBuoyPanelState(panel, snapshot);
 			this.renderTimeBuoyLoadMore(this.renderGeneration);
-			this.restoreCardFlowScrollTop(scrollTop);
+			if (!this.restoreCardFlowReadingAnchor(readingAnchor)) this.restoreCardFlowScrollTop(scrollTop);
 			this.syncCardMenuState();
 			if (wasPending && count < nextItems.length) this.renderNextTimeBuoyBatch(this.renderGeneration);
 			return;
@@ -6336,6 +6343,38 @@ export class KnomoView extends ItemView {
 
 	private getCardFlowScrollTop(): number | null {
 		return this.cardFlowEl?.scrollTop ?? null;
+	}
+
+	private captureCardFlowReadingAnchor(changes?: ReadonlyMap<string, MemoRecord | null>): CardFlowReadingAnchor | null {
+		const flow = this.cardFlowEl;
+		const cards = Array.from(flow?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? []);
+		if (!flow || cards.length === 0) return null;
+		const top = flow.getBoundingClientRect().top;
+		const index = cards.findIndex(card => card.getBoundingClientRect().bottom > top);
+		if (index < 0) return null;
+		// 只沿本次提交映射接续阅读；目标退出筛选时依次回退后方、前方的存活卡片。
+		const candidates = [...cards.slice(index), ...cards.slice(0, index).reverse()];
+		const renderKeys = candidates.flatMap(card => {
+			const id = card.getAttribute("data-memo-id")!;
+			if (changes?.has(id)) {
+				const current = changes.get(id);
+				return current ? [getMemoRenderKey(current)] : [];
+			}
+			return [card.getAttribute("data-memo-render-key") ?? id];
+		});
+		return { renderKeys, offset: cards[index]!.getBoundingClientRect().top - top };
+	}
+
+	private restoreCardFlowReadingAnchor(anchor: CardFlowReadingAnchor | null): boolean {
+		const flow = this.cardFlowEl;
+		if (!flow || !anchor) return false;
+		const cards = new Map(Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]"))
+			.map(card => [card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id"), card]));
+		const key = anchor.renderKeys.find(key => cards.has(key));
+		if (key === undefined) return false;
+		const offset = cards.get(key)!.getBoundingClientRect().top - flow.getBoundingClientRect().top;
+		this.restoreCardFlowScrollTop(flow.scrollTop + offset - anchor.offset);
+		return true;
 	}
 
 	private restoreCardFlowScrollTop(scrollTop: number | null): void {

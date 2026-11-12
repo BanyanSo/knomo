@@ -142,6 +142,8 @@ export class TimeBuoyViewController {
 		const requestId = ++this.requestId;
 		this.refreshing = true;
 		const activeTab = this.snapshot.activeTab;
+		const today = formatTimeBuoyDate(this.options.getNow());
+		const windowSize = this.hasLoadedPage && this.snapshot.todayDate === today ? this.snapshot[activeTab].length : 0;
 		if (!this.hasLoadedPage) {
 			this.snapshot = { ...createInitialSnapshot(activeTab), loading: true };
 			this.options.requestRender();
@@ -149,23 +151,41 @@ export class TimeBuoyViewController {
 			this.snapshot = { ...this.snapshot, refreshError: null };
 			this.options.requestRender();
 		}
-		const today = formatTimeBuoyDate(this.options.getNow());
 		try {
 			await this.options.ensureReady?.();
 			controller.signal.throwIfAborted();
 			if (!this.isCurrentPageRequest(requestId)) {
 				return;
 			}
-			const result = await this.options.queryPage({ today, tab: activeTab, limit: 30 }, controller.signal);
+			let result = await this.options.queryPage({ today, tab: activeTab, limit: 30 }, controller.signal);
 			controller.signal.throwIfAborted();
 			if (!this.isCurrentPageRequest(requestId) || today !== formatTimeBuoyDate(this.options.getNow())) {
 				return;
 			}
-			if (result.invalidated) throw new Error("Time buoy query invalidated");
-			const items = groupTabItems(result.items, activeTab);
+			if (result.invalidated) throw new CatalogDiscoveryInvalidatedError();
+			const revision = result.catalogRevision, coverageKey = JSON.stringify(result.coverage);
+			const items = [...result.items], memoIds = new Set(items.map(item => item.memo.id)), cursors = new Set<string>();
+			// 同日期、同标签刷新只补回已展开窗口，整批确认前不撤下当前卡片。
+			while (memoIds.size < windowSize) {
+				if (!result.complete || result.missingPeriods.length > 0) throw new TimeBuoyIndexPendingError();
+				const cursor = result.nextCursor;
+				if (cursor === null) break;
+				const key = JSON.stringify(cursor);
+				if (cursors.has(key)) throw new CatalogDiscoveryInvalidatedError();
+				cursors.add(key);
+				result = await this.options.queryPage({ today, tab: activeTab, limit: 30, cursor }, controller.signal);
+				controller.signal.throwIfAborted();
+				if (!this.isCurrentPageRequest(requestId) || today !== formatTimeBuoyDate(this.options.getNow())) return;
+				if (result.invalidated || result.catalogRevision !== revision || JSON.stringify(result.coverage) !== coverageKey) {
+					throw new CatalogDiscoveryInvalidatedError();
+				}
+				if (!result.complete || result.missingPeriods.length > 0) throw new TimeBuoyIndexPendingError();
+				items.push(...result.items);
+				for (const item of result.items) memoIds.add(item.memo.id);
+			}
 			const nextSnapshot = {
 				...createInitialSnapshot(this.snapshot.activeTab),
-				[activeTab]: items,
+				[activeTab]: groupTabItems(items, activeTab),
 				nextCursor: result.nextCursor,
 				todayDate: today,
 				todayRevision: result.catalogRevision ?? null,
@@ -221,7 +241,6 @@ export class TimeBuoyViewController {
 			if (!this.isCurrentPageRequest(requestId)) return;
 			if (cursor.today !== formatTimeBuoyDate(this.options.getNow()) || result.invalidated) {
 				// 游标失效明确进入重载状态，不把空页当作已读完。
-				this.hasLoadedPage = false;
 				await this.loadInitial();
 				return;
 			}

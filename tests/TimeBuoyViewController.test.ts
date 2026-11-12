@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import type { TimeBuoyAllQueryResult, TimeBuoyQueryItem, TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
 import { mergeTodayTimeBuoyFeed, TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
-import type { TimeBuoyCursor, TimeBuoyPageResult } from "../src/types/timeBuoy";
+import type { TimeBuoyCursor, TimeBuoyPageRequest, TimeBuoyPageResult } from "../src/types/timeBuoy";
 import { CatalogQueryCancelledError } from "../src/services/MemoCatalogStore";
 
 test("查询取消：切换浮标标签与关闭立即中止旧页，取消不记录错误", async () => {
@@ -98,6 +98,109 @@ test("分页追加、重复触发、切换、后台刷新、关闭和游标失�
 	next.resolve({ ...result("invalid"), items: [], invalidated: true });
 	await pending;
 	assert.deepEqual(controller.getSnapshot().today.map(item => item.memo.id), ["first"]);
+});
+
+test("浮标三种标签深处编辑后从新版本游标补足原窗口，再继续分页", async t => {
+	for (const tab of ["today", "upcoming", "past"] as const) await t.test(tab, async () => {
+		const h = pagedTimeBuoyHarness();
+		await h.controller.loadInitial();
+		if (tab !== "today") { h.controller.setActiveTab(tab); await new Promise(resolve => setImmediate(resolve)); }
+		await h.controller.loadMore(); await h.controller.loadMore();
+		assert.equal(h.controller.getSnapshot()[tab].length, 90);
+		const before = h.controller.getSnapshot()[tab][70]!.memo;
+		const updated = { ...before, id: "edited", contentSnapshot: "edited", contentHash: "edited" };
+		h.memos[70] = updated;
+		h.controller.applyMemoChanges(new Map([[before.id, updated]]));
+		h.setRevision(2); h.requests.length = 0;
+		await h.controller.loadInitial();
+		assert.equal(h.controller.getSnapshot()[tab].length, 90, "后台刷新不能缩回首批 30 条");
+		assert.equal(h.controller.getSnapshot()[tab][70]!.memo.contentSnapshot, "edited");
+		assert.deepEqual(h.requests.map(request => request.cursor?.observationKey ?? null), [null, "30", "60"]);
+		assert.ok(h.requests.slice(1).every(request => request.cursor?.catalogRevision === 2));
+		await h.controller.loadMore();
+		assert.equal(h.controller.getSnapshot()[tab].length, 120);
+		assert.equal(new Set(h.controller.getSnapshot()[tab].map(item => item.memo.id)).size, 120);
+	});
+});
+
+test("浮标补窗口等待或失败保留原结果，拒绝跨版本、覆盖变化、不完整与重复游标", async t => {
+	for (const fault of ["revision", "coverage", "incomplete", "failure", "repeated-cursor"] as const) await t.test(fault, async () => {
+		const h = pagedTimeBuoyHarness();
+		await h.controller.loadInitial(); await h.controller.loadMore(); await h.controller.loadMore();
+		const before = h.controller.getSnapshot();
+		const tail = createDeferred<TimeBuoyPageResult>();
+		h.setRevision(2); h.requests.length = 0;
+		h.setQuery(async request => {
+			if (!request.cursor) return h.page(request);
+			const page = await tail.promise;
+			if (fault === "failure") throw new Error("tail unavailable");
+			return page;
+		});
+		const updating = h.controller.loadInitial();
+		await new Promise(resolve => setImmediate(resolve));
+		assert.deepEqual(h.controller.getSnapshot().today, before.today);
+		await h.controller.loadMore();
+		assert.equal(h.requests.length, 2, "补读期间不混入交互分页");
+		const page = h.page(h.requests[1]!);
+		if (fault === "revision") page.catalogRevision = 3;
+		if (fault === "coverage") page.coverage = { ...page.coverage!, pendingFileCount: 1, kind: "partial" };
+		if (fault === "incomplete") { page.complete = false; page.missingPeriods = ["2026-06"]; }
+		if (fault === "repeated-cursor") { page.items = []; page.nextCursor = h.requests[1]!.cursor!; }
+		tail.resolve(page); await updating;
+		assert.deepEqual(h.controller.getSnapshot().today, before.today);
+		assert.equal(h.controller.getSnapshot().todayRevision, 1);
+		assert.ok(h.controller.getSnapshot().refreshError);
+		h.setQuery(async request => h.page(request));
+		await h.controller.retry();
+		assert.equal(h.controller.getSnapshot().today.length, 90);
+		assert.equal(h.controller.getSnapshot().todayRevision, 2);
+		assert.equal(h.controller.getSnapshot().refreshError, null);
+	});
+});
+
+test("浮标补窗口期间切换标签、跨午夜、再次编辑或关闭不接纳迟到尾页", async t => {
+	for (const action of ["switch", "midnight", "edit", "close"] as const) await t.test(action, async () => {
+		const h = pagedTimeBuoyHarness();
+		await h.controller.loadInitial(); await h.controller.loadMore(); await h.controller.loadMore();
+		const tail = createDeferred<TimeBuoyPageResult>();
+		h.setRevision(2); h.requests.length = 0;
+		h.setQuery(async request => request.cursor ? tail.promise : h.page(request));
+		const updating = h.controller.loadInitial();
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(h.requests.length, 2);
+		const oldTail = h.page(h.requests[1]!);
+		h.setQuery(async request => h.page(request));
+		if (action === "switch") h.controller.setActiveTab("upcoming");
+		if (action === "midnight") h.setNow(new Date(2026, 6, 12));
+		if (action === "edit") {
+			const before = h.memos[70]!, updated = { ...before, id: "new-edit", contentSnapshot: "latest", contentHash: "latest" };
+			h.memos[70] = updated; h.controller.applyMemoChanges(new Map([[before.id, updated]])); h.setRevision(3);
+		}
+		if (action === "close") h.controller.clear();
+		tail.resolve(oldTail); await updating; await new Promise(resolve => setImmediate(resolve));
+		if (action === "switch") {
+			assert.equal(h.controller.getSnapshot().activeTab, "upcoming");
+			assert.equal(h.controller.getSnapshot().upcoming.length, 30); assert.deepEqual(h.controller.getSnapshot().today, []);
+		} else if (action === "midnight") {
+			assert.equal(h.controller.getSnapshot().today.length, 90);
+			await h.controller.loadInitial(); assert.equal(h.controller.getSnapshot().today.length, 30);
+		} else if (action === "edit") {
+			await h.controller.loadInitial();
+			assert.equal(h.controller.getSnapshot().today.length, 90);
+			assert.equal(h.controller.getSnapshot().today[70]!.memo.contentSnapshot, "latest");
+			assert.equal(h.controller.getSnapshot().todayRevision, 3);
+		} else { assert.deepEqual(h.controller.getSnapshot().today, []); assert.equal(h.controller.getSnapshot().refreshError, null); }
+	});
+});
+
+test("浮标补读确认结果减少时可收缩到真实末页，不保留已删除的旧尾部", async () => {
+	const h = pagedTimeBuoyHarness();
+	await h.controller.loadInitial(); await h.controller.loadMore(); await h.controller.loadMore();
+	h.memos.splice(45); h.setRevision(2);
+	await h.controller.loadInitial();
+	assert.equal(h.controller.getSnapshot().today.length, 45);
+	assert.equal(h.controller.getSnapshot().nextCursor, null);
+	assert.equal(h.controller.getSnapshot().refreshError, null);
 });
 
 const EMPTY_RESULT: TimeBuoyQueryResult = { items: [], stale: [], missingPeriods: [] };
@@ -716,6 +819,30 @@ function makeMemo(id: string, contentSnapshot: string, createdAt: string): MemoV
 			lineNumberHint: 1,
 		},
 	};
+}
+
+function pagedTimeBuoyHarness() {
+	let now = new Date(2026, 6, 11), revision = 1;
+	const memos = Array.from({ length: 120 }, (_, index) => makeMemo(`memo-${index}`, `memo ${index}`,
+		`2026-07-${String(10 - Math.floor(index / 60)).padStart(2, "0")}T09:${String(59 - index % 60).padStart(2, "0")}`));
+	const requests: TimeBuoyPageRequest[] = [];
+	const page = (request: TimeBuoyPageRequest): TimeBuoyPageResult => {
+		const offset = Number(request.cursor?.observationKey ?? 0), end = Math.min(memos.length, offset + request.limit);
+		const dates = request.tab === "today" ? [request.today]
+			: request.tab === "upcoming" ? ["2026-08-11", "2026-08-12"] : ["2026-06-11", "2026-06-12"];
+		return {
+			items: memos.slice(offset, end).flatMap(memo => dates.map(date => makeQueryItem(memo, date))),
+			nextCursor: end < memos.length ? { today: request.today, tab: request.tab, catalogRevision: revision, coverageKey: "complete",
+				primaryTargetDate: dates[0]!, createdAtKey: memos[end - 1]!.createdAt, observationKey: String(end) } : null,
+			catalogRevision: revision, coverage: { kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 },
+			complete: true, stale: [], missingPeriods: [], metrics: { cursorReads: 1, observationsRead: end - offset, returned: end - offset },
+		};
+	};
+	let query: (request: TimeBuoyPageRequest, signal?: AbortSignal) => Promise<TimeBuoyPageResult> = async request => page(request);
+	const controller = new TimeBuoyViewController({ getNow: () => now, queryDate: async () => EMPTY_RESULT,
+		queryPage: (request, signal) => { requests.push(request); return query(request, signal); }, requestRender: () => {} });
+	return { controller, memos, requests, page, setRevision: (value: number) => { revision = value; },
+		setNow: (value: Date) => { now = value; }, setQuery: (value: typeof query) => { query = value; } };
 }
 
 // 小型无分页 fixture；实际分页与延迟请求另有真实 queryPage 回归。

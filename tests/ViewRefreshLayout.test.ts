@@ -98,6 +98,22 @@ test("日期流与今日之外重复接纳新 Daily revision 时不累计滚动�
 	} finally { await h.close(); }
 });
 
+test("多页列表及浮标编辑可见卡片或上方长正文后，局部提交与后台接续保持阅读位置", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const surface of ["feed", "buoy"] as const) for (const mobile of [false, true]) for (const editAbove of [false, true]) {
+			const options = { surface, mobile, editAbove };
+			const result = await h.page.evaluate(options => window.refreshFixture.pagedEditGeometry(options), options);
+			const first = result.samples[0]!, evidence = JSON.stringify({ options, result });
+			for (const sample of result.samples) {
+				assert.equal(sample.count, first.count, evidence);
+				assert.equal(sample.anchor, first.anchor, evidence);
+				assert.ok(Math.abs(sample.offset - first.offset) <= 1, evidence);
+			}
+		}
+	} finally { await h.close(); }
+});
+
 test("浮标与关联当前记录接续已就绪图片，等待期间不缩回加载占位", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const h = await browserFixture();
 	try {

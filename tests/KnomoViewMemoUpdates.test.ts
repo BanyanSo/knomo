@@ -508,6 +508,63 @@ test("多页被引用筛选保存普通 Memo 后保留摘要与卡片，计数�
 	}
 });
 
+test("多页列表深处编辑经实际保存广播和后台刷新后保留窗口、卡片与新分页", async t => {
+	t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 22, 12).getTime() });
+	for (const scope of ["all", "things", "review", "tag", "search", "stats"] as const) await t.test(scope, async () => {
+		const h = await fixture({ immediate: true, refreshViews: true,
+			body: "## Memos\n" + Array.from({ length: 160 }, (_, index) => `- 09:00 - [ ] kept-${index} #keep\n`).join("") });
+		const { toCatalogMemoView } = await import("../src/types/memoView");
+		const { getMemoListStateKey } = await import("../src/ui/MemoRenderRevision");
+		const production = Object.getPrototypeOf(h.view);
+		const state = h.view.viewStateController;
+		if (scope === "things" || scope === "review") state.activeNav = scope;
+		if (scope === "tag") { state.activeTag = "keep"; state.activeTagKey = "keep"; }
+		if (scope === "search") state.searchQuery = "kept";
+		if (scope === "stats") state.recordStatsSearchFilter = { type: "tag", tagKey: "keep", tagLabel: "keep", startDate: DATE, endDateExclusive: "2026-08-23" };
+		const query = production.buildCatalogActiveQuery.call(h.view, true);
+		let page = await h.read.query({ ...query, limit: 50 });
+		const items = [...page.items];
+		for (let index = 1; index < 3; index++) {
+			page = await h.read.query({ ...query, limit: 50, cursor: page.nextCursor });
+			items.push(...page.items);
+		}
+		h.view.memos = items.map(toCatalogMemoView);
+		assert.equal(h.view.memos.length, 150);
+		state.search.commitResult(query, page.catalogRevision, "complete");
+		Object.assign(h.view, {
+			memoSourceGeneration: 0, catalogDesktopCountRun: 0, catalogCursor: page.nextCursor,
+			catalogDesktopQueryFingerprint: production.getCatalogQueryFingerprint.call(h.view, true),
+			catalogCoverage: page.coverage, catalogRevision: page.catalogRevision, catalogStatus: page.status,
+			cardFlowError: null, shouldShowTodayTimeBuoys: () => false,
+			trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) },
+			getCatalogReadService: () => h.read, reloadMemos: production.reloadMemos,
+			retainMemoCardPreviews: () => {}, syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {},
+			syncSearchControls: () => {}, getMobileSearchStateKey: () => "closed", renderMobileSearchResultsIfChanged: () => {},
+			refreshCatalogDesktopTotalCount: async () => {}, renderNextCardBatch: () => {},
+			getCardFlowStateKey: () => getMemoListStateKey(h.view.getFilteredMemos()),
+		});
+		const dom = attachCardFlow(h.view);
+		Object.assign(h.view, { getInitialCardBatchSize: () => 150 }); dom.render();
+		const stable = dom.root.querySelectorAll(".knomo-card")[110]!;
+		try {
+			for (const index of [90, 130]) {
+				const memo = h.view.memos[index]!;
+				prepareComposer(h.view, memo.contentSnapshot + " edited", memo);
+				await h.view.saveInput(); await h.view.composerSaveRefreshQueue; await h.waitForViewRefresh();
+				assert.equal(h.view.memos.length, 150, "后台首批不能覆盖原来已读取的三页");
+				assert.equal(dom.root.querySelectorAll(".knomo-card").length, 150);
+				assert.match(h.view.memos[index]!.contentSnapshot, / edited$/);
+				assert.equal(dom.root.querySelectorAll(".knomo-card")[110], stable, "未编辑的深处卡片沿提交映射复用");
+			}
+			await production.restoreCardFlowAfterMobileSearch.call(h.view);
+			assert.equal(h.view.memos.length, 150, "搜索返回也保留同范围的已展开窗口");
+			assert.equal(await production.loadNextCatalogPage.call(h.view), true);
+			assert.equal(h.view.memos.length, 160);
+			assert.equal(new Set(h.view.memos.map(memo => memo.id)).size, 160);
+		} finally { dom.dispose(); }
+	});
+});
+
 test("Things 任务提交在 Daily、Catalog 和真实分页计数接续中保留摘要，连续修改也可收尾", async () => {
 	for (const tagged of [false, true]) for (const total of [2, 51]) {
 		const catalogGate = deferred<void>(), countGate = deferred<void>();
@@ -1149,7 +1206,7 @@ test("真实 Daily 编辑后的移动分页失效不会被等价输入及取消�
 	}
 });
 
-async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void> } = {}) {
+async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void>; refreshViews?: boolean } = {}) {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1234,11 +1291,16 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	const primary = await createView();
 	const plugin = Object.create(KnomoPlugin.prototype) as {
 		updateCommittedCatalogPartition: (input: MarkdownCatalogCommitInput) => Promise<void>;
+		runRefreshOpenViews: () => Promise<void>;
 	};
 	let afterPublished = async () => {};
+	let viewRefresh = Promise.resolve();
 	Object.assign(plugin, { app, catalogIndexCoordinator: { replaceCommittedFile: async (input: MarkdownCatalogCommitInput) => {
 		await seed(input.parsed); await afterPublished();
-	} }, queueRefreshOpenViews: async () => {} });
+	} }, queueRefreshOpenViews: () => {
+		if (options.refreshViews) viewRefresh = viewRefresh.then(() => plugin.runRefreshOpenViews());
+		return viewRefresh;
+	} });
 	let failCatalog = false;
 	const updateCatalogPartition = async (input: MarkdownCatalogCommitInput) => {
 		await options.catalogGate;
@@ -1267,6 +1329,7 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		randomLoads: () => randomLoads, createView, externalReplace, failCatalog: () => { failCatalog = true; },
 		afterCatalogPublished: (action: () => Promise<void>) => { afterPublished = action; },
 		setDiscoveryGate: (gate: Promise<MemoViewItem[]> | null) => { discoveryGate = gate; },
+		waitForViewRefresh: () => viewRefresh,
 		edit: (memo: MemoViewItem, content: string) => command.edit(memo.catalog!, content) };
 }
 

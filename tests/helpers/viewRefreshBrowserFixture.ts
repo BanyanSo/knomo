@@ -13,6 +13,7 @@ import { syncResultCountSummary } from "../../src/ui/ResultCountSummary";
 import { getRegularFilterCopy } from "../../src/ui/viewFilters";
 import { MobileSearchController, type MobileSearchPage } from "../../src/ui/MobileSearchController";
 import { createCatalogCapabilities } from "../../src/services/MemoCapabilityModel";
+import { TimeBuoyViewController } from "../../src/ui/TimeBuoyViewController";
 import { getKnomoLocale, t } from "../../src/i18n";
 
 export function installDomHelpers(): void {
@@ -145,6 +146,67 @@ export async function geometry(options: { review: boolean; recent: boolean; imag
 		render(); samples.push(sample()); await h.settle(); samples.push(sample());
 	}
 	return { samples, sameImage: image === flow.querySelector("img"), loads: h.loads() };
+}
+
+export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mobile: boolean; editAbove: boolean }) {
+	const h = fixture(options.mobile), { view, flow } = h;
+	h.context.enabled = false;
+	const today = "2026-11-08", count = options.surface === "feed" ? 150 : 90;
+	let memos = Array.from({ length: 150 }, (_, index) => {
+		const memo = h.makeMemo(index, 0, index === 95, "2026-08-08");
+		memo.catalog!.timeBuoyDates = [today];
+		return memo;
+	});
+	let rendering = false;
+	const buoy = new TimeBuoyViewController({ getNow: () => new Date(2026, 10, 8), queryDate: async () => ({ items: [], stale: [], missingPeriods: [] }),
+		queryPage: async request => {
+			const offset = Number(request.cursor?.observationKey ?? 0), end = Math.min(offset + request.limit, memos.length);
+			return { items: memos.slice(offset, end).map(memo => ({ memo, instance: { memoId: memo.id, targetDate: today } })),
+				nextCursor: end < memos.length ? { today, tab: request.tab, catalogRevision: 1, coverageKey: "complete", primaryTargetDate: today,
+					createdAtKey: memos[end - 1]!.createdAt, observationKey: String(end) } : null,
+				catalogRevision: 1, complete: true, stale: [], missingPeriods: [], metrics: { cursorReads: 1, observationsRead: 30, returned: 30 } };
+		}, requestRender: () => { if (rendering) view.renderTimeBuoyPage(); } });
+	const render = () => options.surface === "buoy" ? view.renderTimeBuoyPage()
+		: view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: view.memos }, null);
+	Object.assign(view, {
+		memos, catalogDesktopQueryRun: 0, catalogTodayTimeBuoys: null,
+		getFilteredMemos: () => view.memos, shouldShowTodayTimeBuoys: () => false, getInitialCardBatchSize: () => count,
+		randomReunionController: { applyMemoChanges() {} }, shuffleDayController: { applyMemoChanges() {} }, timeBuoyViewController: buoy,
+		renderUiState: () => render(), getA11yId: () => "buoy", renderCardFlow: render,
+		timeBuoyBatchFrameId: null, timeBuoyRenderedCount: 0, timeBuoyRenderItems: [], timeBuoyLoadMoreObserver: null,
+	});
+	view.memoMarkdownRenderer.retainCard = () => {};
+	if (options.surface === "buoy") {
+		view.viewStateController.activeNav = "time-buoy";
+		await buoy.loadInitial(); await buoy.loadMore(); await buoy.loadMore();
+		view.timeBuoyPanelEl = flow.createEl("section", { cls: "knomo-time-buoy-panel", attr: { id: "buoy-panel-today" } });
+		view.timeBuoyRenderItems = buoy.getSnapshot().today;
+		rendering = true;
+	}
+	render(); await h.settle();
+	const cards = () => [...flow.querySelectorAll<HTMLElement>(".knomo-card")];
+	const sample = () => {
+		const top = flow.getBoundingClientRect().top;
+		const card = cards().find(card => card.getBoundingClientRect().bottom > top)!;
+		return { scroll: flow.scrollTop, anchor: /^Memo \d+/.exec(card.querySelector(".knomo-card-content")!.textContent!)?.[0],
+			offset: card.getBoundingClientRect().top - top, count: cards().length };
+	};
+	const reader = cards()[70]!;
+	flow.scrollTop += reader.getBoundingClientRect().top - flow.getBoundingClientRect().top + 12;
+	await frames();
+	const samples = [sample()], editedIndex = options.editAbove ? 50 : 70;
+	const previous = memos;
+	memos = memos.map((before, index) => {
+		const memo = h.makeMemo(index, 1, index === 95, "2026-08-08");
+		memo.catalog!.timeBuoyDates = [today];
+		if (index === editedIndex) { memo.contentSnapshot += " updated long paragraph".repeat(40); memo.contentHash = "edited"; }
+		return memo;
+	});
+	view.applyCachedMemoChanges(new Map(previous.map((before, index) => [before.id, memos[index]!])));
+	samples.push(sample()); await h.settle(); samples.push(sample());
+	if (options.surface === "buoy") await buoy.loadInitial(); else render();
+	await h.settle(); samples.push(sample());
+	return { samples };
 }
 
 export async function surface(surface: "buoy" | "subject", richMarkdown = false, imageChange: "none" | "modified" | "removed" | "same-key" = "none") {

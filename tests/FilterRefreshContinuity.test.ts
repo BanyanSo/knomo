@@ -430,3 +430,73 @@ test("组合筛选确认零结果只显示现有空态，空搜索不生成计�
 	try { assert.equal(empty.controller.results!.querySelector(".knomo-search-result-count"), null); }
 	finally { empty.close(); }
 });
+
+test("移动组合首查等待、失败及不完整空切片不显示零条，确认完整空结果后才显示", async t => {
+	for (const outcome of ["ready", "empty", "partial", "failed"] as const) await t.test(outcome, async () => {
+		const pending = deferred<MobileSearchPage>();
+		let complete = true;
+		const h = await searchFixture({ query: "memo", date: "month", things: true }, {
+			loadRemoteResults: async () => {
+				const page = await pending.promise;
+				if (outcome === "failed") throw new Error("Combination unavailable");
+				return page;
+			},
+			onResultsAccepted: page => { complete = page.coverage.kind === "complete"; },
+			getResultStatus: () => ({ complete, blocked: false,
+				headers: complete ? [] : [{ type: "summary", text: "Coverage incomplete" }] }),
+		});
+		try {
+			const root = h.controller.results!;
+			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			const page = h.page();
+			if (outcome !== "ready") page.items = [];
+			if (outcome === "partial") page.coverage = { ...page.coverage, kind: "partial", pendingFileCount: 1 };
+			pending.resolve(page);
+			await new Promise<void>(resolve => setImmediate(resolve));
+			if (outcome === "empty") assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			else assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			if (outcome === "partial") assert.match(root.textContent!, /Coverage incomplete/u);
+			if (outcome === "failed") assert.match(root.textContent!, /Could not load this view/u);
+		} finally { pending.resolve(h.page()); h.close(); }
+	});
+});
+
+test("移动组合空窗口仍有下一页时保留加载入口，数量确认为零才显示空态，失效后撤下结论", async t => {
+	for (const total of [null, 0]) await t.test(String(total), async () => {
+		const pending = deferred<MobileSearchPage>(), count = deferred<CatalogMemoCountResult>(), started = deferred<void>();
+		const h = await searchFixture({ query: "memo", date: "month", things: true }, {
+			loadRemoteResults: () => pending.promise,
+			countRemoteResults: async () => { started.resolve(); return count.promise; },
+		});
+		const page = h.page();
+		page.items = [];
+		page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } };
+		const result = { count: total, complete: total !== null, catalogRevision: 1, coverage: page.coverage };
+		try {
+			pending.resolve(page);
+			await started.promise;
+			const root = h.controller.results!;
+			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "pending");
+			assert.ok(root.querySelector(".knomo-mobile-search-more"));
+			count.resolve(result);
+			await new Promise<void>(resolve => setImmediate(resolve));
+			if (total === null) {
+				assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+				assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
+			} else {
+				assert.equal(root.querySelector(".knomo-search-result-count"), null);
+				assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			}
+			page.nextCursor = null;
+			await h.controller.refreshAppliedResults();
+			assert.equal(root.querySelector(".knomo-search-result-count"), null);
+			assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			h.controller.updateCatalogProgress({ ...page.coverage, coveredFileCount: 2, totalFileCount: 2 });
+			h.controller.renderResults();
+			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
+			assert.ok(root.querySelector(".knomo-mobile-search-more"));
+		} finally { pending.resolve(page); count.resolve(result); h.close(); }
+	});
+});

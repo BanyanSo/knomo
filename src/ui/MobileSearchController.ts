@@ -913,7 +913,7 @@ export class MobileSearchController {
 			this.syncResultMetadata(memos.length, visibleMemos.length, true, !status); return;
 		}
 		// 总数晚到时仅沿用已开始渲染的卡片列表；空搜索提示不能新增加载入口。
-		if (metadataOnly && sameView && this.renderedPending === waiting && this.renderedStatus === status
+		if (metadataOnly && sameView && memos.length > 0 && this.renderedPending === waiting && this.renderedStatus === status
 			&& (!relationQuery || visibleMemos.length > 0)
 			&& (this.session.result !== null || !waiting)
 			&& targetRevisions !== null && revisions.length === targetRevisions.length
@@ -1013,11 +1013,14 @@ export class MobileSearchController {
 		if (memos.length === 0 && status) { this.syncResultMetadata(0, 0, false, false); completeRender(); return; }
 		if (memos.length === 0 && relationQuery && (readStatus?.complete === false || this.acceptedResultsInvalidated)) { completeRender(); return; }
 		if (memos.length === 0) {
-			this.syncResultMetadata(0, 0, false);
-			resultsEl.createDiv({
-				cls: "knomo-mobile-search-empty",
-				text: this.getResultCopy(0)?.emptyTitle,
-			});
+			const confirmedEmpty = this.getDisplayedCount() === 0 && !this.acceptedResultsInvalidated;
+			this.syncResultMetadata(0, 0, !confirmedEmpty);
+			if (confirmedEmpty) {
+				resultsEl.createDiv({
+					cls: "knomo-mobile-search-empty",
+					text: this.getResultCopy(0)?.emptyTitle,
+				});
+			}
 			completeRender();
 			return;
 		}
@@ -1112,13 +1115,13 @@ export class MobileSearchController {
 	private syncResultMetadata(matchedCount: number, visibleCount: number, updateMore: boolean, updateSummary = true): void {
 		const results = this.resultsEl;
 		if (!results) return;
-		const total = this.getDisplayedCount();
+		const total = matchedCount === 0 && this.acceptedResultsInvalidated ? null : this.getDisplayedCount();
 		const key = this.getDisplayedRequestKey();
 		const blocked = this.queryError !== null || this.options.getResultStatus?.(this.getDisplayedFilter()).blocked === true;
 		const pending = !blocked && ((this.countController !== null && key === this.getRequestKey(this.getAppliedFilter()))
 			|| (this.queryController !== null && this.pendingQueryKey === key));
 		if (blocked || (total === 0 && !this.acceptedResultsInvalidated)) this.summaryPresentation = null;
-		else if (updateSummary && key !== null && (total !== null || matchedCount > 0)) {
+		else if (updateSummary && key !== null) {
 			// 只允许同范围已展示的真实数量接续；新范围首批结果立即建立固定摘要。
 			const retained = this.summaryPresentation?.key === key && this.summaryPresentation.summary.count !== null;
 			if (total !== null || !retained) {

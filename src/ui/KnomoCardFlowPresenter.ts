@@ -15,7 +15,7 @@ export interface CardFlowRegularFilterCopy {
 export type CardFlowHeader =
 	| { type: "result-summary"; summary: ResultCountSummary; relationCount?: boolean }
 	| { type: "summary"; text: string; action?: { label: string; action: string }; feedback?: boolean; relationCount?: boolean }
-	| { type: "random-toolbar"; count: number }
+	| { type: "random-toolbar"; summary: ResultCountSummary }
 	| { type: "trash-toolbar"; count: number; busy: boolean }
 	| { type: "random-day"; selectedDate: string; stats: ShuffleDaySnapshot["stats"] }
 	| { type: "shuffle-day"; selectedDate: string; stats: NonNullable<ShuffleDaySnapshot["stats"]> };
@@ -87,9 +87,9 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			&& options.memos.length === 0) {
 			return {
 				type: "empty",
-				title: t("empty.randomLoading"),
+				title: options.randomReunionStatus === "loading-candidates" ? t("empty.randomLoading") : "",
 				description: "",
-				...(options.randomReunionStatus === "loading-candidates" ? { headers: [{ type: "random-toolbar" as const, count: 0 }] } : {}),
+				headers: [getRandomReunionToolbar(null, options.randomReunionStatus === "loading-candidates")],
 			};
 		}
 
@@ -98,7 +98,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 				type: "empty",
 				title: t("error.randomLoadFailed"),
 				description: options.randomReunionError ?? "",
-				headers: [{ type: "random-toolbar", count: 0 }],
+				headers: [getRandomReunionToolbar(null)],
 			};
 		}
 	}
@@ -106,11 +106,17 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		return getShuffleDayCardFlowPresentation(options.shuffleDay);
 	}
 	if (options.memos.length === 0) {
+		if (options.regularFilterCopy?.summary.count === null) {
+			return {
+				type: "empty", title: "", description: "", loading: options.regularFilterCopy.summary.pending,
+				headers: [{ type: "result-summary", summary: options.regularFilterCopy.summary }],
+			};
+		}
 		return {
 			type: "empty",
 			title: options.regularFilterCopy?.emptyTitle ?? getEmptyStateTitle(options.activeNav),
 			description: "",
-			...(options.activeNav === "random" ? { headers: [{ type: "random-toolbar" as const, count: 0 },
+			...(options.activeNav === "random" ? { headers: [getRandomReunionToolbar(0),
 				...(options.randomReunionError ? [{ type: "summary" as const, text: options.randomReunionError, feedback: true }] : [])] } : {}),
 		};
 	}
@@ -120,7 +126,7 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		headers.push({ type: "result-summary", summary: { template: "list.reviewSummary", params: {}, count: options.matchedTotalCount, pending: options.matchedTotalCount === null && (options.countPending ?? false) } });
 	}
 	if (options.activeNav === "random") {
-		headers.push({ type: "random-toolbar", count: options.memos.length });
+		headers.push(getRandomReunionToolbar(options.memos.length));
 		if (options.randomReunionError) headers.push({ type: "summary", text: options.randomReunionError, feedback: true });
 	}
 	if (options.regularFilterCopy !== null) {
@@ -132,6 +138,10 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 		mode: "memo",
 		headers,
 	};
+}
+
+function getRandomReunionToolbar(count: number | null, pending = false): CardFlowHeader {
+	return { type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count, pending } };
 }
 
 function getShuffleDayCardFlowPresentation(snapshot: ShuffleDaySnapshot, retryAction = "refresh-shuffle-day"): CardFlowPresentation {

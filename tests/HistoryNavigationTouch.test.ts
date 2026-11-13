@@ -182,7 +182,159 @@ test("随机列表有卡片、空批次、读取失败和恢复后，同页换�
 	} finally { h.close(); }
 });
 
-async function harness(projection: "ready" | "failed" = "ready") {
+test("随机首帧等待及零条、非空和失败终态在 Monthly 故障下保留同一摘要和按钮", async t => {
+	for (const entry of ["navigation", "stats-return"]) for (const projection of ["ready", "failed"] as const) for (const outcome of ["ready", "empty", "failed"] as const) {
+		await t.test(`${entry}:${projection}:${outcome}`, async () => {
+			const h = await harness(projection, false);
+			const pending = createDeferred<MemoViewItem[]>();
+			try {
+				h.state.batchRead = async () => {
+					const memos = await pending.promise;
+					if (outcome === "failed") throw new Error("Candidate read failed");
+					return memos;
+				};
+				if (entry === "navigation") h.view.viewStateController.activeNav = "all";
+				else h.view.viewStateController.setSidebarNav("record-stats");
+				const states: Array<string | null> = [];
+				const render = h.view.renderCardFlow.bind(h.view);
+				h.view.renderCardFlow = (...args: unknown[]) => {
+					render(...args);
+					states.push(h.flow.querySelector(".knomo-result-summary-count")?.getAttribute("data-state") ?? null);
+				};
+				if (entry === "navigation") h.view.setSidebarNav("random");
+				else h.view.returnFromRecordStats();
+				assert.ok(states.length > 0);
+				assert.ok(states.every(state => state === "pending"), "导航的每次首帧绘制都应处于真实请求等待");
+				const button = h.button("refresh-random-reunion");
+				const summary = button.parentElement!.querySelector(".knomo-result-summary")!;
+				const fixed = summary.firstChild, slot = summary.querySelector(".knomo-result-summary-count")!;
+				assert.equal(slot.getAttribute("aria-label"), "Loading");
+				assert.match(h.flow.querySelector(".knomo-empty-title")!.textContent!, /Looking for memos/u);
+				button.focus();
+				const observer = h.observe(button);
+				pending.resolve(outcome === "ready" ? [h.memo] : []);
+				await settle();
+				assert.equal(slot.getAttribute("data-state"), outcome === "failed" ? "unavailable" : "ready");
+				assert.equal(slot.querySelector(".knomo-result-summary-value")!.textContent, outcome === "failed" ? "—" : outcome === "empty" ? "0" : "1");
+				assert.equal(h.flow.querySelectorAll(".knomo-catalog-status").length, projection === "failed" ? 1 : 0);
+				if (outcome === "failed") assert.match(h.flow.textContent!, /Candidate read failed/u);
+				if (outcome === "empty") assert.match(h.flow.querySelector(".knomo-empty-title")!.textContent!, /Not enough memos/u);
+				assert.equal(summary.firstChild, fixed);
+				assert.equal(summary.querySelector(".knomo-result-summary-count"), slot);
+				assert.equal(h.button("refresh-random-reunion"), button);
+				assert.equal(h.win.document.activeElement, button);
+				h.assertRetained(observer, button);
+			} finally { pending.resolve([]); await settle(); h.close(); }
+		});
+	}
+});
+
+test("随机换组等待和失败保留旧卡片及数量，重试接纳新批次后同步数量并回到顶部", async () => {
+	const h = await harness("failed");
+	const pending = createDeferred<MemoViewItem[]>();
+	try {
+		const card = h.flow.querySelector(".knomo-card");
+		const button = h.button("refresh-random-reunion");
+		const summary = button.parentElement!.querySelector(".knomo-result-summary")!;
+		const slot = summary.querySelector(".knomo-result-summary-count")!;
+		const fixed = summary.firstChild;
+		h.state.batchRead = async () => { await pending.promise; throw new Error("Next batch failed"); };
+		h.flow.scrollTop = 420;
+		const refreshing = h.view.refreshHistorySelection("random");
+		assert.equal(h.flow.querySelector(".knomo-card"), card);
+		assert.equal(slot.getAttribute("data-state"), "ready");
+		assert.equal(slot.querySelector(".knomo-result-summary-value")!.textContent, "1");
+		pending.resolve([]);
+		await refreshing;
+		assert.equal(h.flow.querySelector(".knomo-card"), card);
+		assert.equal(h.flow.scrollTop, 420);
+		assert.match(h.flow.textContent!, /previous results/u);
+		h.state.batchRead = async () => [h.memo, { ...h.memo, id: "next-memo", catalog: { ...h.memo.catalog!, key: "next-memo", renderKey: "next-memo" } }];
+		await h.view.refreshHistorySelection("random");
+		assert.equal(h.flow.querySelectorAll(".knomo-card").length, 2);
+		assert.equal(slot.querySelector(".knomo-result-summary-value")!.textContent, "2");
+		assert.equal(h.flow.scrollTop, 0);
+		assert.equal(h.button("refresh-random-reunion"), button);
+		assert.equal(summary.firstChild, fixed);
+		assert.equal(summary.querySelector(".knomo-result-summary-count"), slot);
+	} finally { pending.resolve([]); await settle(); h.close(); }
+});
+
+test("随机首查在活动页取消后退出等待，迟到成功或失败不覆盖重试", async t => {
+	for (const late of ["success", "failure"] as const) await t.test(late, async () => {
+		const h = await harness("failed", false);
+		const first = createDeferred<MemoViewItem[]>(), next = createDeferred<MemoViewItem[]>();
+		try {
+			h.state.batchRead = async () => {
+				const memos = await first.promise;
+				if (late === "failure") throw new Error("Late failure");
+				return memos;
+			};
+			const loading = h.random.refresh();
+			const button = h.button("refresh-random-reunion");
+			const slot = h.flow.querySelector(".knomo-result-summary-count")!;
+			h.random.cancelPending();
+			assert.equal(slot.getAttribute("data-state"), "unavailable");
+			assert.doesNotMatch(h.flow.textContent!, /Looking for memos/u);
+			h.state.batchRead = () => next.promise;
+			const retry = h.view.refreshHistorySelection("random");
+			assert.equal(slot.getAttribute("data-state"), "pending");
+			first.resolve([h.memo]);
+			await loading;
+			assert.equal(slot.getAttribute("data-state"), "pending");
+			next.resolve([]);
+			await retry;
+			assert.equal(slot.getAttribute("data-state"), "ready");
+			assert.equal(slot.querySelector(".knomo-result-summary-value")!.textContent, "0");
+			assert.equal(h.button("refresh-random-reunion"), button);
+		} finally { first.resolve([]); next.resolve([]); await settle(); h.close(); }
+	});
+});
+
+test("随机空批次仅切换 Catalog 诊断时，条件重绘保留摘要、按钮和焦点", async () => {
+	const h = await harness();
+	try {
+		h.random.removeMemo(h.memo.id);
+		const button = h.button("refresh-random-reunion");
+		const summary = button.parentElement!.querySelector(".knomo-list-summary")!;
+		const fixed = summary.firstChild, slot = summary.querySelector(".knomo-result-summary-count");
+		const observer = h.observe(button);
+		button.focus();
+		for (const status of [{ projection: "failed" }, { projection: "failed", settings: "unavailable" }, { projection: "ready" }]) {
+			const previous = h.view.getCardFlowStateKey();
+			h.view.catalogStatus = { content: "ready", catalog: "complete", ...status };
+			h.view.renderCardFlowIfChanged(previous);
+			assert.equal(h.flow.querySelectorAll(".knomo-catalog-status").length, status.projection === "failed" ? 1 : 0);
+			assert.equal(h.flow.querySelectorAll(".knomo-empty-state").length, 1);
+			assert.equal(h.button("refresh-random-reunion"), button);
+			assert.equal(summary.firstChild, fixed);
+			assert.equal(summary.querySelector(".knomo-result-summary-count"), slot);
+			assert.equal(h.win.document.activeElement, button);
+		}
+		h.assertRetained(observer, button);
+	} finally { h.close(); }
+});
+
+test("普通列表遗留错误不遮住随机读取自己的结果、失败或重试", async () => {
+	const h = await harness("failed", false);
+	try {
+		h.view.cardFlowError = "Other list failed";
+		h.view.viewStateController.activeNav = "all";
+		h.state.fail = true;
+		h.view.setSidebarNav("random");
+		await settle();
+		assert.match(h.flow.textContent!, /unreadable/u);
+		assert.doesNotMatch(h.flow.textContent!, /Other list failed/u);
+		h.state.fail = false;
+		await h.view.refreshHistorySelection("random");
+		assert.equal(h.flow.querySelectorAll(".knomo-card").length, 1);
+		assert.equal(h.flow.querySelector(".knomo-result-summary-value")!.textContent, "1");
+		assert.equal(h.flow.querySelectorAll(".knomo-catalog-status").length, 1);
+		assert.equal(h.view.cardFlowError, "Other list failed");
+	} finally { h.close(); }
+});
+
+async function harness(projection: "ready" | "failed" = "ready", loadInitial = true) {
 	const f = await createMobilePopupFixture();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const { Platform } = await import("obsidian");
@@ -196,7 +348,8 @@ async function harness(projection: "ready" | "failed" = "ready") {
 	const flow = f.root.createDiv({ cls: "knomo-card-flow" });
 	const memo = createReferenceMemo();
 	const state = { focused: true, active: true, fail: false, now: 0, hit: null as Element | null,
-		dayRead: async (): Promise<MemoViewItem[]> => [memo] };
+		dayRead: async (): Promise<MemoViewItem[]> => [memo],
+		batchRead: async (): Promise<MemoViewItem[]> => [{ ...memo }] };
 	const calls = { loads: 0, reviews: 0 };
 	const timers = new Map<number, { at: number; run: () => void }>(); let timerId = 0;
 	win.setTimeout = (run, delay = 0) => { timers.set(++timerId, { at: state.now + delay, run: run as () => void }); return timerId; };
@@ -208,7 +361,7 @@ async function harness(projection: "ready" | "failed" = "ready") {
 	doc.elementFromPoint = () => state.hit;
 	const scope = view.getRenderScope();
 	Object.assign(view, { containerEl: { doc, win }, rootEl: f.root, cardFlowEl: flow, composerOpen: false,
-		mobileSearchController: { isOpen: false }, mobileViewFocusRecovery: null, trashViewClosed: false,
+		mobileSearchController: { isOpen: false, resetState() {}, cancelPendingRequest() {} }, mobileViewFocusRecovery: null, trashViewClosed: false,
 		app: { workspace: { getActiveViewOfType: () => state.active ? view : null } },
 		register: scope.register, registerDomEvent: scope.registerDomEvent,
 		lastKnownLocalDate: formatTimeBuoyDate(new Date()), recentLifecycleKey: "", cardFlowError: null,
@@ -218,12 +371,13 @@ async function harness(projection: "ready" | "failed" = "ready") {
 		trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [], trashCount: 0 }) },
 		mobileHeaderTitleController: { getAnchor: () => null },
 		catalogReadService: { refreshMemoViews: async (memos: MemoViewItem[]) => memos },
-		recordStatsViewStateController: { clearRendered() {} },
+		recordStatsViewStateController: { clearRendered() {}, getSnapshot: () => ({ view: "week", selectedDate: new Date() }) },
+		recordStatsService: { getSnapshot: () => ({ state: "idle", error: null, updating: false, valid: false }) },
 		cardImageCache: { capture() {} }, memoMarkdownRenderer: { clear() {}, refreshSearchHits() {} },
 		cardImageLoadQueue: { clear() {}, forget() {} },
 		syncUiChrome() {}, renderStats() {}, renderTags() {}, renderTrashCount() {}, renderMobileSearchResults() {},
 		clearLoadingIndicators() {}, revealLoadingAfterDelay: () => false,
-		stopDateChangeWatcher() {}, startDateChangeWatcher() {},
+		stopDateChangeWatcher() {}, startDateChangeWatcher() {}, clearSearchDebounce() {},
 		renderHistoryLoadMore() {}, renderCardFlowSentinelIfNeeded() {}, syncCardMenuState() {},
 		renderTimeBuoyIntro: () => null, shouldShowTimeBuoyIntro: () => false,
 		getCatalogPresentationTotalCount: () => null,
@@ -242,7 +396,7 @@ async function harness(projection: "ready" | "failed" = "ready") {
 	});
 	view.viewStateController.activeNav = "random";
 	const random = new RandomReunionController({
-		loadRandomReunionMemos: async () => { calls.loads++; if (state.fail) throw new Error("unreadable"); return [{ ...memo }]; },
+		loadRandomReunionMemos: async () => { calls.loads++; if (state.fail) throw new Error("unreadable"); return state.batchRead(); },
 		openRandomReunionMemo: async () => {}, markRandomReunionReviewed: async () => { calls.reviews++; },
 		isRandomActive: () => !view.trashViewClosed && view.activeNav === "random" && !view.randomDayOpen,
 		showNotice() {}, requestRender: () => view.renderUiState(),
@@ -257,7 +411,7 @@ async function harness(projection: "ready" | "failed" = "ready") {
 	view.userActionController = view.createUserActionController();
 	view.register(view.registerWindowFocusEvent());
 	view.registerMobileMenuTriggerEvents();
-	await random.refresh();
+	if (loadInitial) await random.refresh();
 	const button = (action: string) => { const element = flow.querySelector<HTMLButtonElement>(`[data-action='${action}']`); assert.ok(element, action); return element; };
 	const advance = async (ms: number) => {
 		const end = state.now + ms;

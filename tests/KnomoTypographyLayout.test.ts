@@ -16,6 +16,7 @@ interface TypographyWindow extends Window {
 		renderKnomoRandomReunionToolbar: typeof import("../src/ui/KnomoFeed").renderKnomoRandomReunionToolbar;
 		renderKnomoShuffleDayHeader: typeof import("../src/ui/KnomoFeed").renderKnomoShuffleDayHeader;
 		renderKnomoCardFlowHeaders: typeof import("../src/ui/KnomoFeed").renderKnomoCardFlowHeaders;
+		syncKnomoCardFlowHeaders: typeof import("../src/ui/KnomoFeed").syncKnomoCardFlowHeaders;
 		MobileHeaderTitleController: typeof import("../src/ui/MobileHeaderTitleController").MobileHeaderTitleController;
 		undoDepth: typeof import("@codemirror/commands").undoDepth;
 		undo: typeof import("@codemirror/commands").undo;
@@ -137,7 +138,7 @@ async function typographyBundle() {
 			export { measureSuggestionContentWidth } from "./src/ui/composerSuggestPosition";
 			export { KnomoTagSuggest } from "./src/ui/KnomoTagSuggest";
 			export { KnomoWikiLinkSuggest } from "./src/ui/KnomoWikiLinkSuggest";
-			export { renderKnomoListSummary, renderKnomoActionableListSummary, renderKnomoRandomReunionToolbar, renderKnomoShuffleDayHeader, renderKnomoCardFlowHeaders } from "./src/ui/KnomoFeed";
+			export { renderKnomoListSummary, renderKnomoActionableListSummary, renderKnomoRandomReunionToolbar, renderKnomoShuffleDayHeader, renderKnomoCardFlowHeaders, syncKnomoCardFlowHeaders } from "./src/ui/KnomoFeed";
 			export { MobileHeaderTitleController } from "./src/ui/MobileHeaderTitleController";
 			export { undoDepth, undo, redo } from "@codemirror/commands";
 		`, resolveDir: process.cwd(), loader: "ts" },
@@ -145,7 +146,7 @@ async function typographyBundle() {
 		plugins: [{ name: "host-api-fixture", setup(builder) {
 			builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "fixture" }));
 			builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: `
-				export const getLanguage = () => "en";
+				export const getLanguage = () => document.documentElement.lang || "en";
 				export const setIcon = (el, name) => {
 					const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 					svg.classList.add("svg-icon"); svg.setAttribute("data-icon", name); el.replaceChildren(svg);
@@ -180,6 +181,66 @@ const installDomHelpers = () => {
 		instanceOf(this: HTMLElement, ctor: typeof HTMLElement) { return this instanceof ctor; },
 	});
 };
+
+test("随机摘要复用共享数字槽，在两种语言、亮暗主题、窄屏和减少动态效果下保留按钮与加载状态", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
+	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
+	const bundle = await typographyBundle(), css = readFileSync("styles.css", "utf8");
+	try {
+		const page = await browser.newPage();
+		for (const locale of ["en", "zh-CN"]) for (const theme of ["theme-light", "theme-dark"]) {
+			for (const width of [320, 900]) for (const reducedMotion of ["reduce", "no-preference"]) {
+				await page.setViewportSize({ width, height: 900 });
+				await page.emulateMedia({ reducedMotion });
+				await page.setContent(`<!doctype html><html lang="${locale}"><style>${hostFixture}${css}</style><body class="${theme}"><main class="probe knomo-plugin is-layout-${width < 500 ? "mobile" : "desktop-wide"}"></main></body></html>`);
+				await page.addScriptTag({ content: bundle });
+				await page.evaluate(installDomHelpers);
+				const actual = await page.evaluate(() => {
+					const { syncKnomoCardFlowHeaders } = (window as unknown as TypographyWindow).KnomoTypographyFixture;
+					const root = document.querySelector<HTMLElement>("main")!;
+					const sync = (count: number | null, pending: boolean) => syncKnomoCardFlowHeaders(root, [{
+						type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count, pending },
+					}], "random");
+					sync(null, true);
+					const button = root.querySelector("button")!;
+					const summary = root.querySelector(".knomo-result-summary")!;
+					const slot = summary.querySelector<HTMLElement>(".knomo-result-summary-count")!;
+					const fixed = summary.firstChild;
+					button.focus();
+					const dot = slot.querySelector<HTMLElement>(".knomo-result-summary-dots > span")!;
+					const pending = { state: slot.dataset.state, animation: getComputedStyle(dot).animationName,
+						dots: getComputedStyle(dot, "::before").content, label: slot.getAttribute("aria-label") };
+					sync(null, false);
+					const unavailable = slot.textContent;
+					sync(null, true);
+					sync(0, false);
+					const revealed = slot.classList.contains("is-revealing");
+					slot.classList.remove("is-revealing");
+					sync(2, false);
+					const buttonRect = button.getBoundingClientRect(), summaryRect = summary.getBoundingClientRect();
+					return { pending, unavailable, revealed, repeatedReveal: slot.classList.contains("is-revealing"),
+						retained: root.querySelector("button") === button && document.activeElement === button
+							&& summary.firstChild === fixed && summary.querySelector(".knomo-result-summary-count") === slot,
+						state: slot.dataset.state, label: slot.getAttribute("aria-label"),
+						fits: buttonRect.right <= root.getBoundingClientRect().right + 1 && summaryRect.right <= buttonRect.left,
+						text: summary.textContent };
+				});
+				const context = JSON.stringify({ locale, theme, width, reducedMotion, actual });
+				assert.equal(actual.pending.state, "pending", context);
+				assert.equal(actual.pending.animation, reducedMotion === "reduce" ? "none" : "knomo-result-count-dot", context);
+				assert.equal(actual.pending.dots, '"."', context);
+				assert.equal(actual.pending.label, locale === "en" ? "Loading" : "正在加载", context);
+				assert.match(actual.unavailable!, /—/u);
+				assert.equal(actual.revealed, true, context);
+				assert.equal(actual.repeatedReveal, false, context);
+				assert.equal(actual.retained && actual.fits, true, context);
+				assert.equal(actual.state, "ready", context);
+				assert.equal(actual.label, "2", context);
+				assert.match(actual.text!, locale === "en" ? /2 memos/u : /随机重逢了 2 条/u);
+			}
+		}
+	} finally { await browser.close(); }
+});
 
 test("top titles and summaries retain hierarchy, spacing and button reachability across desktop and mobile layouts", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
@@ -216,7 +277,7 @@ test("top titles and summaries retain hierarchy, spacing and button reachability
 				fixture.renderKnomoListSummary(container("ordinary"), "标签 #日常 · 2026年10月 · 关键词 项目复盘 · 共 28 条笔记");
 				card(container("ordinary"));
 				fixture.renderKnomoListSummary(container("long"), "#" + "LongTagAndSearchKeyword".repeat(20));
-				const random = fixture.renderKnomoRandomReunionToolbar(container("random"), 12345);
+				const random = fixture.renderKnomoRandomReunionToolbar(container("random"), { template: "list.randomSummary", params: {}, count: 12345, pending: false });
 				random.querySelector(".knomo-list-summary")!.textContent += " · " + "LongSearchKeyword".repeat(8);
 				fixture.renderKnomoActionableListSummary(container("catalog"), "当前笔记暂不可用 · " + "LongConfigurationMessage".repeat(8), { label: "重试", action: "refresh-catalog-sync-state" });
 				fixture.renderKnomoShuffleDayHeader(container("shuffle"), "2026-10-18", { memoCount: 12, wordCount: 1234, tagCount: 5, imageCount: 2, linkCount: 3, firstMemoTime: null, lastMemoTime: null });
@@ -321,7 +382,7 @@ test("random day summary and back button share the random toolbar layout on desk
 				await page.evaluate(installDomHelpers);
 				const actual = await page.evaluate((content: string) => {
 					const fixture = (window as unknown as TypographyWindow).KnomoTypographyFixture;
-					fixture.renderKnomoRandomReunionToolbar(document.getElementById("random")!, 7);
+					fixture.renderKnomoRandomReunionToolbar(document.getElementById("random")!, { template: "list.randomSummary", params: {}, count: 7, pending: false });
 					const day = document.getElementById("day")!;
 					fixture.renderKnomoCardFlowHeaders(day, [{ type: "random-day", selectedDate: "2025-12-29", stats: content === "empty" ? null : {
 						memoCount: 7, wordCount: 200, tagCount: 1, imageCount: 0, linkCount: 0, firstMemoTime: null, lastMemoTime: null,

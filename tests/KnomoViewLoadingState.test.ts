@@ -133,6 +133,7 @@ test("首次加载规则保留随机、漫游、回收站状态和独立页面�
 	const h = await createLoadingHarness(false);
 	try {
 		for (const [nav, title] of [["random", "empty.randomLoading"], ["shuffleDay", "shuffleDay.loadingTitle"], ["trash", "empty.trashEmptyTitle"]] as const) {
+			if (nav === "random") h.view.randomReunionController.getSnapshot = () => ({ status: "loading-candidates", error: null, memos: null });
 			h.view.activeNav = nav;
 			h.view.renderCardFlow();
 			assert.equal(h.title(), t(title));
@@ -175,7 +176,8 @@ test("快速首查完成后旧计时器不能再覆盖卡片，切换独立页�
 			h.view.activeNav = "random";
 			h.view.forceRebuildCardFlow();
 			h.revealLoading();
-			assert.equal(h.title(), t("empty.randomLoading"));
+			assert.equal(h.title(), "");
+			assert.equal(h.root.querySelector(".knomo-result-summary-count")?.getAttribute("data-state"), "unavailable");
 		} finally { h.close(); }
 	}
 });
@@ -508,6 +510,45 @@ test("关闭查询代次后重新加载，两端迟到结果不能覆盖重新�
 	}
 });
 
+test("组合筛选首查和已有窗口切换时，等待、失败与不完整空切片不显示零条结论", async t => {
+	for (const warm of [false, true]) for (const outcome of ["ready", "empty", "partial", "failed"] as const) {
+		await t.test(`${warm ? "warm" : "cold"}:${outcome}`, async () => {
+			const h = await createLoadingHarness(false);
+			const pending = deferred<MemoLoad>();
+			let loading: Promise<unknown> | null = null;
+			try {
+				if (warm) {
+					h.view.loadCatalogMemos = async () => readyLoad([createReferenceMemo()]);
+					await h.loadInitial();
+				}
+				h.view.viewStateController.setSidebarNav("random");
+				h.view.viewStateController.setSidebarNav("things");
+				h.view.viewStateController.searchQuery = "target";
+				h.view.viewStateController.searchDateFilter = "month";
+				delete h.view.getFilteredMemos;
+				h.view.loadCatalogMemos = () => pending.promise;
+				loading = h.loadInitial();
+				h.view.renderUiState();
+				assert.equal(h.title(), null, "请求仍在等待时不能展示完整空结果标题");
+				const target = createReferenceMemo();
+				Object.assign(target.catalog!.observation, {
+					logicalDate: formatTimeBuoyDate(new Date()), hasTask: 1, content: "target", searchBody: ["target"], searchTokens: ["target"],
+				});
+				if (outcome === "failed") pending.reject(new Error("Combination query failed"));
+				else pending.resolve(outcome === "partial" ? buildingLoad([]) : readyLoad(outcome === "empty" ? [] : [target]));
+				await loading;
+				if (outcome === "empty") assert.match(h.title()!, /0 Memos/u);
+				else assert.doesNotMatch(h.root.textContent!, /0 Memos/u);
+				if (outcome === "ready") assert.equal(h.cards().length, 1);
+				if (outcome === "failed") {
+					assert.equal(h.view.viewStateController.search.requestStatus, "failed");
+					if (!warm) assert.match(h.root.textContent!, /Combination query failed/u);
+				}
+			} finally { pending.resolve(readyLoad([])); await loading; h.close(); }
+		});
+	}
+});
+
 // 仅隔离宿主、存储和正文卡片绘制；查询提交、状态判定与空态 DOM 使用实际实现。
 async function createLoadingHarness(mobile: boolean) {
 	await ensureObsidianStub();
@@ -527,6 +568,11 @@ async function createLoadingHarness(mobile: boolean) {
 		createDiv(this: HTMLElement, options?: { cls?: string; text?: string }) { return this.createEl("div", options); },
 		createSpan(this: HTMLElement, options?: { text?: string }) { return this.createEl("span", options); },
 		empty(this: HTMLElement) { this.replaceChildren(); },
+		setAttr(this: HTMLElement, key: string, value: string) { this.setAttribute(key, value); },
+		setText(this: HTMLElement, text: string) { this.textContent = text; },
+		addClass(this: HTMLElement, cls: string) { this.classList.add(cls); },
+		removeClass(this: HTMLElement, cls: string) { this.classList.remove(cls); },
+		toggleClass(this: HTMLElement, cls: string, force: boolean) { this.classList.toggle(cls, force); },
 		setAttrs(this: HTMLElement, attrs: Record<string, string>) { for (const [key, value] of Object.entries(attrs)) this.setAttribute(key, value); },
 	});
 	const root = dom.window.document.body.createDiv({ cls: "knomo-card-flow" });

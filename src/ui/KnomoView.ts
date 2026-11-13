@@ -4336,9 +4336,11 @@ export class KnomoView extends ItemView {
 			};
 		}
 		const randomSnapshot = this.randomReunionController.getSnapshot();
+		// 普通列表的读取错误不能遮住随机批次自己的结果与错误。
+		const cardFlowError = this.activeNav === "random" && !this.randomDayOpen ? null : this.cardFlowError;
 		const shuffleDaySnapshot = this.shuffleDayController.getSnapshot();
 		const trashSnapshot = this.trashMemoController.getSnapshot();
-		const shouldLoadListMemos = this.cardFlowError === null
+		const shouldLoadListMemos = cardFlowError === null
 			&& this.activeNav !== "trash"
 			&& this.activeNav !== "shuffleDay";
 		const todayItems = this.getTodayTimeBuoyItems();
@@ -4349,7 +4351,7 @@ export class KnomoView extends ItemView {
 		const matchedTotalCount = this.getCatalogPresentationTotalCount();
 		const countPending = this.catalogDesktopCountController != null || this.catalogDesktopQueryController != null;
 		let presentation = getCardFlowPresentation({
-			cardFlowError: this.activeNav === "shuffleDay" ? null : this.cardFlowError,
+			cardFlowError: this.activeNav === "shuffleDay" ? null : cardFlowError,
 			activeNav: this.activeNav,
 			randomReunionStatus: randomSnapshot.status,
 			randomReunionError: randomSnapshot.error,
@@ -4382,7 +4384,7 @@ export class KnomoView extends ItemView {
 			presentation = { ...presentation, headers: presentation.headers.map(header => header.type === "result-summary"
 				? { ...header, relationCount: true } : header) };
 		}
-		if (this.cardFlowError === null && this.activeNav !== "trash") {
+		if (cardFlowError === null && this.activeNav !== "trash") {
 			const headers = getCatalogReadStatusHeaders({
 				status: this.catalogStatus,
 				coverage: this.catalogCoverage,
@@ -4397,6 +4399,9 @@ export class KnomoView extends ItemView {
 			if (this.catalogStatus.relations?.complete === false && this.isReferrerQuery()
 				&& presentation.type === "empty") presentation = { type: "items", memos: [], mode: "memo", headers: [] };
 			if (headers.length === 0) return presentation;
+			if (presentation.type === "empty" && this.activeNav === "random" && !this.randomDayOpen) {
+				return { ...presentation, headers: [...headers, ...(presentation.headers ?? [])] };
+			}
 			return presentation.type === "items"
 				? { ...presentation, headers: [...headers, ...presentation.headers] }
 				: { type: "items", memos: [], mode: "memo", headers };
@@ -6134,6 +6139,14 @@ export class KnomoView extends ItemView {
 		if (result.reloadCatalogQuery) {
 			void this.reloadCurrentCatalogQuery(nav === "all");
 		}
+		if (result.refreshRandomReunion) {
+			if (this.randomReunionController.getSnapshot().status === "idle") {
+				// 导航负责首帧绘制和滚动，先同步建立真实的请求状态。
+				void this.randomReunionController.refresh(false);
+			} else {
+				void this.refreshRandomReunionBatch();
+			}
+		}
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
@@ -6144,13 +6157,6 @@ export class KnomoView extends ItemView {
 		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
-		}
-		if (result.refreshRandomReunion) {
-			if (this.randomReunionController.getSnapshot().status === "idle") {
-				void this.randomReunionController.refresh();
-			} else {
-				void this.refreshRandomReunionBatch();
-			}
 		}
 		if (result.refreshShuffleDay) {
 			if (this.shuffleDayController.getSnapshot().status === "idle") {
@@ -6196,6 +6202,13 @@ export class KnomoView extends ItemView {
 		if (result.reloadCatalogQuery) {
 			void this.reloadCurrentCatalogQuery();
 		}
+		if (result.refreshRandomReunionIfEmpty) {
+			if (this.randomReunionController.getSnapshot().status === "idle") {
+				void this.randomReunionController.refresh(false);
+			} else {
+				void this.refreshRandomReunionBatch();
+			}
+		}
 		this.renderUiState({
 			renderCardFlow: !shouldDeferReview,
 			cardFlowChangeIntent: this.getCardFlowChangeIntent(previousViewStateKey),
@@ -6207,13 +6220,6 @@ export class KnomoView extends ItemView {
 		}
 		if (shouldDeferReview) {
 			this.renderAllMemosLoadingState();
-		}
-		if (result.refreshRandomReunionIfEmpty) {
-			if (this.randomReunionController.getSnapshot().status === "idle") {
-				void this.randomReunionController.refresh();
-			} else {
-				void this.refreshRandomReunionBatch();
-			}
 		}
 		if (result.refreshShuffleDayIfEmpty) {
 			if (this.shuffleDayController.getSnapshot().status === "idle") {

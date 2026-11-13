@@ -9,7 +9,7 @@ test("前置提示重复、变化及移除时，历史操作头部保持连接�
 	const { syncKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
 	try {
 		for (const header of [
-			{ type: "random-toolbar", count: 1 },
+			{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 1, pending: false } },
 			{ type: "random-day", selectedDate: "2026-10-22", stats: null },
 		] satisfies CardFlowHeader[]) {
 			const root = fixture.root.createDiv();
@@ -100,7 +100,7 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	});
 	assert.equal(actionable.find("[data-action='refresh-catalog-sync-state']")?.getText(), "Retry");
 
-	const toolbar = renderKnomoRandomReunionToolbar(root.asHtml(), 5);
+	const toolbar = renderKnomoRandomReunionToolbar(root.asHtml(), { template: "list.randomSummary", params: {}, count: 5, pending: false });
 	assert.equal(toolbar.hasClass("knomo-list-toolbar"), true);
 	assert.equal(toolbar.find(".knomo-list-summary")?.getText(), "5 memos found for a random revisit");
 	assert.equal(toolbar.find("[data-action='refresh-random-reunion']")?.getText(), "Shuffle");
@@ -108,7 +108,7 @@ test("renders feed summary, toolbar, load more buttons, and empty states", async
 	const headerRoot = new TestElement("div");
 	const headers = renderKnomoCardFlowHeaders(headerRoot.asHtml(), [
 		{ type: "summary", text: "3 memos were written on this day" },
-		{ type: "random-toolbar", count: 2 },
+		{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 2, pending: false } },
 	]);
 	assert.equal(headers.length, 2);
 	assert.equal(headers[0].hasClass("knomo-list-summary"), true);
@@ -187,7 +187,7 @@ test("重逢组失效或删除为空后两种视图渲染仍保留换一组入�
 	}) as typeof fixture.view & Record<string, any>;
 	view.viewStateController.activeNav = "random";
 	const presentation: Extract<import("../src/ui/KnomoCardFlowPresenter").CardFlowPresentation, { type: "empty" }> = {
-		type: "empty", title: "No current cards", description: "Source changed", headers: [{ type: "random-toolbar", count: 0 }],
+		type: "empty", title: "No current cards", description: "Source changed", headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 0, pending: false } }],
 	};
 	try {
 		for (const incremental of [true, false]) {
@@ -257,6 +257,11 @@ class TestElement {
 	getText(): string {
 		return this.text + this.children.map((child) => child.getText()).join("");
 	}
+
+	get textContent(): string { return this.getText(); }
+	addEventListener(): void {}
+	removeClass(cls: string): void { this.classes.delete(cls); }
+	getAttribute(key: string): string | null { return this.getAttr(key); }
 
 	setAttr(key: string, value: string): void {
 		this.attrs.set(key, value);

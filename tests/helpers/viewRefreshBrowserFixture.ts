@@ -107,7 +107,8 @@ function fixture(mobile = false, richMarkdown = false) {
 			catalog: { key: id, renderKey: id,
 				capabilities: { markdown: { view: true, copy: true, openDaily: true, edit: true, remove: true, explicitBlockReference: false } },
 				observationHandle: { sourcePath, sourceRevision, startLine: index, endLine: index + 1, rawBlockHash: `raw-${index}` },
-				observation: { sourcePath, sourceRevision, logicalDate: date, time: "09:00", timePrecision: "minute", rawBlockHash: `raw-${index}` },
+				observation: { key: id, sourcePath, sourceRevision, logicalDate: date, time: "09:00", timePrecision: "minute", rawBlockHash: `raw-${index}`,
+					createdAtKey: `${date}T09:00:${String(59 - index).padStart(2, "0")}` },
 				resolved: { capabilities: {} },
 			} as unknown as MemoViewItem["catalog"],
 		};
@@ -148,7 +149,7 @@ export async function geometry(options: { review: boolean; recent: boolean; imag
 	return { samples, sameImage: image === flow.querySelector("img"), loads: h.loads() };
 }
 
-export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mobile: boolean; editAbove: boolean }) {
+export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mobile: boolean; editAbove: boolean; external?: boolean }) {
 	const h = fixture(options.mobile), { view, flow } = h;
 	h.context.enabled = false;
 	const today = "2026-11-08", count = options.surface === "feed" ? 150 : 90;
@@ -202,11 +203,182 @@ export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mob
 		if (index === editedIndex) { memo.contentSnapshot += " updated long paragraph".repeat(40); memo.contentHash = "edited"; }
 		return memo;
 	});
-	view.applyCachedMemoChanges(new Map(previous.map((before, index) => [before.id, memos[index]!])));
+	if (options.external) {
+		view.memos = memos;
+		if (options.surface === "buoy") await buoy.loadInitial(); else render();
+	} else view.applyCachedMemoChanges(new Map(previous.map((before, index) => [before.id, memos[index]!])));
 	samples.push(sample()); await h.settle(); samples.push(sample());
 	if (options.surface === "buoy") await buoy.loadInitial(); else render();
 	await h.settle(); samples.push(sample());
 	return { samples };
+}
+
+export async function mobileRevisionGeometry(options: {
+	entry: "internal" | "external" | "cross-file";
+	edit: "grow" | "shrink" | "below" | "same" | "remove-anchor" | "reorder";
+	chunked?: boolean;
+	input?: "scroll" | "wheel" | "keyboard" | "pointer" | "touch" | "focus" | "composition";
+	readonly?: boolean;
+	sameBytes?: boolean;
+	repeatEdits?: number;
+	shrinkBelow?: boolean;
+	scrollToBottom?: boolean;
+	resourceChanged?: boolean;
+	expanded?: boolean;
+	restoreSameBytes?: boolean;
+	remaining?: number;
+}) {
+	const h = fixture(true), { view, flow } = h;
+	h.context.enabled = false;
+	const root = flow.parentElement!;
+	root.className = "knomo-plugin is-layout-mobile";
+	flow.style.display = "none";
+	const changedFileCount = options.expanded ? 100 : 10;
+	let memos = Array.from({ length: options.expanded ? 200 : 30 }, (_, index) => h.makeMemo(index, 0, (!!options.sameBytes || !!options.readonly) && index === 13,
+		options.entry === "cross-file" && index >= changedFileCount ? "2026-08-08" : "2026-11-08"));
+	const edited = options.edit === "below" || options.shrinkBelow ? 24 : 2;
+	const longText = " long paragraph with wrapping".repeat(50);
+	if (options.edit === "shrink") { memos[edited]!.contentSnapshot += longText; memos[edited]!.contentHash = "long"; }
+	const coverage = { kind: "complete" as const, coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 2, totalFileCount: 2 };
+	let replacements = 0, unavailable = false;
+	const callbacks = new Map<number, () => void>(); let task = 0;
+	const requests: number[] = [], taskBindings: string[] = [];
+	const controller = new MobileSearchController({
+		batchSize: options.expanded ? 50 : 30, debounceMs: 10, getWindow: () => window, getDocument: () => document,
+		getRootEl: () => root, isMobileLayout: () => true,
+		registerDomEvent: (target, type, callback) => target.addEventListener(type, callback), createHiddenText: (_container, name) => name,
+		filterMemos: items => [...items],
+		renderMemoCard: (container, memo, generation, index, images, handoff) => {
+			replacements++;
+			const card = view.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, images, undefined, handoff);
+			if (options.restoreSameBytes) {
+				// 模拟 Markdown 队列在静态占位交接后完成正文，任务绑定使用当前渲染参数。
+				queueMicrotask(() => {
+					const content = card.querySelector(".knomo-card-content")!;
+					content.textContent = memo.contentSnapshot;
+					content.createEl("input", { attr: { type: "checkbox",
+						"data-knomo-memo-id": memo.id, "data-knomo-task-index": "0" } });
+				});
+			}
+			return card;
+		},
+		retainCard: () => {}, clearMarkdown: () => {}, clearImages: () => {}, setCardFlowPaused: () => {},
+		closeSurroundingChrome: () => {}, closeCardMenu: () => {}, syncRootState: () => controller.syncPage(),
+		getCardFlowScrollTop: () => 0, restoreCardFlowScrollTop: () => {},
+		restoreElementScrollTop: (element, value) => { if (element && value !== null) element.scrollTop = value; },
+		handleMarkdownInternalLinkClick: () => {}, handleTaskCheckboxClick: () => {}, handleTaskCheckboxChange: event => {
+			const id = (event.target as HTMLElement).getAttribute("data-knomo-memo-id");
+			if (id) taskBindings.push(id);
+		},
+		scheduleRenderTask: callback => { callbacks.set(++task, callback); return task; },
+		cancelRenderTask: id => { callbacks.delete(id); },
+		loadRemoteResults: async (_filter, cursor) => {
+			if (unavailable) throw new Error("Catalog unavailable");
+			const offset = cursor ? Number(cursor.catalog.observationKey) : 0;
+			requests.push(offset);
+			const limit = options.expanded ? 50 : memos.length;
+			return { items: memos.slice(offset, offset + limit), catalogRevision: 1, coverage, readState: "ready", invalidated: false, degraded: false,
+			nextCursor: offset + limit < memos.length ? { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: String(offset + limit) } } : null,
+			status: { content: "ready", catalog: "complete", projection: "ready" }, capabilities: createCatalogCapabilities(coverage),
+			lifecycle: { state: "ready", persistent: true, writable: true, reason: null } };
+		},
+	});
+	controller.searchQuery = "Memo";
+	controller.openPage({ focusInput: false });
+	const results = controller.results!;
+	const page = results.closest<HTMLElement>(".knomo-mobile-search-page")!;
+	page.style.cssText = "display:block;position:static;width:360px;height:480px;visibility:visible;opacity:1";
+	results.style.cssText = "height:400px;width:360px;overflow:auto;flex:none;overflow-anchor:none";
+	await h.settle();
+	while (callbacks.size) { const [id, callback] = callbacks.entries().next().value!; callbacks.delete(id); callback(); }
+	const cards = () => [...results.querySelectorAll<HTMLElement>(".knomo-card")];
+	if (options.expanded) for (let more = 0; more < 2; more++) {
+		controller.loadMore(); await frames();
+		while (callbacks.size) { const [id, callback] = callbacks.entries().next().value!; callbacks.delete(id); callback(); }
+	}
+	const readerIndex = options.expanded ? 112 : 12;
+	const reader = cards()[readerIndex]!;
+	results.scrollTop += reader.getBoundingClientRect().top - results.getBoundingClientRect().top + 8;
+	reader.querySelector<HTMLElement>(".knomo-card-menu")!.focus({ preventScroll: true });
+	await frames();
+	const sample = () => {
+		const card = cards().find(card => card.querySelector(".knomo-card-content")?.textContent?.startsWith(`Memo ${readerIndex} `));
+		return { scroll: results.scrollTop, maxScroll: results.scrollHeight - results.clientHeight, offset: card ? card.getBoundingClientRect().top - results.getBoundingClientRect().top : null,
+			count: cards().length, height: results.scrollHeight, focus: document.activeElement === results ? "results"
+				: document.activeElement?.className ?? "", readerFocus: !!card?.contains(document.activeElement) };
+	};
+	const samples = [sample()], previous = memos;
+	const originalImage = results.querySelector("img");
+	const beforeReplacements = replacements;
+	memos = memos.map((before, index) => {
+		if (options.entry === "cross-file" && index >= changedFileCount) return before;
+		const after = h.makeMemo(index, 1, !!options.readonly && index === 13);
+		if (options.edit === "shrink") return after;
+		if (index === edited && options.edit !== "same" && options.edit !== "remove-anchor" && options.edit !== "reorder") {
+			after.contentSnapshot += longText; after.contentHash = "edited";
+		}
+		return after;
+	});
+	if (options.edit === "remove-anchor") memos.splice(12, 1);
+	if (options.edit === "reorder") [memos[2], memos[20]] = [memos[20]!, memos[2]!];
+	if (options.sameBytes || options.restoreSameBytes) memos = previous;
+	if (options.remaining !== undefined) memos = memos.slice(0, options.remaining);
+	let readonlyBindings: number | null = null;
+	if (options.readonly) {
+		controller.applyMemoChanges(new Map(previous.filter(before => options.entry !== "cross-file"
+			|| before.dailyRef.path === previous[0]!.dailyRef.path).map(before => [before.id, null])), [], false, true);
+		readonlyBindings = controller.getDisplayedMemos().length;
+		samples.push(sample());
+		if (options.restoreSameBytes) results.querySelector<HTMLInputElement>("input[type=checkbox]")!.click();
+		unavailable = true; await controller.refreshAppliedResults(); samples.push(sample());
+		unavailable = false;
+		if (options.resourceChanged) h.changeResource();
+	}
+	if (options.entry === "internal") controller.applyMemoChanges(new Map(previous.map(before => [before.id,
+		memos.find(after => after.dailyRef.lineNumberHint === before.dailyRef.lineNumberHint) ?? null])));
+	else await controller.refreshAppliedResults();
+	if (options.sameBytes) for (let repeat = 0; repeat < 2; repeat++) await controller.refreshAppliedResults();
+	samples.push(sample());
+	let userPosition: number | null = null;
+	if (options.input) {
+		if (options.input === "focus" || options.input === "composition") {
+			const input = page.querySelector<HTMLInputElement>("input")!;
+			input.focus({ preventScroll: true });
+			if (options.input === "composition") input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+		} else {
+			if (options.input === "wheel") results.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+			if (options.input === "touch") results.dispatchEvent(new Event("touchstart"));
+			if (options.input === "keyboard") results.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
+			if (options.input === "pointer") results.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+			results.scrollTop = options.scrollToBottom ? results.scrollHeight - results.clientHeight - 10 : results.scrollTop + 120;
+			userPosition = results.scrollTop;
+			results.dispatchEvent(new Event("scroll"));
+		}
+	}
+	while (callbacks.size) {
+		const [id, callback] = callbacks.entries().next().value!; callbacks.delete(id); callback();
+		samples.push(sample()); await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+	}
+	await h.settle(); samples.push(sample());
+	for (let repeat = 0; repeat < (options.repeatEdits ?? 0); repeat++) {
+		const before = memos;
+		memos = memos.map((_, index) => {
+			const memo = h.makeMemo(index, repeat + 2, false);
+			if (index === edited && repeat % 2 === 1) { memo.contentSnapshot += longText; memo.contentHash = "long"; }
+			return memo;
+		});
+		controller.applyMemoChanges(new Map(before.map((memo, index) => [memo.id, memos[index]!])));
+		samples.push(sample()); await h.settle(); samples.push(sample());
+	}
+	const finalCount = cards().length;
+	if (options.restoreSameBytes) results.querySelector<HTMLInputElement>("input[type=checkbox]")!.click();
+	if (options.expanded) { controller.loadMore(); await frames(); }
+	while (callbacks.size) { const [id, callback] = callbacks.entries().next().value!; callbacks.delete(id); callback(); }
+	return { samples, userPosition, replacements: replacements - beforeReplacements, readonlyBindings, imageLoads: h.loads(),
+		finalCount, nextCount: cards().length, requests, taskBindings,
+		readonlyCount: results.querySelectorAll("[data-knomo-readonly-transition]").length,
+		disabledCount: results.querySelectorAll("button:disabled, input:disabled").length,
+		sameImage: originalImage === results.querySelector("img") };
 }
 
 export async function surface(surface: "buoy" | "subject", richMarkdown = false, imageChange: "none" | "modified" | "removed" | "same-key" = "none") {

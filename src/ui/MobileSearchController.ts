@@ -1,6 +1,7 @@
 import { MemoCardImageCache, ReadyCardImageHandoff } from "./KnomoCardImages";
 import { areMemoListsUnchanged, canRetainMemoCard, getMemoRenderKey, getMemoRenderRevision, rebindMemoCard } from "./MemoRenderRevision";
-import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
+import { createMemoRenderPlaceholders, makeReadonlyMemoCard } from "./MemoRenderPlaceholder";
+import { clearMemoReadingCompensation, MemoFocusRestore, MemoReadingPosition } from "./MemoReadingContinuity";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import { t } from "../i18n";
 import type { CatalogCoverage, CatalogQueryFilter } from "../types/catalog";
@@ -55,6 +56,7 @@ interface MobileSearchControllerOptions {
 	getQueryContextKey?: () => string;
 	projectResults?: (memos: readonly MemoRecord[], filter: CatalogQueryFilter) => MemoRecord[];
 	hasPendingConfirmedMemos?: () => boolean;
+	prepareResultsAcceptance?: () => (consume?: boolean) => void;
 	onResultsAccepted?: (page: Omit<MobileSearchPage, "items" | "nextCursor">) => void;
 	batchSize: number;
 	debounceMs: number;
@@ -132,6 +134,10 @@ export class MobileSearchController {
 	private targetRevisions: string[] | null = null;
 	private renderedViewKey = "";
 	private scrollRevision = 0;
+	private layoutScrollTop: number | null = null;
+	private focusRestore: MemoFocusRestore | null = null;
+	private readonlyPresentationKey: string | null = null;
+	private acceptedWindow: { key: string; count: number } | null = null;
 	private renderRun = 0;
 	private renderedStatus: string | null = null;
 	private renderedPending = false;
@@ -262,13 +268,22 @@ export class MobileSearchController {
 			this.options.handleTaskCheckboxChange(event);
 		});
 		const onScrollIntent = () => {
+			if (this.resultsEl) clearMemoReadingCompensation(this.resultsEl);
 			this.scrollRevision++;
 			this.pendingScrollTop = null;
 			this.queueMarkdownPriority();
 		};
 		this.options.registerDomEvent(this.resultsEl, "touchstart", onScrollIntent);
 		this.options.registerDomEvent(this.resultsEl, "wheel", onScrollIntent);
-		this.options.registerDomEvent(this.resultsEl, "scroll", () => this.queueMarkdownPriority());
+		this.options.registerDomEvent(this.resultsEl, "pointerdown", onScrollIntent);
+		this.options.registerDomEvent(this.resultsEl, "keydown", event => {
+			if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) onScrollIntent();
+		});
+		this.options.registerDomEvent(this.resultsEl, "scroll", () => {
+			if (this.layoutScrollTop !== null && this.resultsEl && Math.abs(this.resultsEl.scrollTop - this.layoutScrollTop) > 0.5) onScrollIntent();
+			this.layoutScrollTop = this.resultsEl?.scrollTop ?? null;
+			this.queueMarkdownPriority();
+		});
 	}
 
 	syncPage(): void {
@@ -300,6 +315,7 @@ export class MobileSearchController {
 
 	closePage(): void {
 		if (!this.open) return;
+		this.acceptedWindow = null;
 		const composing = this.session.draft.composing;
 		this.session.draft.composing = false;
 		if (this.resultsEl) this.imageCache.capture(this.resultsEl, this.resultsEl);
@@ -333,6 +349,7 @@ export class MobileSearchController {
 	}
 
 	private cancelRender(): void {
+		this.focusRestore?.dispose(); this.focusRestore = null;
 		this.renderRun++;
 		if (this.renderTaskId !== null) this.options.cancelRenderTask?.(this.renderTaskId);
 		this.renderTaskId = null;
@@ -470,6 +487,7 @@ export class MobileSearchController {
 		this.session.reset();
 		this.displayedContext = null;
 		this.displayedMemos = null;
+		this.acceptedWindow = null;
 		this.displayedCount = null;
 		this.summaryPresentation = null;
 		this.pendingQueryKey = null;
@@ -513,6 +531,7 @@ export class MobileSearchController {
 		if (!this.hasSearchConditions()) {
 			this.cancelPendingRequest();
 			this.displayedMemos = null;
+			this.acceptedWindow = null;
 			this.displayedCount = null;
 			this.summaryPresentation = null;
 			this.displayedContext = null;
@@ -537,8 +556,10 @@ export class MobileSearchController {
 			return;
 		}
 		const sameScope = this.getDisplayedRequestKey() === key;
+		if (!sameScope || changeIntent === "view-scope-change") this.acceptedWindow = null;
 		if (this.acceptedResultsInvalidated || !sameScope) reset = true;
-		const windowSize = reset && sameScope ? Math.min(this.visibleCount, this.displayedMemos?.length ?? 0) : 0;
+		const windowSize = reset && sameScope ? Math.max(Math.min(this.visibleCount, this.displayedMemos?.length ?? 0),
+			this.acceptedWindow?.key === key ? this.acceptedWindow.count : 0) : 0;
 		this.abortQuery(false);
 		if (reset && this.renderTaskId !== null) {
 			this.options.cancelRenderTask?.(this.renderTaskId);
@@ -559,6 +580,7 @@ export class MobileSearchController {
 		this.syncControls();
 		if (this.displayedMemos === null) this.renderResults();
 		try {
+			const acceptResults = this.options.prepareResultsAcceptance?.();
 			let page = await this.options.loadRemoteResults(filter, reset ? null : this.cursor, controller.signal);
 			controller.signal.throwIfAborted();
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
@@ -602,6 +624,7 @@ export class MobileSearchController {
 			}
 			if (filter.hasReferrers && page.status.relations?.complete === false && this.displayedMemos?.length
 				&& this.getDisplayedRequestKey() === key) {
+				acceptResults?.(false);
 				// 已读切片与本轮部分查询分开；旧 cursor 不能接到新的关系版本。
 				this.invalidateAcceptedResults();
 				this.displayedCount = null;
@@ -611,10 +634,12 @@ export class MobileSearchController {
 				return;
 			}
 			if (!sameScope) this.summaryPresentation = null;
-			this.displayedContext = context;
 			const items = reset ? [...staged.values()] : [...new Map([...(this.displayedMemos ?? []), ...page.items]
 				.map(memo => [getMemoRenderKey(memo), memo])).values()];
-			this.displayedMemos = this.options.projectResults?.(items, filter) ?? [...items];
+			const projected = this.options.projectResults?.(items, filter) ?? [...items];
+			acceptResults?.();
+			this.displayedContext = context;
+			this.displayedMemos = projected;
 			this.cursor = page.nextCursor;
 			if (reset) {
 				this.acceptedResultsInvalidated = false;
@@ -623,6 +648,7 @@ export class MobileSearchController {
 					&& page.nextCursor === null && isQueryCovered(page.coverage, filter) ? this.displayedMemos.length : null;
 			}
 			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
+			this.rememberAcceptedWindow();
 			this.options.onResultsAccepted?.(page);
 			if (reset && this.displayedCount === null && !this.options.hasPendingConfirmedMemos?.()
 				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
@@ -696,6 +722,13 @@ export class MobileSearchController {
 		// null cursor 也可能表示正常末页；真实失效须保留到新首屏被接纳。
 		this.acceptedResultsInvalidated = true;
 		this.cursor = null;
+	}
+
+	private rememberAcceptedWindow(): void {
+		const key = this.getDisplayedRequestKey();
+		if (key !== null && !this.acceptedResultsInvalidated) {
+			this.acceptedWindow = { key, count: Math.min(this.visibleCount, this.displayedMemos?.length ?? 0) };
+		}
 	}
 
 	suspendLoadingFeedback(): void { this.loadingIndicator.clear(); }
@@ -780,8 +813,9 @@ export class MobileSearchController {
 		}
 	}
 
-	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false): void {
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false, readonlyPresentation = false): void {
 		if (!this.open || !this.hasSearchConditions()) return;
+		this.rememberAcceptedWindow();
 		const hadPendingQuery = this.pendingQueryKey !== null;
 		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.getDisplayedRequestKey();
 		this.cancelPendingRequest();
@@ -796,6 +830,7 @@ export class MobileSearchController {
 			return;
 		}
 		const previous = this.getMatchedMemos();
+		if (!readonlyPresentation) this.readonlyPresentationKey = null;
 		this.displayedMemos = [...new Map([...(this.displayedMemos ?? []).flatMap(memo => {
 			const current = changes.has(memo.id) ? changes.get(memo.id) : memo;
 			return current ? [current] : [];
@@ -807,6 +842,22 @@ export class MobileSearchController {
 		if (!areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
 			? this.displayedCount + current.length - previous.length : null;
 		if (this.session.result) this.session.requestStatus = "ready";
+		if (readonlyPresentation && this.resultsEl) {
+			const previous = this.renderedCards, root = this.resultsEl;
+			const focus = new MemoFocusRestore(root, previous);
+			this.cancelRender();
+			this.renderedCards = previous.map(item => {
+				if (!changes.has(item.memo.id)) return item;
+				const card = makeReadonlyMemoCard(item.card);
+				this.options.releaseCard?.(item.card);
+				return { memo: item.memo, card };
+			});
+			this.invalidateAcceptedResults();
+			this.readonlyPresentationKey = this.getViewStateKey();
+			this.layoutScrollTop = root.scrollTop;
+			focus.restore([]); focus.dispose();
+			this.syncControls(); return;
+		}
 		if (!this.reconcileCommittedCards(changes)) this.renderResults("content-change", true);
 		// 提交通知使旧查询失效后，继续完成用户已提交的新搜索条件。
 		if (resumeSearch) void this.refreshAppliedResults();
@@ -832,12 +883,13 @@ export class MobileSearchController {
 			if (current && visibleIds.has(current.id)) retained.set(current.id, item);
 		}
 		const seed = createMemoRenderPlaceholders(this.renderedCards);
-		const scrollTop = root.scrollTop;
+		const reading = new MemoReadingPosition(root, this.renderedCards);
+		const focus = new MemoFocusRestore(root, this.renderedCards);
 		const next: Array<{ memo: MemoRecord; card: HTMLElement }> = [];
 		for (const [index, memo] of visible.entries()) {
 			const previous = retained.get(memo.id);
 			let card = previous?.card;
-			if (previous && canRetainMemoCard(previous.memo, memo)) {
+			if (previous && previous.card.getAttribute("data-knomo-readonly-transition") === null && canRetainMemoCard(previous.memo, memo)) {
 				rebindMemoCard(previous.card, memo);
 				this.options.retainCard?.(previous.card, memo);
 			} else if (!previous || previous.memo !== memo) {
@@ -863,12 +915,14 @@ export class MobileSearchController {
 		this.renderedCards = next;
 		this.renderedRevisions = visible.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
 		this.targetRevisions = [...this.renderedRevisions];
-		root.scrollTop = scrollTop;
 		this.syncControls();
 		this.syncResultMetadata(memos.length, visible.length, !wasPending);
+		reading.restore(next, changes);
+		focus.restore(next, changes); focus.dispose();
+		this.layoutScrollTop = root.scrollTop;
 		this.prioritizeMarkdown();
 		if (wasPending) {
-			this.pendingScrollTop = scrollTop;
+			this.pendingScrollTop = root.scrollTop;
 			this.seedPlaceholder = seed;
 			this.renderResults("content-change", true);
 		}
@@ -905,6 +959,14 @@ export class MobileSearchController {
 			: headers.length > 0 ? JSON.stringify(headers) : null;
 		const statusChanged = status !== this.renderedStatus;
 		this.syncControls();
+		if (sameView && this.readonlyPresentationKey === viewKey && this.acceptedResultsInvalidated) {
+			const reading = new MemoReadingPosition(resultsEl, this.renderedCards);
+			this.syncResultFeedback(resultsEl, status ?? t("feedback.sourceChanged"), headers, relationQuery, statusChanged);
+			reading.restore(this.renderedCards);
+			this.layoutScrollTop = resultsEl.scrollTop;
+			return;
+		}
+		this.readonlyPresentationKey = null;
 		const targetRevisions = this.targetRevisions;
 		if (targetRevisions !== null && relationQuery && visibleMemos.length > 0 && sameView && this.session.result !== null && this.renderTaskId === null
 			&& revisions.length === this.renderedRevisions.length && revisions.every((revision, index) => revision === this.renderedRevisions[index])) {
@@ -931,19 +993,18 @@ export class MobileSearchController {
 		const previousByNode = new Map(sameResults ? this.renderedCards.map(item => [item.card, item]) : []);
 		const previousCards = sameResults ? Array.from(resultsEl.children).flatMap(child => previousByNode.get(child as HTMLElement) ?? []) : [];
 		const reconcile = previousCards.length > 0;
+		const reading = reconcile ? new MemoReadingPosition(resultsEl, previousCards) : null;
+		const focus = reconcile ? new MemoFocusRestore(resultsEl, previousCards, true) : null;
 		const previousByKey = new Map(previousCards.map(item => [getMemoRenderKey(item.memo), item]));
 		const retained = new Map(visibleMemos.flatMap(memo => {
 			const key = getMemoRenderKey(memo);
 			const previous = previousByKey.get(key);
-			return previous && JSON.stringify(previous.memo.catalog?.observationHandle) === JSON.stringify(memo.catalog?.observationHandle)
+			return previous && previous.card.getAttribute("data-knomo-readonly-transition") === null
+				&& JSON.stringify(previous.memo.catalog?.observationHandle) === JSON.stringify(memo.catalog?.observationHandle)
 				&& canRetainMemoCard(previous.memo, memo) ? [[key, previous.card] as const] : [];
 		}));
 		const retainedNodes = new Set(retained.values());
 		const departing = new Set(previousCards.map(({ card }) => card).filter(card => !retainedNodes.has(card)));
-		const viewportTop = reconcile ? resultsEl.getBoundingClientRect().top : 0;
-		const stableCards = reconcile ? Array.from(resultsEl.children).filter(child => retainedNodes.has(child as HTMLElement)) : [];
-		const anchor = stableCards.find(card => card.getBoundingClientRect().bottom > viewportTop) ?? stableCards[stableCards.length - 1];
-		const anchorOffset = anchor?.getBoundingClientRect().top;
 		const release = (card: HTMLElement) => {
 			this.options.releaseCard?.(card);
 			card.remove();
@@ -974,22 +1035,37 @@ export class MobileSearchController {
 			resultsEl.find(".knomo-mobile-search-more")?.remove();
 		}
 		this.targetRevisions = revisions;
+		this.focusRestore = focus;
 		if (this.markdownPriorityTaskId !== null) this.options.cancelRenderTask?.(this.markdownPriorityTaskId);
 		this.markdownPriorityTaskId = null;
 		const generation = this.renderGeneration;
 		const renderRun = ++this.renderRun;
 		const scrollRevision = this.scrollRevision;
+		const mountedCards = () => {
+			const byNode = new Map(this.renderedCards.map(item => [item.card, item]));
+			return Array.from(resultsEl.children).flatMap(child => byNode.get(child as HTMLElement) ?? []);
+		};
+		const restoreReading = () => {
+			if (!canAppend && scrollRevision === this.scrollRevision && this.pendingScrollTop !== null && !this.session.draft.composing) {
+				reading?.restore(mountedCards(), undefined, true);
+			}
+			this.layoutScrollTop = resultsEl.scrollTop;
+		};
 		const completeRender = () => {
 			const target = this.pendingScrollTop;
 			this.pendingScrollTop = null;
 			this.seedPlaceholder = null;
 			this.imageHandoff = undefined;
-			if (!canAppend && target !== null && scrollRevision === this.scrollRevision) {
-				const position = anchor?.parentElement === resultsEl && anchorOffset !== undefined
-					? resultsEl.scrollTop + anchor.getBoundingClientRect().top - anchorOffset : target;
+			if (!canAppend && target !== null && scrollRevision === this.scrollRevision && !this.session.draft.composing) {
+				reading?.restore(mountedCards(), undefined, true);
+				const position = reading ? resultsEl.scrollTop : target;
 				this.options.restoreElementScrollTop(resultsEl, Math.max(0, position), () =>
-					this.open && renderRun === this.renderRun && scrollRevision === this.scrollRevision);
+					this.open && this.options.isVisible?.() !== false && !this.session.draft.composing
+					&& renderRun === this.renderRun && scrollRevision === this.scrollRevision);
 			}
+			this.layoutScrollTop = resultsEl.scrollTop;
+			if (!this.session.draft.composing) focus?.restore(mountedCards());
+			focus?.dispose(); this.focusRestore = null;
 		};
 		if (reconcile && visibleMemos.length === 0) {
 			for (const card of departing) release(card);
@@ -1028,12 +1104,19 @@ export class MobileSearchController {
 		let index = startIndex;
 		const reconciledCards: typeof this.renderedCards = [];
 		let nextCard: HTMLElement | null = previousCards[0]?.card ?? null;
+		this.layoutScrollTop = resultsEl.scrollTop;
 		const renderChunk = () => {
 			if (renderRun !== this.renderRun || !this.open || generation !== this.renderGeneration || resultsEl !== this.resultsEl) return;
 			this.renderTaskId = null;
+			// 没有 wheel/touch 前导的键盘、滚动条或惯性位移也属于新滚动。
+			if (this.layoutScrollTop !== null && Math.abs(resultsEl.scrollTop - this.layoutScrollTop) > 0.5) {
+				this.scrollRevision++; this.pendingScrollTop = null;
+			}
 			if (this.options.isVisible?.() === false) {
 				// 已挂载的前缀继续可用，恢复后由最新结果接管未完成的分片。
 				this.targetRevisions = null;
+				focus?.dispose(); this.focusRestore = null;
+				focus?.dispose(); this.focusRestore = null;
 				return;
 			}
 			const startedAt = performance.now();
@@ -1073,6 +1156,7 @@ export class MobileSearchController {
 				if (this.options.scheduleRenderTask && ((!existing && ++count >= 6) || performance.now() - startedAt >= 4)) break;
 			}
 			this.prioritizeMarkdown();
+			restoreReading();
 			if (index < visibleMemos.length && this.options.scheduleRenderTask) {
 				this.renderTaskId = this.options.scheduleRenderTask(renderChunk);
 				return;

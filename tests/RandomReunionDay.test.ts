@@ -69,6 +69,21 @@ test("日期详情接收提交后的替换与插入，只保留原日期；原�
 	assert.deepEqual(h.random.getSnapshot().memos?.map(memo => memo.id), ["moved"]);
 });
 
+test("日期详情返回锚点及原菜单只沿确认映射换键，真正删除仍按原规则回退", async () => {
+	const h = await harness();
+	await h.random.refresh();
+	await h.view.openRandomDay(h.memo);
+	const current = { ...h.memo, id: "current", catalog: { ...h.memo.catalog!, renderKey: "current" } };
+	const changes = new Map([[h.memo.id, current]]);
+	h.view.remapHistoryBrowsePositions(changes, [h.memo]);
+	h.random.applyMemoChanges(changes, false);
+	assert.equal(h.view.randomDayReturnContext.memoId, current.id);
+	assert.equal(h.view.randomDayReturnContext.position.anchor.renderKey, "current");
+	await h.view.returnFromRandomDay();
+	assert.deepEqual(h.restored, [{ ...h.position, anchor: { renderKey: "current", offset: -10 } }]);
+	assert.equal(h.calls.loads, 1);
+});
+
 test("返回核对遇到 Catalog 快照失效时保留批次并提示刷新，不静默补抽", async () => {
 	const h = await harness();
 	const { CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");

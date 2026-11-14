@@ -7,6 +7,45 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("阅读连续性计量：同字节重复保存与真实正文变化分别记录解析、发布及查询", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Journal/2026-08-09.md", body = "## Memos\n- 09:00 before";
+	const fixture = await createCoordinatorFixture([{ path, content: body, mtime: 10 }]);
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store), parser = new DiaryMemoParser(async bytes => sha256(bytes));
+	const read = new CatalogReadService({ catalog });
+	let parses = 0, publications = 0, queries = 0;
+	const parse = parser.parse.bind(parser), replace = catalog.replaceFile.bind(catalog);
+	parser.parse = (...args) => { parses++; return parse(...args); };
+	catalog.replaceFile = (...args) => { publications++; return replace(...args); };
+	const pending: Promise<unknown>[] = [];
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, parser, async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), {
+		onCatalogSettled: () => { queries++; pending.push(read.query({ limit: 50 })); },
+	});
+	const sample = async (input: string) => ({ input, reads: fixture.readCount(), parses, publications, queries,
+		catalogRevision: await store.getCatalogRevision(), sourceRevision: (await store.getFile(path))?.sourceRevision });
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle(); await Promise.all(pending);
+		const trace = [await sample("initial")];
+		for (const mtime of [20, 30, 40]) {
+			fixture.setFile(path, body, mtime); fixture.emitVaultEvent("modify", fixture.file(path));
+			const reads = fixture.readCount(); await waitUntil(async () => fixture.readCount() > reads);
+			await coordinator.waitForIdle(); await Promise.all(pending); trace.push(await sample("same-bytes"));
+		}
+		assert.equal(trace.at(-1)!.sourceRevision, trace[0]!.sourceRevision);
+		fixture.setFile(path, body.replace("before", "after"), 50); fixture.emitVaultEvent("modify", fixture.file(path));
+		await waitUntil(async () => (await store.query({ limit: 10 })).items[0]?.content === "after");
+		await coordinator.waitForIdle(); await Promise.all(pending); trace.push(await sample("changed-bytes"));
+		assert.notEqual(trace.at(-1)!.sourceRevision, trace[0]!.sourceRevision);
+		assert.equal((await read.query({ limit: 10 })).items[0]!.content, "after");
+		t.diagnostic(JSON.stringify(trace));
+	} finally { fixture.unload(); }
+});
+
 test("热启动和显式刷新仅核对文件头，未变化 Daily 不重读正文", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

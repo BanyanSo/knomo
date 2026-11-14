@@ -10,6 +10,26 @@ import type { CatalogQuery, MemoObservation } from "../src/types/catalog";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("过渡准入核对文件 Revision 时同时拒绝变化的 Catalog 快照及取消", async () => {
+	await ensureObsidianStub();
+	const { CatalogReadService, CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
+	const observation = makeObservation("Daily/2026-08-22.md", "2026-08-22", 1, "memo");
+	await seedCatalog(catalog, store, [observation]);
+	const service = new CatalogReadService({ catalog }), revision = await store.getCatalogRevision();
+	assert.equal(await service.getFileSourceRevision(observation.sourcePath, revision), observation.sourceRevision);
+	await seedCatalog(catalog, store, [{ ...observation, sourceRevision: "b".repeat(64) }]);
+	await assert.rejects(service.getFileSourceRevision(observation.sourcePath, revision), CatalogDiscoveryInvalidatedError);
+	const controller = new AbortController(); controller.abort();
+	await assert.rejects(service.getFileSourceRevision(observation.sourcePath, await store.getCatalogRevision(), controller.signal), { name: "AbortError" });
+	const currentRevision = await store.getCatalogRevision(), getFile = store.getFile.bind(store);
+	store.getFile = async path => { const file = await getFile(path); store.close(); await store.open(); return file; };
+	await assert.rejects(service.getFileSourceRevision(observation.sourcePath, currentRevision), CatalogDiscoveryInvalidatedError,
+		"相同 Catalog 版本也不能跨 Store 生命周期消费文件核对结果");
+});
+
 test("相同计数共享扫描，取消一个使用者不影响另一个，版本和覆盖变化使缓存失效", async () => {
 	await ensureObsidianStub();
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { TimeBuoyViewController } from "../src/ui/TimeBuoyViewController";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
@@ -7,6 +7,11 @@ import type { TimeBuoyQueryResult } from "../src/types/timeBuoy";
 import type { MemoViewItem } from "../src/types/memoView";
 import { getMemoListStateKey } from "../src/ui/MemoRenderRevision";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+
+// 真实查询会按时间预算让出，避免机器负载影响夹具是否能读满分页。
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 test("普通列表今日浮标逐页置顶，最后接普通记录，后台更新和关闭拒绝旧页", async () => {
 	const { view, result, memo, setQuery } = await refreshHarness();
@@ -299,6 +304,49 @@ test("普通列表刷新同时补回多页今日浮标与普通记录，不先�
 	assert.equal(h.view.memos.length, 150);
 });
 
+test("菜单删除与旧游标恢复保住全历史三页，使用新游标继续读尽", async t => {
+	for (const entry of ["delete", "cursor"] as const) await t.test(entry, async () => {
+		const h = await expandedWindowHarness();
+		const selected = h.view.memos[120] as MemoViewItem;
+		const remove = () => h.remove(selected);
+		Object.assign(h.view, {
+			memoCommandService: { delete: remove }, resolveCatalogMemo: (memo: MemoViewItem) => memo.catalog,
+			closeCardMenu() {}, syncCardMenuState() {},
+			randomReunionController: { removeMemo() {} }, shuffleDayController: { removeMemo() {} },
+			reportViewRefreshFailure: (error: unknown) => { throw error; },
+		});
+		h.requests.length = 0;
+		if (entry === "delete") await h.view.handleMemoAction("delete", selected);
+		else { await remove(); await h.view.loadNextCatalogPage(); }
+		assert.equal(h.view.memos.length, 150);
+		assert.ok(h.view.memos.some((memo: MemoViewItem) => memo.dailyRef.path === selected.dailyRef.path));
+		assert.ok(!h.view.memos.some((memo: MemoViewItem) => memo.contentSnapshot === selected.contentSnapshot));
+		assert.ok(h.requests.every(request => request.fromDate === undefined));
+		assert.equal(await h.view.loadNextCatalogPage(), true);
+		assert.equal(h.view.memos.length, 199);
+		assert.equal(new Set(h.view.memos.map((memo: MemoViewItem) => memo.id)).size, 199);
+		assert.equal(h.view.catalogCursor, null);
+	});
+});
+
+test("置顶浮标旧游标失效时分别补回置顶与普通窗口，不退回首批", async () => {
+	const h = await expandedWindowHarness(true);
+	// 保留已读两页置顶及其当时的继续游标。
+	await h.view.reloadMemos(true);
+	await h.view.loadNextCatalogPage();
+	assert.equal(h.view.catalogTodayTimeBuoys.today.length, 60);
+	assert.ok(h.view.catalogTodayTimeBuoys.todayCursor);
+	const selected = h.view.catalogTodayTimeBuoys.today[10].memo as MemoViewItem;
+	await h.remove(selected);
+	await h.view.loadNextCatalogPage();
+	assert.equal(h.view.catalogTodayTimeBuoys.today.length, 60);
+	assert.equal(h.view.memos.length, 50);
+	assert.ok(!h.view.catalogTodayTimeBuoys.today.some((item: { memo: MemoViewItem }) => item.memo.contentSnapshot === selected.contentSnapshot));
+	await h.view.loadNextCatalogPage();
+	assert.equal(h.view.catalogTodayTimeBuoys.today.length, 89);
+	assert.equal(h.view.catalogTodayTimeBuoys.todayCursor, null);
+});
+
 test("补窗口期间切换筛选只接纳新范围首批，迟到旧尾页不覆盖结果", async () => {
 	const h = await expandedWindowHarness();
 	let release!: () => void;
@@ -328,12 +376,14 @@ async function expandedWindowHarness(pinned = false) {
 	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
 	await catalog.open();
 	const today = formatTimeBuoyDate(new Date()), older = formatTimeBuoyDate(new Date(new Date().getFullYear(), new Date().getMonth() - 3, 22));
+	const contents = new Map<string, { date: string; content: string }>();
 	for (const date of [today, older]) {
 		const sourcePath = `Daily/${date}.md`;
 		const content = "## Memos\n" + Array.from({ length: 100 }, (_, index) => {
 			const time = `${String(8 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}`;
 			return `- ${time} ${date}-${index} #${index % 2 ? "other" : "keep"}${pinned && date === today && index < 90 ? ` @${today}` : ""}\n`;
 		}).join("");
+		contents.set(sourcePath, { date, content });
 		const parsed = await new DiaryMemoParser().parse({ sourcePath, logicalDate: date, bytes: new TextEncoder().encode(content) });
 		await catalog.replaceFile({ inventory: { sourcePath, logicalDate: date, mtime: 1, size: content.length },
 			sourceRevision: parsed.sourceRevision, observations: parsed.observations, parserVersion: 2, settingsFingerprint: "settings", auditedAt: 1 });
@@ -356,7 +406,13 @@ async function expandedWindowHarness(pinned = false) {
 	});
 	await view.reloadMemos(true);
 	while (view.memos.length < 150 || (pinned && view.catalogTodayTimeBuoys.todayCursor)) await view.loadNextCatalogPage();
-	return { ...h, read, requests };
+	return { ...h, read, requests, remove: async (memo: MemoViewItem) => {
+		const sourcePath = memo.dailyRef.path, source = contents.get(sourcePath)!;
+		source.content = source.content.split("\n").filter(line => !line.includes(memo.contentSnapshot)).join("\n");
+		const parsed = await new DiaryMemoParser().parse({ sourcePath, logicalDate: source.date, bytes: new TextEncoder().encode(source.content) });
+		await catalog.replaceFile({ inventory: { sourcePath, logicalDate: source.date, mtime: 2, size: source.content.length },
+			sourceRevision: parsed.sourceRevision, observations: parsed.observations, parserVersion: 2, settingsFingerprint: "settings", auditedAt: 2 });
+	} };
 }
 
 test("引用事件增量刷新且原位排队正文与来源引用，不清空卡片容器", async () => {

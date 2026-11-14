@@ -21,6 +21,19 @@ export interface RenderedMemoCardImages {
 const previewNodes = new WeakMap<HTMLElement, HTMLImageElement>();
 const readyPreviews = new WeakSet<HTMLImageElement>();
 
+// 只转移已完成的图片节点；只读副本不继承旧按钮、重试监听或 occurrence 绑定。
+export function retainReadonlyCardImages(source: HTMLElement, snapshot: HTMLElement): void {
+	const targets = Array.from(snapshot.querySelectorAll<HTMLElement>(".knomo-card-image-item"));
+	for (const [index, item] of Array.from(source.querySelectorAll<HTMLElement>(".knomo-card-image-item")).entries()) {
+		const image = previewNodes.get(item), target = targets[index], clone = target?.querySelector("img");
+		if (!image || !target || !clone || !item.contains(image) || !readyPreviews.has(image) || !image.complete || image.naturalWidth <= 0) continue;
+		clone.replaceWith(image);
+		previewNodes.set(target, image);
+		const resource = item.getAttribute("data-knomo-image-resource");
+		if (resource !== null) target.setAttribute("data-knomo-image-resource", resource);
+	}
+}
+
 function previewResourceKey(image: MemoPreviewImage): string {
 	return encodeImageKeyParts([
 		image.isRemote ? "remote" : "local", image.isRemote ? "" : image.resourcePath ?? image.path, image.url ?? "",

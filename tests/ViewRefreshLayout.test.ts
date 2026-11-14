@@ -101,8 +101,8 @@ test("日期流与今日之外重复接纳新 Daily revision 时不累计滚动�
 test("多页列表及浮标编辑可见卡片或上方长正文后，局部提交与后台接续保持阅读位置", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const h = await browserFixture();
 	try {
-		for (const surface of ["feed", "buoy"] as const) for (const mobile of [false, true]) for (const editAbove of [false, true]) {
-			const options = { surface, mobile, editAbove };
+		for (const surface of ["feed", "buoy"] as const) for (const mobile of [false, true]) for (const editAbove of [false, true]) for (const external of [false, true]) {
+			const options = { surface, mobile, editAbove, external };
 			const result = await h.page.evaluate(options => window.refreshFixture.pagedEditGeometry(options), options);
 			const first = result.samples[0]!, evidence = JSON.stringify({ options, result });
 			for (const sample of result.samples) {
@@ -111,6 +111,139 @@ test("多页列表及浮标编辑可见卡片或上方长正文后，局部提�
 				assert.ok(Math.abs(sample.offset - first.offset) <= 1, evidence);
 			}
 		}
+	} finally { await h.close(); }
+});
+
+test("独立移动搜索按阅读卡偏移接续内部提交及外部全换键，各过渡帧不漂移", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async t => {
+	const h = await browserFixture();
+	const traces: unknown[] = [];
+	try {
+		for (const entry of ["internal", "external", "cross-file"] as const) for (const edit of ["grow", "shrink", "below", "same"] as const) {
+			const options = { entry, edit, chunked: entry !== "internal" };
+			const result = await h.page.evaluate(options => window.refreshFixture.mobileRevisionGeometry(options), options);
+			const evidence = JSON.stringify({ options, result });
+			traces.push({ options, result });
+			for (const sample of result.samples) assert.ok(Math.abs(sample.offset! - result.samples[0]!.offset!) <= 1, evidence);
+			const last = result.samples.at(-1)!;
+			assert.equal(last.count, 30, evidence);
+			assert.equal(entry === "external" ? last.focus === "results" : last.readerFocus, true, evidence);
+		}
+		writeFileSync(".tmp/revision-continuity-mobile-geometry.json", JSON.stringify(traces, null, 2));
+		t.diagnostic("12 geometry scenarios: each sampled frame stays within 1 CSS px.");
+	} finally { await h.close(); }
+});
+
+test("移动搜索分帧收尾尊重无前导事件的滚动、键盘、触摸与新输入焦点", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	const traces: unknown[] = [];
+	try {
+		for (const input of ["scroll", "wheel", "keyboard", "pointer", "touch", "focus", "composition"] as const) {
+			const options = { entry: "external" as const, edit: "same" as const, chunked: true, input };
+			const result = await h.page.evaluate(options => window.refreshFixture.mobileRevisionGeometry(options), options);
+			const evidence = JSON.stringify({ options, result }), last = result.samples.at(-1)!;
+			traces.push({ options, result });
+			if (result.userPosition !== null) assert.equal(last.scroll, result.userPosition, evidence);
+			else assert.match(String(last.focus), /knomo-search-input/, evidence);
+		}
+		writeFileSync(".tmp/revision-continuity-mobile-intent.json", JSON.stringify(traces, null, 2));
+	} finally { await h.close(); }
+});
+
+test("移动搜索外部覆盖的只读画面在读取失败时保持可读，查询接纳后恢复新绑定", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const resourceChanged of [false, true]) {
+			const result = await h.page.evaluate(resourceChanged => window.refreshFixture.mobileRevisionGeometry({ entry: "external", edit: "same", readonly: true, resourceChanged }), resourceChanged);
+			assert.equal(result.readonlyBindings, 0);
+			assert.equal(result.imageLoads, resourceChanged ? 2 : 1, "同版本不重载，资源改变必须加载新图片");
+			assert.equal(result.sameImage, !resourceChanged);
+			for (const sample of result.samples) assert.equal(sample.count, 30, JSON.stringify(result));
+			for (const sample of result.samples) assert.ok(Math.abs(sample.offset! - result.samples[0]!.offset!) <= 1, JSON.stringify(result));
+			assert.equal(result.samples.at(-1)!.focus, "results");
+		}
+	} finally { await h.close(); }
+});
+
+test("同字节保存的三次查询通知不替换卡片或重载已就绪图片", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		const result = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({ entry: "external", edit: "same", sameBytes: true }));
+		assert.equal(result.replacements, 0);
+		assert.equal(result.imageLoads, 1);
+		for (const sample of result.samples) assert.ok(Math.abs(sample.offset! - result.samples[0]!.offset!) <= 1, JSON.stringify(result));
+	} finally { await h.close(); }
+});
+
+test("移动搜索只读交接恢复三页窗口和深处阅读卡，再用新游标继续翻页", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		const result = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({
+			entry: "external", edit: "same", readonly: true, expanded: true,
+		}));
+		assert.equal(result.readonlyBindings, 0);
+		assert.equal(result.finalCount, 150);
+		assert.equal(result.nextCount, 200);
+		assert.deepEqual(result.requests, [0, 50, 100, 0, 50, 100, 150]);
+		for (const sample of result.samples) {
+			assert.equal(sample.count, 150);
+			assert.notEqual(sample.offset, null);
+			assert.ok(Math.abs(sample.offset! - result.samples[0]!.offset!) <= 1, JSON.stringify(result));
+		}
+	} finally { await h.close(); }
+});
+
+test("移动搜索只读交接后原字节与原 Key 重现时恢复当前任务和菜单", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		const result = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({
+			entry: "external", edit: "same", readonly: true, restoreSameBytes: true,
+		}));
+		assert.equal(result.readonlyCount, 0);
+		assert.equal(result.disabledCount, 0);
+		assert.equal(result.taskBindings.length, 1, "过渡时点击无操作，接纳后恰好触发一次当前任务");
+		assert.ok(result.taskBindings[0]!.endsWith("revision-0"));
+		assert.equal(result.imageLoads, 1);
+		assert.equal(result.sameImage, true);
+	} finally { await h.close(); }
+});
+
+test("移动搜索只读交接在跨文件减员后仍补足窗口，真实剩余不足时读尽", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		const mixed = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({
+			entry: "cross-file", edit: "same", readonly: true, expanded: true,
+		}));
+		assert.equal(mixed.readonlyBindings, 50);
+		assert.equal(mixed.finalCount, 150);
+		assert.equal(mixed.nextCount, 200);
+		for (const sample of mixed.samples) assert.ok(Math.abs(sample.offset! - mixed.samples[0]!.offset!) <= 1, JSON.stringify(mixed));
+		const fewer = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({
+			entry: "external", edit: "same", readonly: true, expanded: true, remaining: 80,
+		}));
+		assert.equal(fewer.finalCount, 80);
+		assert.equal(fewer.nextCount, 80);
+		assert.deepEqual(fewer.requests, [0, 50, 100, 0, 50]);
+	} finally { await h.close(); }
+});
+
+test("移动搜索连续加长与缩短上方正文时不累计像素取整漂移", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		const result = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({ entry: "internal", edit: "grow", repeatEdits: 8 }));
+		for (const sample of result.samples) assert.ok(Math.abs(sample.offset! - result.samples[0]!.offset!) <= 1, JSON.stringify(result));
+	} finally { await h.close(); }
+});
+
+test("分片期间用户读到下方后正文缩短，仅自然限幅到新边界，不恢复旧阅读位置", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		const result = await h.page.evaluate(() => window.refreshFixture.mobileRevisionGeometry({
+			entry: "external", edit: "shrink", shrinkBelow: true, input: "scroll", scrollToBottom: true,
+		}));
+		const last = result.samples.at(-1)!, evidence = JSON.stringify(result);
+		assert.ok(result.userPosition! > last.maxScroll, evidence);
+		assert.equal(last.scroll, last.maxScroll, evidence);
+		assert.notEqual(last.scroll, result.samples[0]!.scroll, evidence);
 	} finally { await h.close(); }
 });
 

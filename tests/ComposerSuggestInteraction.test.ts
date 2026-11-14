@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { undoDepth } from "@codemirror/commands";
+import { redo, undo, undoDepth } from "@codemirror/commands";
 import type { TFile } from "obsidian";
 import type { KnomoTagSuggest } from "../src/ui/KnomoTagSuggest";
 import type { KnomoWikiLinkSuggest } from "../src/ui/KnomoWikiLinkSuggest";
@@ -60,6 +60,60 @@ async function fixture(kind: "tag" | "link", mobile = true) {
 	};
 	return { ...f, input, suggest, initial, open, key };
 }
+
+for (const method of ["Enter", "mouse", "touch", "Tab"] as const) test(`tag: ${method} keeps the completed tag cursor on its line`, async () => {
+	const f = await fixture("tag", method === "touch");
+	const initial = "今天 #al";
+	const completed = "今天 #alpha";
+	try {
+		for (const [suffix, confirmedSuffix] of [
+			["\n下一行", " \n下一行"], ["\n", " \n"], ["\n\n下一行", " \n\n下一行"], [" \n下一行", " \n下一行"],
+			[" 正文", " 正文"], ["\t正文", "\t正文"], ["正文", " 正文"], ["", " "],
+		] as const) {
+			f.input.composer.reset(initial + suffix);
+			f.input.setSelectionRange(initial.length, initial.length);
+			f.input.composer.view.focus();
+			(f.suggest as KnomoTagSuggest).open();
+			const row = f.win.document.querySelector<HTMLElement>(".knomo-tag-suggest-popover .suggestion-item")!;
+			assert.equal(row.textContent, "alpha");
+			if (method === "Enter" || method === "Tab") assert.equal(f.key(method), true);
+			else if (method === "mouse") {
+				for (const type of ["pointerdown", "mousedown", "pointerup"]) {
+					const event = new f.win.MouseEvent(type, { bubbles: true, cancelable: true, button: 0 });
+					Object.defineProperties(event, { pointerType: { value: "mouse" }, pointerId: { value: 1 } });
+					row.dispatchEvent(event);
+				}
+				await f.click(row);
+			} else {
+				const touch = (type: "touchstart" | "touchend") => {
+					const point = { identifier: 1, clientX: 20, clientY: 20, target: row };
+					const event = new f.win.Event(type, { bubbles: true, cancelable: true });
+					Object.defineProperties(event, { touches: { value: type === "touchstart" ? [point] : [] }, changedTouches: { value: [point] } });
+					row.dispatchEvent(event);
+				};
+				f.pointer(row, "pointerdown");
+				touch("touchstart");
+				f.pointer(row, "pointerup");
+				touch("touchend");
+				await f.click(f.input);
+			}
+			const expected = completed + (method === "Tab" ? suffix : confirmedSuffix);
+			const cursor = completed.length + (method === "Tab" ? 0 : 1);
+			assert.equal(f.input.value, expected, JSON.stringify(suffix));
+			assert.equal(f.input.selectionStart, cursor, JSON.stringify(suffix));
+			assert.equal(f.input.selectionEnd, cursor);
+			assert.equal(f.win.document.activeElement, f.input);
+			assert.equal(f.win.document.querySelector(".knomo-tag-suggest-popover") !== null, method === "Tab");
+			assert.equal(undoDepth(f.input.composer.view.state), 1);
+			assert.equal(undo(f.input.composer.view), true);
+			assert.equal(f.input.value, initial + suffix);
+			assert.equal(f.input.selectionStart, initial.length);
+			assert.equal(redo(f.input.composer.view), true);
+			assert.equal(f.input.value, expected);
+			assert.equal(f.input.selectionStart, cursor);
+		}
+	} finally { f.close(); }
+});
 
 for (const mobile of [false, true]) test(`tag/${mobile ? "mobile" : "desktop"}: published candidates refresh without input and reject removed selections`, async () => {
 	const f = await fixture("tag", mobile);

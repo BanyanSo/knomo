@@ -85,7 +85,7 @@ test("forced colors preserve segment selection separately from keyboard focus", 
 	} finally { await browser.close(); }
 });
 
-test("mobile segments retain their base styles while Navbar uses a uniform fill and restores the host", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+test("mobile segments retain their base styles while Navbar keeps host edges with a uniform fill", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const html = await segmentHtml();
 	const css = readFileSync(process.env.KNOMO_LAYOUT_CSS || "styles.css", "utf8");
@@ -162,10 +162,9 @@ test("mobile segments retain their base styles while Navbar uses a uniform fill 
 					shadow: style.boxShadow, border: style.border, before: edge("::before"), after: edge("::after") };
 			});
 			assert.equal(navPaint.filter, await page.locator(".view-header").evaluate((el: HTMLElement) => getComputedStyle(el).backdropFilter), `${context}: Header and Navbar share the filter`);
-			assert.notEqual(navPaint.shadow, "rgb(255, 0, 0) 0px 0px 2px 0px", `${context}: only the Knomo contour is drawn`);
+			assert.equal(navPaint.shadow, "rgb(255, 0, 0) 0px 0px 2px 0px", `${context}: host shadow is preserved without a Knomo outline`);
 			for (const edge of [navPaint.before, navPaint.after]) {
-				assert.equal(edge[0], "none", `${context}: host edge does not overlay the material`);
-				assert.equal(edge[5], "none", `${context}: no second backdrop filter`);
+				assert.notEqual(edge[0], "none", `${context}: host edge remains visible`);
 			}
 			assert.equal(navPaint.image, "none", `${context}: floating fill has no gradient`);
 			const systemReduced = await page.evaluate(() => matchMedia("(prefers-reduced-transparency: reduce)").matches);
@@ -185,6 +184,10 @@ test("mobile segments retain their base styles while Navbar uses a uniform fill 
 				};
 				return [paint(), paint("::before"), paint("::after")];
 			});
+			assert.equal(navPaint.shadow, hostPaint[0][3], `${context}: entering Knomo preserves the host shadow`);
+			assert.equal(navPaint.border, hostPaint[0][2], `${context}: entering Knomo preserves the host border`);
+			assert.deepEqual(navPaint.before.slice(1), hostPaint[1], `${context}: entering Knomo preserves the host leading edge`);
+			assert.deepEqual(navPaint.after.slice(1), hostPaint[2], `${context}: entering Knomo preserves the host trailing edge`);
 			assert.equal(hostPaint[0][4], "blur(7px)", `${context}: leaving Knomo restores the host filter`);
 			assert.match(hostPaint[0][1], /90deg/, `${context}: leaving Knomo restores the host gradient`);
 			assert.notEqual(await navbar.evaluate((el: HTMLElement) => getComputedStyle(el, "::after").content), "none", `${context}: leaving Knomo restores the native edge`);
@@ -200,6 +203,7 @@ test("mobile segments retain their base styles while Navbar uses a uniform fill 
 			assert.equal(await page.locator("[data-action=host-menu]").getAttribute("data-calls"), "1", context);
 			await page.evaluate(() => document.body.classList.replace("knomo-mobile-navbar-floating", "knomo-mobile-navbar-fixed"));
 			assert.equal(await navbar.evaluate((el: HTMLElement) => getComputedStyle(el).borderRadius), navPaint.radius, `${context}: fixed mode preserves the host contour`);
+			assert.equal(await navbar.evaluate((el: HTMLElement) => getComputedStyle(el).boxShadow), navPaint.shadow, `${context}: fixed mode also preserves the host shadow`);
 		}
 		assert.equal(await page.locator(".knomo-time-buoy-tab").first().evaluate((el: HTMLElement) => getComputedStyle(el).transitionDuration), "0s");
 		await page.emulateMedia({ reducedMotion: "no-preference" });

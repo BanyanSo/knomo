@@ -44,6 +44,24 @@ test("replaces current tag query with selected suggestion", () => {
 	});
 });
 
+test("tag confirmation adds a space before preserved line breaks and leaves the cursor after it", () => {
+	for (const suffix of ["\n下一行", "\r\n下一行", "\r下一行", "\n", "\n\n下一行"]) {
+		assert.deepEqual(replaceTagQueryWithSuggestion(`今天 #pro${suffix}`, { from: 3, to: 7, query: "pro" }, "#project/knomo"), {
+			value: `今天 #project/knomo ${suffix}`,
+			cursor: 18,
+		}, JSON.stringify(suffix));
+	}
+});
+
+test("tag confirmation reuses horizontal whitespace and separates text or document end", () => {
+	for (const [suffix, expectedSuffix] of [[" 明天", " 明天"], ["\t明天", "\t明天"], ["  \n明天", "  \n明天"], ["明天", " 明天"], ["", " "]]) {
+		assert.deepEqual(replaceTagQueryWithSuggestion(`今天 #pro${suffix}`, { from: 3, to: 7, query: "pro" }, "project/knomo"), {
+			value: `今天 #project/knomo${expectedSuffix}`,
+			cursor: 18,
+		}, JSON.stringify(suffix));
+	}
+});
+
 test("continues and exits Markdown bullet lists", () => {
 	assert.deepEqual(getListEnterPatch("- abc", 5, 5), {
 		value: "- abc\n- ",

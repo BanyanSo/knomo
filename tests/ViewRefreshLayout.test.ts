@@ -18,6 +18,9 @@ async function browserFixture(locale = "en") {
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!) as typeof import("playwright");
 	const browser: Browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "chromium" });
 	const page: Page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+	// 本地安全来源提供与宿主一致的 Web Crypto；请求由测试直接响应，不访问服务端。
+	await page.route("http://localhost/knomo-layout", route => route.fulfill({ contentType: "text/html", body: "" }));
+	await page.goto("http://localhost/knomo-layout");
 	await page.setContent('<body class="theme-light"><main class="knomo-plugin is-layout-desktop-wide"><div id="flow" class="knomo-card-flow"></div></main></body>');
 	await page.addStyleTag({ content: readFileSync("styles.css", "utf8") + `
 		* { box-sizing: border-box; }
@@ -111,6 +114,43 @@ test("多页列表及浮标编辑可见卡片或上方长正文后，局部提�
 				assert.ok(Math.abs(sample.offset - first.offset) <= 1, evidence);
 			}
 		}
+	} finally { await h.close(); }
+});
+
+test("普通列表保留 A 的只读画面时更新上方 B，重建仍保留 A 的阅读位置和图片，换范围释放", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) {
+			const result = await h.page.evaluate(mobile => window.refreshFixture.pagedEditGeometry({ surface: "feed", mobile, editAbove: true, readonlySource: true }), mobile);
+			const first = result.samples[0]!, evidence = JSON.stringify({ mobile, result });
+			assert.equal(result.updated, true, evidence);
+			assert.equal(result.readonlyCount, 90, evidence);
+			assert.equal(result.sameReadonlyCard, true, evidence); assert.equal(result.sameImage, true, evidence);
+			assert.equal(result.releasedOnScopeChange, true, evidence);
+			for (const sample of result.samples) {
+				assert.equal(sample.count, first.count, evidence); assert.equal(sample.anchor, first.anchor, evidence);
+				assert.ok(Math.abs(sample.offset - first.offset) <= 1, evidence);
+			}
+		}
+	} finally { await h.close(); }
+});
+
+test("真实被引用关系重查分别保留数据深度、挂载数量和屏上卡片，再沿新游标翻页", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) for (const position of [0, 70, 140]) {
+			const result = await h.page.evaluate(options => window.refreshFixture.referrerRefreshGeometry(options), { mobile, position, remaining: 200 });
+			const evidence = JSON.stringify({ mobile, position, result });
+			assert.equal(result.samples[0]!.data, 150, evidence);
+			assert.equal(result.samples[1]!.data, 150, evidence);
+			assert.equal(result.samples[1]!.mounted, result.samples[0]!.mounted, evidence);
+			assert.equal(result.samples[1]!.anchor, result.samples[0]!.anchor, evidence);
+			assert.ok(Math.abs(result.samples[1]!.offset - result.samples[0]!.offset) <= 1, evidence);
+			assert.equal(result.next, true, evidence); assert.equal(result.nextCount, 200, evidence); assert.equal(result.unique, 200, evidence);
+		}
+		const fewer = await h.page.evaluate(() => window.refreshFixture.referrerRefreshGeometry({ mobile: false, position: 70, remaining: 80 }));
+		assert.equal(fewer.samples[1]!.data, 80); assert.equal(fewer.samples[1]!.mounted, 80);
+		assert.equal(fewer.next, false); assert.equal(fewer.nextCount, 80);
 	} finally { await h.close(); }
 });
 

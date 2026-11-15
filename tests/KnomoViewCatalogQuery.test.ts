@@ -1152,6 +1152,24 @@ test("CAT-PAGE-001：分页合并超过旧窗口阈值时不丢失已显示的�
 	assert.equal(merged.some((memo) => memo.id === "memo-199"), true);
 });
 
+test("Catalog 分页合并兼容直接解析的展示数据，分钟与零秒同刻沿源区间倒序且保留显示精度", async () => {
+	await ensureObsidianStub();
+	const { mergeCatalogMemoPages } = await import("../src/ui/KnomoView");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { toCatalogMemoItem } = await import("../src/services/CatalogReadService");
+	const { toCatalogMemoView } = await import("../src/types/memoView");
+	const { createCatalogCapabilities, createResolvedMemoCapabilities } = await import("../src/services/MemoCapabilityModel");
+	const parsed = new DiaryMemoParser().parseRevision({ sourcePath: "Daily.md", logicalDate: "2026-08-22", sourceRevision: "revision",
+		content: "- 09:00 minute\n- 09:00:00 zero seconds\n- 09:00 another minute\n" });
+	const capabilities = createCatalogCapabilities(completeCoverage());
+	const memos = parsed.observations.map(observation => toCatalogMemoView(toCatalogMemoItem({
+		kind: "observation", observation, capabilities: createResolvedMemoCapabilities(),
+	}, capabilities)));
+	const merged = mergeCatalogMemoPages(memos);
+	assert.deepEqual(merged.map(memo => memo.contentSnapshot), ["another minute", "zero seconds", "minute"]);
+	assert.deepEqual(merged.map(memo => memo.createdAt), ["2026-08-22T09:00", "2026-08-22T09:00:00", "2026-08-22T09:00"]);
+});
+
 type QueryMemo = MemoViewItem;
 
 interface QueryView {

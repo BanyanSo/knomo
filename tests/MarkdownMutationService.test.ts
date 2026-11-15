@@ -1059,6 +1059,28 @@ test("编辑器事务仅更新内存或磁盘读取失败时，不授权清理�
 	}
 });
 
+test("随机组正文依据只随已确认落盘的编辑发布，计算失败不阻断 Daily 提交", async t => {
+	for (const mode of ["confirmed", "editor-pending", "proof-failed"] as const) await t.test(mode, async () => {
+		const displayed: import("../src/services/DailyMemoPresentationChange").ConfirmedDailyMemoPresentation[] = [];
+		const f = createFixture({ activeEditor: mode === "editor-pending", delayEditorDiskWrite: mode === "editor-pending",
+			initialFiles: { "Daily/2026-08-22.md": "---\nmodified: old\n---\n## Memos\n- 09:00 before\n" },
+			onDailyConfirmed: presentation => displayed.push(presentation) });
+		const [before] = await f.parse("2026-08-22");
+		if (mode === "proof-failed") {
+			const proof = await import("../src/services/DailyMemoPresentationChange");
+			t.mock.method(proof, "createDailyMemoBodyProof", async () => { throw new Error("digest failed"); });
+			t.mock.method(console, "warn", () => {});
+		}
+		assert.equal((await f.service.edit({ observation: toHandle(before!), content: "after" })).status, "committed");
+		if (mode === "editor-pending") { assert.deepEqual(displayed, []); assert.match(f.vault.readText("Daily/2026-08-22.md"), /before/u); }
+		else {
+			assert.match(f.vault.readText("Daily/2026-08-22.md"), /after/u);
+			assert.equal(displayed.length, 1);
+			assert.equal(displayed[0]!.bodyProof !== undefined, mode === "confirmed");
+		}
+	});
+});
+
 test("已读回编辑器落盘内容或 Vault.process 成功才确认草稿可清理", async () => {
 	for (const activeEditor of [false, true]) {
 		const displayed: import("../src/services/DailyMemoPresentationChange").ConfirmedDailyMemoPresentation[] = [];

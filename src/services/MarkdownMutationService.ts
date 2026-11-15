@@ -23,7 +23,7 @@ import {
 	type PreparedDailyWrite,
 } from "./DailyMemoWriteGateway";
 import { MarkdownBlockService } from "./MarkdownBlockService";
-import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
+import { buildDailyMemoPresentationChange, createDailyMemoBodyProof, type DailyMemoBodyProof, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 
 export interface MarkdownCatalogCommitInput {
 	file: TFile;
@@ -126,7 +126,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				},
 			});
 			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock, expectedBlockId);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted, undefined, requireObservation(beforeObservation), changed);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted, undefined, requireObservation(beforeObservation), changed, true);
 			return committedResult(changed, catalogUpdatePending);
 		});
 	}
@@ -232,7 +232,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		insertedObservation?: MemoObservation,
 		changedBefore: MemoObservation | null = null,
 		changedAfter: MemoObservation | null = insertedObservation ?? null,
+		retainRandomReunion = false,
 	): Promise<boolean> {
+		let bodyProof: DailyMemoBodyProof | undefined;
+		if (retainRandomReunion && this.options.onDailyConfirmed) {
+			try { bodyProof = await createDailyMemoBodyProof(prepared.afterContent); }
+			catch (error) { logContinuationFailure("save", "continuation-proof", error); }
+		}
 		await this.dailyGateway.commit(prepared);
 		const presentationChange = buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter);
 		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
@@ -242,8 +248,9 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			catch { diskConfirmed = false; }
 		}
 		try {
-			if (diskConfirmed) this.options.onDailyConfirmed?.({
+			if (diskConfirmed && this.options.onDailyConfirmed) this.options.onDailyConfirmed({
 				change: presentationChange, observations: prepared.after.observations,
+				...(bodyProof ? { bodyProof } : {}),
 			});
 		} catch (error) {
 			logContinuationFailure("save", "confirmed-render", error);

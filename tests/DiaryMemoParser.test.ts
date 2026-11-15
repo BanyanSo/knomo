@@ -5,10 +5,29 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { DiaryMemoParser, getDailyBodyBoundary } from "../src/services/DiaryMemoParser";
+import { createDailyMemoBodyProof } from "../src/services/DailyMemoPresentationChange";
 
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
+
+test("文件头续接摘要使用 Parser 边界并保留正文原始换行、空白与分隔线", async () => {
+	const body = "## Memos\r\n- 09:00 same\r\n  ---\r\n  paragraph  \r\n\r\n";
+	const original = await createDailyMemoBodyProof(body);
+	for (const header of ["---\nmodified: now\n---\n", "\uFEFF---\r\ncreated: now\r\nmodified: later\r\n...\r\n"]) {
+		const content = header + body, boundary = getDailyBodyBoundary(content)!;
+		assert.equal(content.slice(boundary.offset), body);
+		assert.equal((await createDailyMemoBodyProof(content))!.digest, original!.digest);
+		const parsed = await parser.parse({ sourcePath: "Daily.md", logicalDate: "2026-08-22", bytes: Buffer.from(content) });
+		assert.equal(parsed.observations[0]!.startLine, boundary.startLine + 1);
+	}
+	for (const changed of [body.replace(/\r\n/gu, "\n"), body + "\n", body.replace("paragraph  ", "paragraph")]) {
+		assert.notEqual((await createDailyMemoBodyProof(changed))!.digest, original!.digest);
+	}
+	const unclosed = "---\nmodified: now\n## Memos\n- 09:00 same\n";
+	assert.equal(getDailyBodyBoundary(unclosed), null);
+	assert.equal(await createDailyMemoBodyProof(unclosed), undefined);
+});
 
 test("Daily SHA-256 revision 和完整 raw block 的历史摘要保持固定", async () => {
 	const result = await new DiaryMemoParser().parse({

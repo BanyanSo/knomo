@@ -300,6 +300,21 @@ function startsWithFrontmatter(lines: readonly string[]): boolean {
 	return lines[0]?.trim() === "---";
 }
 
+// 与 Daily 解析使用同一文件头边界；offset 指向原始字符串，不规范化正文换行或空白。
+export function getDailyBodyBoundary(content: string): { offset: number; startLine: number } | null {
+	const lines = splitMarkdownLines(content);
+	if (!startsWithFrontmatter(lines)) return { offset: 0, startLine: 0 };
+	const endLine = lines.findIndex((line, index) => index > 0 && isFrontmatterEnd(line));
+	if (endLine < 0) return null;
+	const endings = /\r\n|\r|\n/gu;
+	let offset = 0;
+	for (let index = 0; index <= endLine; index++) {
+		const ending = endings.exec(content);
+		offset = ending ? ending.index + ending[0].length : content.length;
+	}
+	return { offset, startLine: endLine + 1 };
+}
+
 function isFrontmatterEnd(line: string): boolean {
 	const value = line.trim();
 	return value === "---" || value === "...";

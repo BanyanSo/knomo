@@ -304,6 +304,44 @@ test("普通列表刷新同时补回多页今日浮标与普通记录，不先�
 	assert.equal(h.view.memos.length, 150);
 });
 
+test("同范围直接重查保留三页深度及全历史范围，下一页沿新游标继续", async () => {
+	const h = await expandedWindowHarness();
+	Object.assign(h.view, { memoLoadingPromise: null, memoLoadingFingerprint: null });
+	h.requests.length = 0;
+	await h.view.reloadCurrentCatalogQuery();
+	assert.equal(h.view.memos.length, 150);
+	assert.ok(h.requests.every(request => request.fromDate === undefined));
+	assert.equal(await h.view.loadNextCatalogPage(), true);
+	assert.equal(h.view.memos.length, 200);
+});
+
+test("真实被引用筛选的关系通知与排队重查保留三页，余量不足读尽并在换筛选后重置", async t => {
+	for (const remaining of [200, 80]) await t.test(String(remaining), async () => {
+		const h = await expandedWindowHarness(false, true);
+		assert.equal(h.view.memos.length, 150);
+		Object.assign(h.view, { containerEl: { win: { setTimeout, clearTimeout } }, relationQueryRefreshTimer: null,
+			invalidateRecordStats() {}, recordStatsViewStateController: { clearRendered() {} } });
+		const unsubscribe = h.read.relations.subscribe(() => h.view.onMemoRelationsChanged());
+		try {
+			await h.updateRefs(remaining);
+			await h.view.memoLoadingPromise;
+			assert.equal(h.view.memos.length, Math.min(150, remaining));
+			assert.equal(h.view.catalogCursor === null, remaining < 150);
+			h.view.queueRelationQueryRefresh(h.view.getCatalogQueryFingerprint(true));
+			await new Promise(resolve => setTimeout(resolve, 65)); await h.view.memoLoadingPromise;
+			assert.equal(h.view.memos.length, Math.min(150, remaining));
+			if (remaining > 150) {
+				assert.equal(await h.view.loadNextCatalogPage(), true);
+				assert.equal(h.view.memos.length, 200);
+				assert.equal(new Set(h.view.memos.map((memo: MemoViewItem) => memo.id)).size, 200);
+			}
+			h.view.viewStateController.scopeFilter = "with-link";
+			await h.view.reloadCurrentCatalogQuery();
+			assert.ok(h.view.memos.length <= 50, "主动换范围从新范围首批开始");
+		} finally { unsubscribe(); }
+	});
+});
+
 test("菜单删除与旧游标恢复保住全历史三页，使用新游标继续读尽", async t => {
 	for (const entry of ["delete", "cursor"] as const) await t.test(entry, async () => {
 		const h = await expandedWindowHarness();
@@ -367,7 +405,7 @@ test("补窗口期间切换筛选只接纳新范围首批，迟到旧尾页不�
 	assert.equal(h.view.memos, current);
 });
 
-async function expandedWindowHarness(pinned = false) {
+async function expandedWindowHarness(pinned = false, referenced = false) {
 	const h = await refreshHarness(), { view } = h;
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
@@ -377,21 +415,33 @@ async function expandedWindowHarness(pinned = false) {
 	await catalog.open();
 	const today = formatTimeBuoyDate(new Date()), older = formatTimeBuoyDate(new Date(new Date().getFullYear(), new Date().getMonth() - 3, 22));
 	const contents = new Map<string, { date: string; content: string }>();
+	const referenceTargets: string[] = [];
 	for (const date of [today, older]) {
 		const sourcePath = `Daily/${date}.md`;
 		const content = "## Memos\n" + Array.from({ length: 100 }, (_, index) => {
 			const time = `${String(8 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}`;
-			return `- ${time} ${date}-${index} #${index % 2 ? "other" : "keep"}${pinned && date === today && index < 90 ? ` @${today}` : ""}\n`;
+			referenceTargets.push(`${sourcePath}#^memo-${date}-${index}`);
+			return `- ${time} ${date}-${index} #${index % 2 ? "other" : "keep"}${pinned && date === today && index < 90 ? ` @${today}` : ""}${referenced ? ` ^memo-${date}-${index}` : ""}\n`;
 		}).join("");
 		contents.set(sourcePath, { date, content });
 		const parsed = await new DiaryMemoParser().parse({ sourcePath, logicalDate: date, bytes: new TextEncoder().encode(content) });
 		await catalog.replaceFile({ inventory: { sourcePath, logicalDate: date, mtime: 1, size: content.length },
-			sourceRevision: parsed.sourceRevision, observations: parsed.observations, parserVersion: 2, settingsFingerprint: "settings", auditedAt: 1 });
+			sourceRevision: parsed.sourceRevision, observations: parsed.observations, blockAnchors: parsed.blockAnchors,
+			parserVersion: 2, settingsFingerprint: "settings", auditedAt: 1 });
 	}
-	await store.setCoverage({ kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 2, totalFileCount: 2 });
+	const updateRefs = async (count: number) => {
+		const sourcePath = "References.md", content = referenceTargets.slice(0, count).map(target => `- 12:00 [[${target}]]\n`).join("");
+		const parsed = await new DiaryMemoParser().parse({ sourcePath, logicalDate: today, bytes: new TextEncoder().encode(content) });
+		await catalog.replaceFile({ inventory: { sourcePath, logicalDate: today, mtime: 1, size: content.length }, sourceRevision: parsed.sourceRevision,
+			observations: parsed.observations, blockAnchors: parsed.blockAnchors, parserVersion: 2, settingsFingerprint: "settings", auditedAt: 1 });
+	};
+	if (referenced) { await updateRefs(200); view.viewStateController.scopeFilter = "referenced"; }
+	const fileCount = referenced ? 3 : 2;
+	await store.setCoverage({ kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: fileCount, totalFileCount: fileCount });
 	const read = new CatalogReadService({ catalog }), production = Object.getPrototypeOf(view);
 	const requests: Parameters<typeof read.query>[0][] = [];
 	Object.assign(view, {
+		memoLoadingPromise: null, memoLoadingFingerprint: null,
 		catalogReadService: read, getCatalogReadService: () => read,
 		getCatalogQueryFingerprint: production.getCatalogQueryFingerprint, buildCatalogActiveQuery: production.buildCatalogActiveQuery,
 		prepareCatalogDesktopQuery: (fingerprint: string) => { view.catalogDesktopQueryFingerprint = fingerprint; },
@@ -406,7 +456,7 @@ async function expandedWindowHarness(pinned = false) {
 	});
 	await view.reloadMemos(true);
 	while (view.memos.length < 150 || (pinned && view.catalogTodayTimeBuoys.todayCursor)) await view.loadNextCatalogPage();
-	return { ...h, read, requests, remove: async (memo: MemoViewItem) => {
+	return { ...h, read, requests, updateRefs, remove: async (memo: MemoViewItem) => {
 		const sourcePath = memo.dailyRef.path, source = contents.get(sourcePath)!;
 		source.content = source.content.split("\n").filter(line => !line.includes(memo.contentSnapshot)).join("\n");
 		const parsed = await new DiaryMemoParser().parse({ sourcePath, logicalDate: source.date, bytes: new TextEncoder().encode(source.content) });

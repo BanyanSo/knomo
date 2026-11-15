@@ -19,6 +19,7 @@ export type RandomReunionStatus =
 	| "failed";
 
 export interface RandomReunionSnapshot<TMemo extends MemoRecord = MemoRecord> {
+	batchId: number;
 	memos: TMemo[] | null;
 	status: RandomReunionStatus;
 	error: string | null;
@@ -38,6 +39,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	private status: RandomReunionStatus = "idle";
 	private error: string | null = null;
 	private runId = 0;
+	private batchId = 0;
 	private request: AbortController | null = null;
 	private shownBatches: string[][] = [];
 	private readonly openingMemoIds = new Set<string>();
@@ -46,6 +48,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 
 	getSnapshot(): RandomReunionSnapshot<TMemo> {
 		return {
+			batchId: this.batchId,
 			memos: this.memos,
 			status: this.status,
 			error: this.error,
@@ -53,6 +56,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	}
 
 	clearMemos(): void {
+		this.batchId++;
 		this.cancelPending(false);
 		this.memos = null;
 		this.status = "idle";
@@ -79,6 +83,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 			return;
 		}
 		const runId = ++this.runId;
+		this.batchId++;
 		const request = new AbortController();
 		this.request = request;
 		const previousMemos = this.memos;
@@ -144,7 +149,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		const changed = memos.length !== expected.length
 			|| memos.some((memo, index) => getMemoRenderRevision(memo) !== getMemoRenderRevision(expected[index]));
 		if (!changed) {
-			if (this.error === t("feedback.refreshFailed")) { this.error = null; this.renderIfActive(); }
+			if (this.error !== null) { this.error = null; this.renderIfActive(); }
 			return false;
 		}
 		const removed = memos.length < expected.length;

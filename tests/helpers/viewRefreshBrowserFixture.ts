@@ -15,6 +15,13 @@ import { MobileSearchController, type MobileSearchPage } from "../../src/ui/Mobi
 import { createCatalogCapabilities } from "../../src/services/MemoCapabilityModel";
 import { TimeBuoyViewController } from "../../src/ui/TimeBuoyViewController";
 import { getKnomoLocale, t } from "../../src/i18n";
+import { TFile } from "obsidian";
+import { KnomoViewStateController } from "../../src/ui/KnomoViewStateController";
+import { KnomoCardFlowCoordinator } from "../../src/ui/KnomoCardFlowCoordinator";
+import { DiaryMemoParser } from "../../src/services/DiaryMemoParser";
+import { MemoCatalogService } from "../../src/services/MemoCatalogService";
+import { InMemoryMemoCatalogStore } from "../../src/services/MemoCatalogStore";
+import { CatalogReadService } from "../../src/services/CatalogReadService";
 
 export function installDomHelpers(): void {
 	Object.assign(HTMLElement.prototype, {
@@ -149,15 +156,26 @@ export async function geometry(options: { review: boolean; recent: boolean; imag
 	return { samples, sameImage: image === flow.querySelector("img"), loads: h.loads() };
 }
 
-export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mobile: boolean; editAbove: boolean; external?: boolean }) {
+export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mobile: boolean; editAbove: boolean; external?: boolean; readonlySource?: boolean }) {
 	const h = fixture(options.mobile), { view, flow } = h;
 	h.context.enabled = false;
 	const today = "2026-11-08", count = options.surface === "feed" ? 150 : 90;
-	let memos = Array.from({ length: 150 }, (_, index) => {
-		const memo = h.makeMemo(index, 0, index === 95, "2026-08-08");
+	const makeMemo = (index: number, revision: number) => {
+		const memo = h.makeMemo(index, revision, index === 95, "2026-08-08");
 		memo.catalog!.timeBuoyDates = [today];
+		if (options.readonlySource) {
+			const minutes = 150 - index;
+			memo.createdAt = `2026-08-08T${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+			if (index < 60) {
+				memo.id = memo.id.replace("Daily/", "Other/");
+				memo.dailyRef.path = memo.dailyRef.path.replace("Daily/", "Other/");
+				memo.catalog!.key = memo.catalog!.renderKey = memo.id;
+				memo.catalog!.observationHandle.sourcePath = memo.catalog!.observation.sourcePath = memo.dailyRef.path;
+			}
+		}
 		return memo;
-	});
+	};
+	let memos = Array.from({ length: 150 }, (_, index) => makeMemo(index, 0));
 	let rendering = false;
 	const buoy = new TimeBuoyViewController({ getNow: () => new Date(2026, 10, 8), queryDate: async () => ({ items: [], stale: [], missingPeriods: [] }),
 		queryPage: async request => {
@@ -190,27 +208,117 @@ export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mob
 		const top = flow.getBoundingClientRect().top;
 		const card = cards().find(card => card.getBoundingClientRect().bottom > top)!;
 		return { scroll: flow.scrollTop, anchor: /^Memo \d+/.exec(card.querySelector(".knomo-card-content")!.textContent!)?.[0],
-			offset: card.getBoundingClientRect().top - top, count: cards().length };
+			offset: card.getBoundingClientRect().top - top, count: cards().length,
+			readonly: flow.querySelectorAll("[data-knomo-readonly-transition]").length };
 	};
 	const reader = cards()[70]!;
 	flow.scrollTop += reader.getBoundingClientRect().top - flow.getBoundingClientRect().top + 12;
 	await frames();
+	if (options.readonlySource) {
+		Object.assign(view, {
+			viewStateController: new KnomoViewStateController(), confirmedTodayTimeBuoys: [],
+			app: { vault: { getAbstractFileByPath: (path: string) => Object.assign(new TFile(), { path }), read: async () => "external A" } },
+			confirmedDailyMemos: { getRevision: () => "revision-0", remove() {}, getChanges: () => [], pending: false },
+			randomReunionController: { getSnapshot: () => ({ batchId: 1, memos: null }), applyMemoChanges() {} },
+			shuffleDayController: { getSnapshot: () => ({ memos: [] }), applyMemoChanges() {} },
+			syncPageFeedback() {}, reportViewRefreshFailure(error: unknown) { throw error; },
+		});
+		await view.checkConfirmedDailyFile("Daily/2026-08-08.md");
+	}
 	const samples = [sample()], editedIndex = options.editAbove ? 50 : 70;
 	const previous = memos;
 	memos = memos.map((before, index) => {
-		const memo = h.makeMemo(index, 1, index === 95, "2026-08-08");
-		memo.catalog!.timeBuoyDates = [today];
+		if (options.readonlySource && index >= 60) return before;
+		const memo = makeMemo(index, 1);
 		if (index === editedIndex) { memo.contentSnapshot += " updated long paragraph".repeat(40); memo.contentHash = "edited"; }
 		return memo;
 	});
 	if (options.external) {
 		view.memos = memos;
 		if (options.surface === "buoy") await buoy.loadInitial(); else render();
-	} else view.applyCachedMemoChanges(new Map(previous.map((before, index) => [before.id, memos[index]!])));
+	} else view.applyCachedMemoChanges(new Map(previous.flatMap((before, index) => options.readonlySource && index >= 60
+		? [] : [[before.id, memos[index]!] as const])));
 	samples.push(sample()); await h.settle(); samples.push(sample());
 	if (options.surface === "buoy") await buoy.loadInitial(); else render();
 	await h.settle(); samples.push(sample());
-	return { samples };
+	const readonlyCard = cards().find(card => card.querySelector(".knomo-card-content")?.textContent?.startsWith("Memo 70 "));
+	const image = flow.querySelector("img");
+	let sameReadonlyCard = false, sameImage = false, releasedOnScopeChange = false;
+	if (options.readonlySource) {
+		Object.assign(view.memoMarkdownRenderer, { clear() {} }); Object.assign(view.cardImageLoadQueue, { clear() {} });
+		Object.assign(view, { cardFlowCoordinator: new KnomoCardFlowCoordinator(),
+			restorePendingCardFlowScrollTop: Object.getPrototypeOf(view).restorePendingCardFlowScrollTop,
+			clearLoadingIndicators() {}, deferMobileCardFlowRender: () => false,
+			recordStatsViewStateController: { clearRendered() {} },
+			getCurrentCardFlowPresentation: () => ({ type: "items", mode: "memo", headers: [], memos: view.memos }),
+			renderCardFlowPresentation: (presentation: object) => view.syncCardFlowPresentation(presentation, null) });
+		view.forceRebuildCardFlow(); await h.settle(); samples.push(sample());
+		sameReadonlyCard = readonlyCard === cards().find(card => card.querySelector(".knomo-card-content")?.textContent?.startsWith("Memo 70 "));
+		sameImage = image === flow.querySelector("img");
+	}
+	const readonlyCount = flow.querySelectorAll("[data-knomo-readonly-transition]").length;
+	const updated = cards().some(card => card.getAttribute("data-memo-id") === memos[editedIndex]!.id && card.textContent?.includes("updated long paragraph"));
+	if (options.readonlySource) {
+		view.viewStateController.searchQuery = "new scope"; render();
+		releasedOnScopeChange = flow.querySelectorAll("[data-knomo-readonly-transition]").length === 0;
+	}
+	return { samples, readonlyCount, updated, sameReadonlyCard, sameImage, releasedOnScopeChange };
+}
+
+export async function referrerRefreshGeometry(options: { mobile: boolean; remaining: number; position: number }) {
+	const h = fixture(options.mobile), { view, flow } = h;
+	h.context.enabled = false;
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store), parser = new DiaryMemoParser();
+	await catalog.open();
+	let revision = 0;
+	const seed = async (sourcePath: string, content: string) => {
+		const parsed = parser.parseRevision({ sourcePath, logicalDate: "2026-08-08", content, sourceRevision: `revision-${++revision}` });
+		await catalog.replaceFile({ inventory: { sourcePath, logicalDate: "2026-08-08", mtime: revision, size: content.length },
+			sourceRevision: parsed.sourceRevision, observations: parsed.observations, blockAnchors: parsed.blockAnchors,
+			parserVersion: 19, settingsFingerprint: "test", auditedAt: revision });
+	};
+	await seed("Daily.md", Array.from({ length: 200 }, (_, index) => `- 09:00 Memo ${index} unchanged text ^memo-${index}\n`).join(""));
+	await seed("References.md", Array.from({ length: 200 }, (_, index) => `- 10:00 [[Daily#^memo-${index}]]\n`).join(""));
+	await store.setCoverage({ kind: "complete", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 2, totalFileCount: 2 });
+	const read = new CatalogReadService({ catalog });
+	const state = new KnomoViewStateController(); state.scopeFilter = "referenced";
+	const render = () => view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: view.memos }, null);
+	Object.assign(view, {
+		viewStateController: state, memos: [], catalogDesktopQueryRun: 0, catalogDesktopCountRun: 0, memoSourceGeneration: 0,
+		catalogDesktopQueryFingerprint: null, memoLoadingPromise: null, memoLoadingFingerprint: null,
+		hasCommittedCatalogDesktopQuery: false, catalogCoverage: null, catalogTodayTimeBuoys: null,
+		catalogReadService: read, getCatalogReadService: () => read, shouldShowTodayTimeBuoys: () => false,
+		relationCards: { observe() {}, release() {} },
+		mobileSearchController: { isOpen: false }, shouldCountCatalogQuery: () => false,
+		getFilteredMemos: () => view.memos, getInitialCardBatchSize: () => 150,
+		getCardFlowStateKey: () => view.memos.map((memo: MemoViewItem) => memo.id).join(), getMobileSearchStateKey: () => "",
+		syncRecordStatsSource() {}, refreshCatalogLibraryIndexes: async () => {}, retainMemoCardPreviews() {}, resetVisibleMemos() {},
+		renderCardFlow: render, renderUiState: (request?: { renderCardFlow?: boolean }) => { if (request?.renderCardFlow !== false) render(); },
+		renderAllMemosLoadingState() {}, renderMobileSearchResultsIfChanged() {}, renderNextCardBatch() {},
+		invalidateRecordStats() {}, recordStatsViewStateController: { clearRendered() {} },
+	});
+	await view.reloadCurrentCatalogQuery(true); await view.loadNextCatalogPage(); await view.loadNextCatalogPage();
+	await h.settle();
+	const cards = () => [...flow.querySelectorAll<HTMLElement>(".knomo-card")];
+	flow.scrollTop += cards()[options.position]!.getBoundingClientRect().top - flow.getBoundingClientRect().top + 12;
+	await frames();
+	const sample = () => {
+		const top = flow.getBoundingClientRect().top;
+		const card = cards().find(card => card.getBoundingClientRect().bottom > top)!;
+		return { data: view.memos.length, mounted: cards().length, anchor: card.querySelector(".knomo-card-content")!.textContent,
+			offset: card.getBoundingClientRect().top - top, scroll: flow.scrollTop, height: flow.scrollHeight,
+			first: cards()[0]!.querySelector(".knomo-card-content")!.textContent, firstTop: cards()[0]!.getBoundingClientRect().top - top };
+	};
+	const samples = [sample()];
+	const firstTargets = await read.query({ hasReferrers: true, limit: 150 });
+	const targets = [...firstTargets.items, ...(await read.query({ hasReferrers: true, limit: 150, cursor: firstTargets.nextCursor })).items];
+	const unsubscribe = read.relations.subscribe(() => view.onMemoRelationsChanged());
+	try {
+		await seed("References.md", targets.slice(0, options.remaining).map(memo => `- 10:00 [[Daily#^${memo.observation.existingBlockId}]]\n`).join(""));
+		await view.memoLoadingPromise; await h.settle(); samples.push(sample());
+		const next = await view.loadNextCatalogPage(); await h.settle();
+		return { samples, next, nextCount: view.memos.length, unique: new Set(view.memos.map((memo: MemoViewItem) => memo.id)).size };
+	} finally { unsubscribe(); read.relations.dispose(); }
 }
 
 export async function mobileRevisionGeometry(options: {

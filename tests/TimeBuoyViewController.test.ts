@@ -123,6 +123,26 @@ test("浮标三种标签深处编辑后从新版本游标补足原窗口，再�
 	});
 });
 
+test("浮标即时减员后仍按上次成功深度补读，余量不足时读尽", async t => {
+	for (const remaining of [0, 60, 120]) await t.test(String(remaining), async () => {
+		const h = pagedTimeBuoyHarness();
+		await h.controller.loadInitial(); await h.controller.loadMore(); await h.controller.loadMore();
+		const removed = h.memos.splice(0, 60);
+		h.controller.applyMemoChanges(new Map(removed.map(memo => [memo.id, null])));
+		if (remaining === 0) h.memos.length = 0;
+		if (remaining === 120) h.memos.push(...removed.map(memo => ({ ...memo, id: `new-${memo.id}` })));
+		h.setRevision(2); h.requests.length = 0;
+		await h.controller.loadInitial();
+		assert.equal(h.controller.getSnapshot().today.length, Math.min(90, remaining));
+		assert.equal(h.controller.getSnapshot().nextCursor === null, remaining <= 90);
+		if (remaining > 90) {
+			await h.controller.loadMore();
+			assert.equal(h.controller.getSnapshot().today.length, 120);
+			assert.equal(new Set(h.controller.getSnapshot().today.map(item => item.memo.id)).size, 120);
+		}
+	});
+});
+
 test("浮标补窗口等待或失败保留原结果，拒绝跨版本、覆盖变化、不完整与重复游标", async t => {
 	for (const fault of ["revision", "coverage", "incomplete", "failure", "repeated-cursor"] as const) await t.test(fault, async () => {
 		const h = pagedTimeBuoyHarness();
@@ -156,6 +176,28 @@ test("浮标补窗口等待或失败保留原结果，拒绝跨版本、覆盖�
 		assert.equal(h.controller.getSnapshot().todayRevision, 2);
 		assert.equal(h.controller.getSnapshot().refreshError, null);
 	});
+});
+
+test("浮标减员发生在加载更多期间时拒绝旧页，补读失败重试仍使用减员前深度", async () => {
+	const h = pagedTimeBuoyHarness();
+	await h.controller.loadInitial(); await h.controller.loadMore(); await h.controller.loadMore();
+	const gate = createDeferred<TimeBuoyPageResult>();
+	const oldRequest = h.controller.getSnapshot().nextCursor!;
+	const oldPage = h.page({ today: oldRequest.today, tab: "today", limit: 30, cursor: oldRequest });
+	h.setQuery(async () => gate.promise);
+	const pending = h.controller.loadMore();
+	const removed = h.memos.splice(0, 60);
+	h.controller.applyMemoChanges(new Map(removed.map(memo => [memo.id, null]))); h.setRevision(2);
+	h.setQuery(async request => { if (request.cursor) throw new Error("tail unavailable"); return h.page(request); });
+	await h.controller.loadInitial();
+	assert.equal(h.controller.getSnapshot().today.length, 30);
+	assert.ok(h.controller.getSnapshot().refreshError);
+	gate.resolve(oldPage); await pending;
+	assert.equal(h.controller.getSnapshot().today.length, 30);
+	h.setQuery(async request => h.page(request)); await h.controller.retry();
+	assert.equal(h.controller.getSnapshot().today.length, 60);
+	assert.equal(h.controller.getSnapshot().nextCursor, null);
+	assert.equal(h.controller.getSnapshot().refreshError, null);
 });
 
 test("浮标补窗口期间切换标签、跨午夜、再次编辑或关闭不接纳迟到尾页", async t => {

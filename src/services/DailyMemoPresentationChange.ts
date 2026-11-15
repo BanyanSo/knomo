@@ -1,5 +1,7 @@
 import type { MemoObservation, ObservationHandle } from "../types/catalog";
 import type { PreparedDailyWrite } from "./DailyMemoWriteGateway";
+import { getDailyBodyBoundary } from "./DiaryMemoParser";
+import { sha256Bytes } from "../utils/sha256";
 
 // 仅描述一次已确认提交的展示变化，不持久化，也不授权继续旧编辑或排队写入。
 export interface DailyMemoPresentationChange {
@@ -15,6 +17,18 @@ export interface DailyMemoPresentationChange {
 export interface ConfirmedDailyMemoPresentation {
 	change: DailyMemoPresentationChange;
 	observations: readonly MemoObservation[];
+	bodyProof?: DailyMemoBodyProof;
+}
+
+export interface DailyMemoBodyProof {
+	digest: string;
+	startLine: number;
+}
+
+export async function createDailyMemoBodyProof(content: string): Promise<DailyMemoBodyProof | undefined> {
+	const boundary = getDailyBodyBoundary(content);
+	if (boundary === null) return undefined;
+	return { digest: await sha256Bytes(new TextEncoder().encode(content.slice(boundary.offset))), startLine: boundary.startLine };
 }
 
 export function observationHandleKey(handle: Pick<ObservationHandle, "sourcePath" | "sourceRevision" | "startLine">): string {

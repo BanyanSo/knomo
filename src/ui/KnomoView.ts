@@ -6,7 +6,9 @@ import { LocalComposerDraftStore, type LocalComposerDraft } from "./LocalCompose
 import { sha256Bytes } from "../utils/sha256";
 import { StaleDailyWriteError } from "../services/DailyMemoWriteGateway";
 import { DailySourceUnavailableError, MarkdownMutationStaleError } from "../services/MarkdownMutationService";
-import { observationHandleKey, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "../services/DailyMemoPresentationChange";
+import { createDailyMemoBodyProof, observationHandleKey, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "../services/DailyMemoPresentationChange";
+import { DiaryMemoParser } from "../services/DiaryMemoParser";
+import { captureRandomReunionFileProof, matchRandomReunionFileProof, type RandomReunionFileProof } from "./RandomReunionContinuation";
 import { ConfirmedMemoPresentation } from "./ConfirmedMemoPresentation";
 import { createCatalogCapabilities } from "../services/MemoCapabilityModel";
 import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
@@ -1399,6 +1401,8 @@ export class KnomoView extends ItemView {
 		this.confirmedTodayTimeBuoys = [];
 		this.externallyInvalidatedDailyRevisions?.clear();
 		this.confirmedDailyFileChecks?.clear();
+		this.readonlyMemoPresentation = undefined;
+		this.randomReunionContinuation = undefined;
 		this.mobileViewFocusRecovery?.cancel();
 		this.mobileMenuController?.close();
 		this.cancelCatalogDesktopCount();
@@ -1537,23 +1541,96 @@ export class KnomoView extends ItemView {
 		this.confirmedDailyFileChecks?.delete(presentation.change.sourcePath);
 		this.externallyInvalidatedDailyRevisions?.delete(presentation.change.sourcePath);
 		this.relationsPage?.applyChange(presentation.change);
+		const continuation = this.getRandomReunionContinuation();
+		continuation.pendingPaths.delete(presentation.change.sourcePath);
 		const previousPresentation = this.captureMemoChangePresentation();
 		this.confirmedDailyMemos ??= new ConfirmedMemoPresentation();
 		const capabilities = createCatalogCapabilities(this.catalogCoverage ?? { kind: "partial", coveredFromDate: null,
 			pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 });
-		const { changes, changed } = this.confirmedDailyMemos.apply(presentation, this.getCachedMemos(), capabilities);
+		const readonly = this.getReadonlyMemoPresentation();
+		const cached = this.getCachedMemos();
+		if (readonly) cached.push(...Array.from(readonly.cards.values(), item => item.memo));
+		const { changes, changed } = this.confirmedDailyMemos.apply(presentation, cached, capabilities);
+		// 保存自身的文件通知可能先撤权；只有提交明确映射的旧卡才由本次确认接续。
+		const resumed: MemoRecord[] = [];
+		for (const { before } of presentation.change.replacements) {
+			const key = observationHandleKey(before);
+			if (!readonly?.cards.delete(key)) continue;
+			const current = changes.get(key);
+			if (current) resumed.push(current);
+		}
+		if (readonly?.cards.size === 0) this.readonlyMemoPresentation = undefined;
+		if (resumed.length > 0) this.catalogDesktopTotalCount = null;
 		this.randomReunionController.cancelPending();
 		this.shuffleDayController.cancelPending();
 		// 保存视图在面板退场前准备卡片，其它正在输入的移动视图继续保留延后渲染。
 		this.presentingConfirmedSave = this.isSaving;
-		try { this.applyCachedMemoChanges(changes, changed, true, previousPresentation, presentation.change.inserted !== null); }
+		try { this.applyCachedMemoChanges(changes, [...resumed, ...changed], true, previousPresentation, presentation.change.inserted !== null); }
 		finally { this.presentingConfirmedSave = false; }
+		const proof = captureRandomReunionFileProof(presentation, this.randomReunionController.getSnapshot().memos ?? []);
+		if (proof) continuation.files.set(presentation.change.sourcePath, proof);
+		else continuation.files.delete(presentation.change.sourcePath);
+	}
+
+	private randomReunionContinuation: {
+		batchId: number; files: Map<string, RandomReunionFileProof>; pendingPaths: Set<string>;
+	} | undefined;
+	private randomReunionRefreshRun = 0;
+
+	private getRandomReunionContinuation() {
+		const batchId = this.randomReunionController.getSnapshot().batchId;
+		if (!this.randomReunionContinuation || this.randomReunionContinuation.batchId !== batchId) {
+			this.randomReunionContinuation = { batchId, files: new Map(), pendingPaths: new Set() };
+		}
+		return this.randomReunionContinuation;
+	}
+
+	private isRandomReunionMemoPending(memo: MemoRecord): boolean {
+		if (!this.randomReunionContinuation?.pendingPaths.size) return false;
+		return this.activeNav === "random" && !this.randomDayOpen
+			&& (this.randomReunionContinuation?.batchId === this.randomReunionController.getSnapshot().batchId)
+			&& (this.randomReunionContinuation?.pendingPaths.has(memo.dailyRef.path) ?? false);
+	}
+
+	private suspendRandomReunionSource(path: string): void {
+		const state = this.getRandomReunionContinuation();
+		state.pendingPaths.add(path);
+		if (this.activeNav !== "random" || this.randomDayOpen) return;
+		for (const card of Array.from(this.cardFlowEl?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? [])) {
+			const memo = this.renderedCardMemos.get(card.getAttribute("data-memo-render-key") ?? "");
+			if (memo?.dailyRef.path !== path) continue;
+			makeReadonlyMemoCard(card);
+			this.memoMarkdownRenderer.releaseCard(card, "card-flow");
+			this.relationCards?.release(card);
+			this.removeCardImageTargets(card);
+		}
 	}
 
 	private externallyInvalidatedDailyRevisions: Map<string, string | null> | undefined;
 	private confirmedDailyFileChecks: Map<string, { failed: boolean }> | undefined;
 	private dailyFileValidationGeneration = 0;
 	private preservingReadonlyMemoPresentation = false;
+	private readonlyMemoPresentation: {
+		scope: string; cards: Map<string, { memo: MemoRecord; card: HTMLElement }>;
+	} | undefined;
+
+	private getReadonlyMemoPresentation() {
+		if (this.readonlyMemoPresentation && this.readonlyMemoPresentation.scope !== this.getCardFlowViewStateKey()) {
+			this.readonlyMemoPresentation = undefined;
+		}
+		return this.readonlyMemoPresentation;
+	}
+
+	private retainReadonlyMemoPresentation<T extends CardFlowPresentation>(presentation: T): T | Extract<CardFlowPresentation, { type: "items" }> {
+		const readonly = this.getReadonlyMemoPresentation();
+		if (!readonly) return presentation;
+		// 旧卡只参与当前范围的显示；查询窗口与操作查找仍使用已经撤权的实时集合。
+		const memos = mergeCatalogMemoPages([...Array.from(readonly.cards.values(), item => item.memo),
+			...(presentation.type === "items" ? presentation.memos : [])]);
+		return { type: "items", mode: "memo", headers: presentation.headers ?? [],
+			memos: this.shouldShowTodayTimeBuoys()
+				? mergeTodayTimeBuoyFeed(memos, buildTimeBuoyTabItems(memos, "today", formatTimeBuoyDate(new Date()))) : memos };
+	}
 
 	private registerConfirmedDailyFileEvents(): void {
 		this.registerEvent(this.app.vault.on("modify", file => this.checkConfirmedDailyFile(file.path)));
@@ -1565,16 +1642,20 @@ export class KnomoView extends ItemView {
 	}
 
 	private checkConfirmedDailyFile(path: string, refreshOnSuccess = true): Promise<void> | void {
-		const revision = this.confirmedDailyMemos?.getRevision(path) ?? this.externallyInvalidatedDailyRevisions?.get(path);
 		if (this.trashViewClosed) return;
+		const continuation = this.getRandomReunionContinuation();
+		const proof = continuation.files.get(path);
+		const pendingRevision = this.confirmedDailyMemos?.getRevision(path) ?? this.externallyInvalidatedDailyRevisions?.get(path);
+		const revision = pendingRevision === undefined ? proof?.sourceRevision : pendingRevision;
 		if (revision === undefined) {
 			const paths = new Set([...(this.confirmedDailyMemos?.getChanges() ?? []).map(change => change.sourcePath),
-				...(this.externallyInvalidatedDailyRevisions?.keys() ?? [])]);
+				...(this.externallyInvalidatedDailyRevisions?.keys() ?? []), ...continuation.files.keys()]);
 			return Promise.all([...paths].filter(sourcePath => sourcePath.startsWith(path + "/"))
 				.map(sourcePath => this.checkConfirmedDailyFile(sourcePath, refreshOnSuccess))).then(() => undefined);
 		}
 		// 事件到达时即占住代次，较早的磁盘读取无权发布或清理后来的复核。
 		const check = { failed: false };
+		if (proof) this.suspendRandomReunionSource(path);
 		(this.confirmedDailyFileChecks ??= new Map()).set(path, check);
 		this.dailyFileValidationGeneration = (this.dailyFileValidationGeneration ?? 0) + 1;
 		const file = this.app.vault.getAbstractFileByPath(path);
@@ -1589,8 +1670,10 @@ export class KnomoView extends ItemView {
 					return memo?.dailyRef.path === path ? [{ card, memo }] : [];
 				}) : [];
 				const focus = flow ? new MemoFocusRestore(flow, mounted) : null;
-				for (const { card } of mounted) {
-					makeReadonlyMemoCard(card);
+				const readonly = mounted.length ? this.getReadonlyMemoPresentation()
+					?? { scope: this.getCardFlowViewStateKey(), cards: new Map<string, { memo: MemoRecord; card: HTMLElement }>() } : undefined;
+				for (const { card, memo } of mounted) {
+					readonly?.cards.set(memo.id, { memo, card: makeReadonlyMemoCard(card) });
 					this.memoMarkdownRenderer.releaseCard(card, "card-flow");
 					this.relationCards?.release(card);
 					this.removeCardImageTargets(card);
@@ -1599,13 +1682,20 @@ export class KnomoView extends ItemView {
 				this.hasConfirmedMemoPresentation = this.confirmedDailyMemos?.pending ?? false;
 				this.confirmedTodayTimeBuoys = this.confirmedTodayTimeBuoys.filter(item => item.memo.dailyRef.path !== path);
 				const preserveReadonly = mounted.length > 0 || !!this.mobileSearchController?.isOpen;
+				if (readonly) this.readonlyMemoPresentation = readonly;
 				this.preservingReadonlyMemoPresentation = preserveReadonly;
+				const changes = new Map<string, MemoRecord | null>(this.getCachedMemos()
+					.filter(memo => memo.dailyRef.path === path && memo.catalog?.observationHandle.sourceRevision !== current)
+					.map(memo => [memo.id, null]));
+				const random = this.randomReunionController.getSnapshot();
 				try {
-					this.applyCachedMemoChanges(new Map(this.getCachedMemos()
-						.filter(memo => memo.dailyRef.path === path).map(memo => [memo.id, null])), [], false, undefined, false, preserveReadonly);
+					this.applyCachedMemoChanges(changes, [], false, undefined, false, preserveReadonly, true);
+					if (!proof && random.memos && continuation.batchId === random.batchId) {
+						this.randomReunionController.reconcileMemos(random.memos.filter(memo => !changes.has(memo.id)), random.memos);
+					}
 				} finally { this.preservingReadonlyMemoPresentation = false; }
 				focus?.restore([]); focus?.dispose();
-				this.pageRefreshError = t("feedback.sourceChanged"); this.syncPageFeedback();
+				if (this.activeNav !== "random") { this.pageRefreshError = t("feedback.sourceChanged"); this.syncPageFeedback(); }
 			}
 			this.confirmedDailyFileChecks.delete(path);
 			// Catalog 通知可能先于磁盘复核完成；完成后仍需主动完成本页交接。
@@ -1630,6 +1720,8 @@ export class KnomoView extends ItemView {
 		this.externallyInvalidatedDailyRevisions?.clear();
 		this.confirmedDailyFileChecks?.clear();
 		this.confirmedTodayTimeBuoys = [];
+		this.readonlyMemoPresentation = undefined;
+		this.randomReunionContinuation = undefined;
 		this.catalogDesktopQueryRun++;
 	}
 
@@ -1754,6 +1846,7 @@ export class KnomoView extends ItemView {
 
 	private retainUnchangedMemoCards(changes: ReadonlyMap<string, MemoRecord | null>, previous: readonly MemoRecord[]): void {
 		for (const card of Array.from(this.cardFlowEl?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? [])) {
+			if (card.hasAttribute("data-knomo-readonly-transition")) continue;
 			const id = card.getAttribute("data-memo-id")!;
 			const before = this.renderedCardMemos.get(card.getAttribute("data-memo-render-key") ?? id)
 				?? previous.find(memo => memo.id === id);
@@ -1776,7 +1869,7 @@ export class KnomoView extends ItemView {
 
 	private applyCachedMemoChanges(
 		changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], confirmed = false,
-		previousPresentation = this.captureMemoChangePresentation(), created = false, readonlyPresentation = false,
+		previousPresentation = this.captureMemoChangePresentation(), created = false, readonlyPresentation = false, preserveRandomMemos = false,
 	): boolean {
 		this.cancelCatalogDesktopQuery();
 		this.remapHistoryBrowsePositions(changes, previousPresentation.memos);
@@ -1813,7 +1906,7 @@ export class KnomoView extends ItemView {
 			};
 			if (confirmed) this.catalogTodayTimeBuoys = this.projectTodayTimeBuoys(this.catalogTodayTimeBuoys, inserted);
 		}
-		this.randomReunionController.applyMemoChanges(changes, false);
+		if (!preserveRandomMemos) this.randomReunionController.applyMemoChanges(changes, false);
 		this.shuffleDayController.applyMemoChanges(changes, inserted);
 		this.randomDayController?.applyMemoChanges(changes, inserted);
 		this.timeBuoyViewController.applyMemoChanges(changes, confirmed ? inserted : []);
@@ -1846,17 +1939,111 @@ export class KnomoView extends ItemView {
 		const snapshot = this.randomReunionController.getSnapshot().memos;
 		if (snapshot === null) return;
 		const generation = this.confirmedPresentationGeneration ?? 0;
+		const validationGeneration = this.dailyFileValidationGeneration ?? 0;
+		const run = this.randomReunionRefreshRun = (this.randomReunionRefreshRun ?? 0) + 1;
+		const continuation = this.getRandomReunionContinuation();
+		const isCurrent = () => !this.trashViewClosed && generation === (this.confirmedPresentationGeneration ?? 0)
+			&& validationGeneration === (this.dailyFileValidationGeneration ?? 0) && run === this.randomReunionRefreshRun
+			&& continuation.batchId === this.randomReunionController.getSnapshot().batchId
+			&& this.randomReunionController.getSnapshot().memos === snapshot;
 		try {
-			const queryable = snapshot.filter(memo => this.confirmedDailyMemos?.getRevision(memo.dailyRef.path) === undefined);
+			const changes = new Map<string, MemoRecord | null>();
+			const checkedPaths = new Set<string>();
+			const acceptedProofs = new Map<string, RandomReunionFileProof>();
+			const acceptedRevisions = new Map<string, string>();
+			const expiredProofs = new Set<string>();
+			let readFailure: unknown;
+			for (const [path, proof] of continuation.files) {
+				const members = snapshot.filter(memo => memo.dailyRef.path === path);
+				if (members.length === 0) { expiredProofs.add(path); continue; }
+				checkedPaths.add(path);
+				try {
+					const file = this.app.vault.getAbstractFileByPath(path);
+					const content = file instanceof TFile ? await this.app.vault.read(file) : null;
+					if (!isCurrent()) return;
+					const bytes = content === null ? null : new TextEncoder().encode(content);
+					const revision = bytes === null ? null : await sha256Bytes(bytes);
+					if (!isCurrent()) return;
+					if (revision !== members[0]!.catalog?.observationHandle.sourceRevision) this.suspendRandomReunionSource(path);
+					const body = content === null ? undefined : revision === proof.sourceRevision ? proof.body : await createDailyMemoBodyProof(content);
+					if (!isCurrent()) return;
+					let handles: ReturnType<typeof matchRandomReunionFileProof> = revision === proof.sourceRevision ? new Map(proof.members) : null;
+					if (!handles && bytes !== null && body?.digest === proof.body.digest) {
+						const parsed = await new DiaryMemoParser().parse({ sourcePath: path, logicalDate: proof.logicalDate, bytes }, {
+							yieldControl: async () => {
+								if (!isCurrent()) throw new CatalogQueryCancelledError();
+								await new Promise<void>(resolve => this.app.workspace.containerEl.win.setTimeout(resolve, 0));
+							},
+						});
+						if (!isCurrent()) return;
+						handles = matchRandomReunionFileProof(proof, parsed, body);
+					}
+					if (!handles || members.some(memo => !handles.has(memo.id))) {
+						// 整份正文或解析范围变化，完整旧句柄已经失效，不能按同文补绑。
+						for (const memo of members) changes.set(memo.id, null);
+						expiredProofs.add(path);
+						continue;
+					}
+					if (await this.catalogReadService.getFileSourceRevision(path) !== revision) {
+						if (!isCurrent()) return;
+						this.suspendRandomReunionSource(path);
+						continue;
+					}
+					const items = await this.catalogReadService.readMemoItems(members.map(memo => handles.get(memo.id)!));
+					if (!isCurrent()) return;
+					if (items.some(item => item.observation.logicalDate !== proof.logicalDate)) throw new CatalogDiscoveryInvalidatedError();
+					const current = items.map(toCatalogMemoView);
+					members.forEach((memo, index) => changes.set(memo.id, current[index]!));
+					acceptedRevisions.set(path, revision!);
+					acceptedProofs.set(path, { ...proof, sourceRevision: revision!, body: body!,
+						members: new Map(current.map(memo => [memo.id, memo.catalog!.observation])) });
+				} catch (error) {
+					if (!isCurrent()) return;
+					this.suspendRandomReunionSource(path);
+					readFailure = error;
+				}
+			}
+			// 固定本次送检集合；保护在 await 期间解除不代表缺项成员已失效。
+			const queryable = snapshot.filter(memo => !checkedPaths.has(memo.dailyRef.path)
+				&& this.confirmedDailyMemos?.getRevision(memo.dailyRef.path) === undefined);
+			const queriedIds = new Set(queryable.map(memo => memo.id));
 			const validated = await this.catalogReadService.refreshMemoViews(queryable);
 			const byId = new Map(validated.map(memo => [memo.id, memo]));
-			const current = snapshot.flatMap(memo => this.confirmedDailyMemos?.getRevision(memo.dailyRef.path) !== undefined
-				? [memo] : byId.has(memo.id) ? [byId.get(memo.id)!] : []);
 			await this.presentationChangeQueue;
-			if (!this.trashViewClosed && generation === (this.confirmedPresentationGeneration ?? 0)) this.randomReunionController.reconcileMemos(current, snapshot);
+			if (!isCurrent()) return;
+			for (const [path, revision] of acceptedRevisions) {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				const current = file instanceof TFile ? await sha256Bytes(new TextEncoder().encode(await this.app.vault.read(file))) : null;
+				if (!isCurrent()) return;
+				if (current !== revision || await this.catalogReadService.getFileSourceRevision(path) !== revision) {
+					if (!isCurrent()) return;
+					this.suspendRandomReunionSource(path);
+					if (this.presentationVisibilityReady) this.pendingViewRefresh ??= false;
+					return;
+				}
+			}
+			if (!isCurrent()) return;
+			const wasPending = acceptedRevisions.size > 0 && [...acceptedRevisions.keys()].some(path => continuation.pendingPaths.has(path));
+			for (const [path, proof] of acceptedProofs) {
+				continuation.files.set(path, proof); continuation.pendingPaths.delete(path);
+				if (this.externallyInvalidatedDailyRevisions?.has(path)) this.externallyInvalidatedDailyRevisions.set(path, proof.sourceRevision);
+				const confirmedRevision = this.confirmedDailyMemos?.getRevision(path);
+				if (confirmedRevision !== undefined && confirmedRevision !== proof.sourceRevision) this.confirmedDailyMemos?.remove(path);
+			}
+			for (const path of expiredProofs) { continuation.files.delete(path); continuation.pendingPaths.delete(path); }
+			const current = snapshot.flatMap(memo => {
+				const next = changes.has(memo.id) ? changes.get(memo.id) : !queriedIds.has(memo.id) ? memo : byId.get(memo.id);
+				return next ? [next] : [];
+			});
+			this.cardFlowMemoChanges = changes;
+			try {
+				const changed = this.randomReunionController.reconcileMemos(current, snapshot);
+				if (!changed && wasPending && this.activeNav === "random") this.renderCardFlow();
+				if (readFailure !== undefined) this.randomReunionController.reportRefreshFailure(this.randomReunionController.getSnapshot().memos!, readFailure);
+			} finally { this.cardFlowMemoChanges = undefined; }
 		} catch (error) {
-			if ((this.randomDayOpen || !(error instanceof CatalogDiscoveryInvalidatedError)) && !this.trashViewClosed
-				&& generation === (this.confirmedPresentationGeneration ?? 0)) this.randomReunionController.reportRefreshFailure(snapshot, error);
+			if (isCurrent()) for (const path of continuation.files.keys()) this.suspendRandomReunionSource(path);
+			if ((this.randomDayOpen || !(error instanceof CatalogDiscoveryInvalidatedError)) && isCurrent()) this.randomReunionController.reportRefreshFailure(snapshot, error);
 		}
 	}
 
@@ -3240,7 +3427,10 @@ export class KnomoView extends ItemView {
 				throw new CatalogDiscoveryInvalidatedError();
 			}
 			// 所有页均已校验，整轮结果接纳后才消费外部覆盖记录。
-			if (consume) this.externallyInvalidatedDailyRevisions?.clear();
+			if (consume) {
+				this.externallyInvalidatedDailyRevisions?.clear();
+				this.readonlyMemoPresentation = undefined;
+			}
 		};
 	}
 
@@ -4026,6 +4216,7 @@ export class KnomoView extends ItemView {
 		preserveCardMemoId: string | null = null,
 		changeIntent: CardFlowChangeIntent = "content-change",
 	): void {
+		if (this.randomReunionContinuation) this.getRandomReunionContinuation();
 		if (this.preservingReadonlyMemoPresentation) return;
 		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
 		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
@@ -4060,7 +4251,7 @@ export class KnomoView extends ItemView {
 		}
 		this.recordStatsViewStateController.clearRendered();
 
-		const presentation = this.getCurrentCardFlowPresentation();
+		const presentation = this.retainReadonlyMemoPresentation(this.getCurrentCardFlowPresentation());
 		if (presentation.type === "empty") {
 			this.renderEmptyCardFlow(presentation);
 			return;
@@ -4359,6 +4550,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private forceRebuildCardFlow(changeIntent: CardFlowChangeIntent = "content-change"): void {
+		if (this.randomReunionContinuation) this.getRandomReunionContinuation();
+		if (this.preservingReadonlyMemoPresentation) return;
 		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
 		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
 		if (this.deferMobileCardFlowRender(null, true, changeIntent)) {
@@ -4394,7 +4587,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.recordStatsViewStateController.clearRendered();
-		const presentation = this.getCurrentCardFlowPresentation();
+		const presentation = this.retainReadonlyMemoPresentation(this.getCurrentCardFlowPresentation());
 		if (presentation.type === "empty") {
 			if (!presentation.loading) {
 				this.renderGeneration += 1;
@@ -4668,6 +4861,7 @@ export class KnomoView extends ItemView {
 		preserveCardMemoId: string | null,
 	): void {
 		if (this.preservingReadonlyMemoPresentation) return;
+		presentation = this.retainReadonlyMemoPresentation(presentation);
 		const cardFlow = this.cardFlowEl;
 		if (cardFlow === null) {
 			return;
@@ -4715,7 +4909,9 @@ export class KnomoView extends ItemView {
 			const existingCard = existingCards.get(renderKey) ?? null;
 			const previousMemo = this.renderedCardMemos.get(renderKey) ?? null;
 			let card: HTMLElement;
-			if (
+			if (existingCard !== null && (this.getReadonlyMemoPresentation()?.cards.has(memo.id) || this.isRandomReunionMemoPending(memo))) {
+				card = existingCard.hasAttribute("data-knomo-readonly-transition") ? existingCard : makeReadonlyMemoCard(existingCard);
+			} else if (
 				existingCard !== null
 				&& !existingCard.hasAttribute("data-knomo-readonly-transition")
 				&& (presentation.mode !== "memo" || existingCard.getAttr("data-time-presentation") === JSON.stringify(getRecentMemoPresentation(memo, this.recentTimeFlowContext).time))
@@ -5032,6 +5228,9 @@ export class KnomoView extends ItemView {
 		timeBuoy?: MemoCardTimeBuoy,
 		handoff?: ReadyCardImageHandoff,
 	): HTMLElement {
+		const snapshot = surface === "card-flow" ? this.getReadonlyMemoPresentation()?.cards.get(memo.id) : undefined;
+		if (snapshot) { container.appendChild(snapshot.card); return snapshot.card; }
+		const readonly = surface === "card-flow" && this.isRandomReunionMemoPending(memo);
 		const effectiveTimeBuoy = timeBuoy ?? this.getVisibleMemoTimeBuoy(memo);
 		const card = renderKnomoMemoCard(container, memo, {
 			generation,
@@ -5046,17 +5245,20 @@ export class KnomoView extends ItemView {
 			getMarkdownPriority: getMarkdownRenderPriority,
 			getMemoCardPreview: (memoRecord) => this.getMemoCardPreview(memoRecord),
 			queueMemoMarkdown: (memoRecord, content, renderGeneration, priority, previewText) => {
+				if (readonly) { content.setText(memoRecord.contentSnapshot); return; }
 				this.memoMarkdownRenderer.queueMemoMarkdown(memoRecord, content, renderGeneration, priority, previewText, surface);
 			},
 			renderMemoCardImages: (content, memoRecord, images, renderGeneration, reusedImagesEl) => {
 				this.renderMemoCardImages(content, memoRecord, images, renderGeneration, surface, reusedImagesEl ?? null, handoff);
 			},
 			queueSourceReferenceMarkdown: (content, text, sourcePath, renderGeneration) => {
+				if (readonly) { content.setText(text); return; }
 				this.memoMarkdownRenderer.queueSourceReferenceMarkdown(content, text, sourcePath, renderGeneration, surface);
 			},
 			reusedBodyEl,
 			reusedImagesEl,
 		});
+		if (readonly) return makeReadonlyMemoCard(card);
 		const content = card.find(".knomo-card-content") ?? card.find(".knomo-card-body");
 		if (content && (reusedBodyEl !== null || !card.find(".knomo-card-content"))) this.memoMarkdownRenderer.refreshSearchHits(memo, content, surface);
 		if (this.catalogReadService?.relations) this.ensureRelationCards().observe(card, memo);
@@ -6504,7 +6706,7 @@ export class KnomoView extends ItemView {
 
 	private captureCardFlowReadingAnchor(changes?: ReadonlyMap<string, MemoRecord | null>): CardFlowReadingAnchor | null {
 		const flow = this.cardFlowEl;
-		const cards = Array.from(flow?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]") ?? []).flatMap(card => {
+		const cards = Array.from(flow?.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id], .knomo-card[data-knomo-readonly-transition]") ?? []).flatMap(card => {
 			const memo = this.renderedCardMemos.get(card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id")!);
 			return memo ? [{ memo, card }] : [];
 		});
@@ -6515,7 +6717,7 @@ export class KnomoView extends ItemView {
 	private restoreCardFlowReadingAnchor(anchor: CardFlowReadingAnchor | null): boolean {
 		const flow = this.cardFlowEl;
 		if (!flow || !anchor) return false;
-		const cards = Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id]")).flatMap(card => {
+		const cards = Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card[data-memo-id], .knomo-card[data-knomo-readonly-transition]")).flatMap(card => {
 			const memo = this.renderedCardMemos.get(card.getAttribute("data-memo-render-key") ?? card.getAttribute("data-memo-id")!);
 			return memo ? [{ memo, card }] : [];
 		});
@@ -8084,12 +8286,14 @@ export class KnomoView extends ItemView {
 	}
 
 	private async reloadCurrentCatalogQuery(forceReload = false): Promise<boolean> {
+		// 同范围后台重查沿用已接受的全历史范围；真正导航由查询指纹区分。
+		if (this.viewStateController.search.result?.key === this.getCatalogQueryFingerprint(true)) forceReload = true;
 		const queryFingerprint = this.getCatalogQueryFingerprint(forceReload);
 		this.prepareCatalogDesktopQuery(queryFingerprint);
 		if (this.memoLoadingPromise !== null && this.memoLoadingFingerprint === queryFingerprint) {
 			return this.memoLoadingPromise;
 		}
-		return this.runMemoLoad(queryFingerprint, () => this.reloadMemos(forceReload));
+		return this.runMemoLoad(queryFingerprint, () => this.reloadMemos(forceReload, false, true));
 	}
 
 	private runMemoLoad(queryFingerprint: string, load: () => Promise<boolean>): Promise<boolean> {
@@ -8397,6 +8601,12 @@ export class KnomoView extends ItemView {
 	}
 
 	private findMemoById(memoId: string, surface?: CardRenderSurface): MemoRecord | null {
+		if ((surface === undefined || surface === "card-flow") && this.getReadonlyMemoPresentation()?.cards.has(memoId)) return null;
+		if (this.randomReunionContinuation?.pendingPaths.size && (surface === undefined || surface === "card-flow")
+			&& this.activeNav === "random" && !this.randomDayOpen) {
+			const selected = this.randomReunionController.getSnapshot().memos?.find(memo => memo.id === memoId);
+			if (selected && this.isRandomReunionMemoPending(selected)) return null;
+		}
 		if (surface === "relations") return this.relationsPage?.findMemo(memoId) ?? null;
 		if (surface === undefined && this.relationsPage?.isOpen) {
 			const relationMemo = this.relationsPage.findMemo(memoId); if (relationMemo) return relationMemo;
@@ -8679,7 +8889,13 @@ function isCompleteCatalogCoverage(coverage: CatalogCoverage): boolean {
 
 export function mergeCatalogMemoPages(memos: readonly MemoViewItem[]): MemoViewItem[] {
 	return [...new Map(memos.map((memo) => [memo.id, memo])).values()]
-		.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
+		.sort((left, right) => {
+			if (!left.catalog || !right.catalog) return right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id);
+			// 展示也可能来自未附带索引字段的已解析 Memo；时间归一化仅用于排序，不改写原精度。
+			const leftCreatedAt = left.createdAt.length === 16 ? left.createdAt + ":00" : left.createdAt;
+			const rightCreatedAt = right.createdAt.length === 16 ? right.createdAt + ":00" : right.createdAt;
+			return rightCreatedAt.localeCompare(leftCreatedAt) || right.id.localeCompare(left.id);
+		});
 }
 
 function isListEnterInputEvent(event: InputEvent): boolean {

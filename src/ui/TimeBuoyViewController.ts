@@ -74,6 +74,7 @@ export class TimeBuoyViewController {
 	private snapshot: TimeBuoyViewSnapshot;
 	private requestId = 0;
 	private hasLoadedPage = false;
+	private loadedWindow: { tab: TimeBuoyTab; today: string; count: number } | null = null;
 	private refreshing = false;
 	private queryController: AbortController | null = null;
 
@@ -105,6 +106,7 @@ export class TimeBuoyViewController {
 		this.cancelPendingQuery();
 		this.requestId++;
 		this.hasLoadedPage = false;
+		this.loadedWindow = null;
 		this.snapshot = createInitialSnapshot(tab);
 		void this.loadInitial();
 		return true;
@@ -143,7 +145,8 @@ export class TimeBuoyViewController {
 		this.refreshing = true;
 		const activeTab = this.snapshot.activeTab;
 		const today = formatTimeBuoyDate(this.options.getNow());
-		const windowSize = this.hasLoadedPage && this.snapshot.todayDate === today ? this.snapshot[activeTab].length : 0;
+		if (this.loadedWindow?.today !== today) this.loadedWindow = null;
+		const windowSize = this.loadedWindow?.tab === activeTab && this.loadedWindow.today === today ? this.loadedWindow.count : 0;
 		if (!this.hasLoadedPage) {
 			this.snapshot = { ...createInitialSnapshot(activeTab), loading: true };
 			this.options.requestRender();
@@ -195,6 +198,7 @@ export class TimeBuoyViewController {
 			const changed = !areTimeBuoySnapshotsEqual(this.snapshot, nextSnapshot);
 			this.snapshot = nextSnapshot;
 			this.hasLoadedPage = true;
+			this.loadedWindow = { tab: activeTab, today, count: this.snapshot[activeTab].length };
 			if (changed) {
 				this.options.requestRender();
 			}
@@ -246,6 +250,7 @@ export class TimeBuoyViewController {
 			}
 			this.snapshot = { ...this.snapshot, loadingMore: false, nextCursor: result.nextCursor,
 				[tab]: [...this.snapshot[tab], ...groupTabItems(result.items, tab)] };
+			this.loadedWindow = { tab, today: cursor.today, count: this.snapshot[tab].length };
 			this.options.requestRender();
 		} catch (refreshError) {
 			if (!this.isCurrentPageRequest(requestId)) return;
@@ -328,6 +333,7 @@ export class TimeBuoyViewController {
 		this.requestId += 1;
 		this.refreshing = false;
 		this.hasLoadedPage = false;
+		this.loadedWindow = null;
 		this.snapshot = createInitialSnapshot();
 	}
 

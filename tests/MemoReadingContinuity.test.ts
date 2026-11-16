@@ -37,6 +37,34 @@ test("删除阅读卡后邻卡使用自己的旧偏移，顶部仍留在顶部",
 	} finally { h.dom.window.close(); }
 });
 
+test("分片换键时阅读卡下方增高不借后方旧卡推动视口", () => {
+	const h = fixture();
+	try {
+		const before = [0, 1, 2, 3].map(index => h.card(index));
+		const reading = new MemoReadingPosition(h.root, before);
+		for (const item of before.slice(0, 3)) item.card.remove();
+		const after = [0, 1, 2].map(index => h.card(index, 1,
+			index === 2 ? "下方内容增高" : before[index].memo.contentSnapshot));
+		h.move(before[3].card, 1532);
+		after.push(before[3]);
+		reading.restore(after, undefined, true);
+		assert.equal(h.root.scrollTop, 500, "阅读卡未移动时不应补偿其下方的高度变化");
+	} finally { h.dom.window.close(); }
+});
+
+test("分片换键遇到重排时仍使用有效的旧卡而不猜测原序号", () => {
+	const h = fixture();
+	try {
+		const before = [0, 1, 2, 3].map(index => h.card(index));
+		const reading = new MemoReadingPosition(h.root, before);
+		for (const item of before.slice(0, 3)) item.card.remove();
+		const first = h.card(0, 1), second = h.card(2, 1), third = h.card(1, 1);
+		h.move(second.card, 490); h.move(third.card, 690); h.move(before[3].card, 790);
+		reading.restore([first, second, third, before[3]], undefined, true);
+		assert.equal(h.root.scrollTop, 600, "无法按序比较时，仍存旧卡应回到自己的原偏移");
+	} finally { h.dom.window.close(); }
+});
+
 test("外部全换键只按可比较布局补偿，重排、重复与仅同条数均退回原位置", () => {
 	for (const mode of ["grow", "reorder", "duplicate", "replace-all", "replace-time"] as const) {
 		const h = fixture();

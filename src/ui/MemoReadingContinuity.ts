@@ -30,6 +30,13 @@ export class MemoReadingPosition {
 	target(after: readonly MountedMemoCard[], changes?: ReadonlyMap<string, MemoViewItem | null>, positional = false): number {
 		if (this.scrollTop <= 1) return 0;
 		const byKey = new Map(after.map(item => [getMemoRenderKey(item.memo), item.card]));
+		const first = this.candidates[0];
+		// 分片换键时，先接续可比较的阅读位置，避免借下方旧卡补偿下方内容的高度变化。
+		if (positional && changes === undefined && first
+			&& !byKey.has(getMemoRenderKey(this.before[first.index].memo))
+			&& comparableMemoOrder(this.before.map(item => item.memo), after.map(item => item.memo))) {
+			return this.position(after[first.index].card, first.offset);
+		}
 		for (const candidate of this.candidates) {
 			const previous = this.before[candidate.index].memo;
 			const current = changes?.has(previous.id) ? changes.get(previous.id) : previous;

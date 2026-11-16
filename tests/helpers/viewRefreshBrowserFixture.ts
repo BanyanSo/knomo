@@ -325,6 +325,7 @@ export async function mobileRevisionGeometry(options: {
 	entry: "internal" | "external" | "cross-file";
 	edit: "grow" | "shrink" | "below" | "same" | "remove-anchor" | "reorder";
 	chunked?: boolean;
+	forceChunkAfterEdited?: boolean;
 	input?: "scroll" | "wheel" | "keyboard" | "pointer" | "touch" | "focus" | "composition";
 	readonly?: boolean;
 	sameBytes?: boolean;
@@ -348,7 +349,7 @@ export async function mobileRevisionGeometry(options: {
 	const longText = " long paragraph with wrapping".repeat(50);
 	if (options.edit === "shrink") { memos[edited]!.contentSnapshot += longText; memos[edited]!.contentHash = "long"; }
 	const coverage = { kind: "complete" as const, coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 2, totalFileCount: 2 };
-	let replacements = 0, unavailable = false;
+	let replacements = 0, unavailable = false, forcedChunk = false;
 	const callbacks = new Map<number, () => void>(); let task = 0;
 	const requests: number[] = [], taskBindings: string[] = [];
 	const controller = new MobileSearchController({
@@ -359,6 +360,12 @@ export async function mobileRevisionGeometry(options: {
 		renderMemoCard: (container, memo, generation, index, images, handoff) => {
 			replacements++;
 			const card = view.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, images, undefined, handoff);
+			if (options.forceChunkAfterEdited && index === edited && memo.catalog?.observationHandle.sourceRevision === "revision-1") {
+				// 模拟下方卡片渲染较慢，让其后的旧卡确实跨帧保留。
+				const deadline = performance.now() + 6;
+				while (performance.now() < deadline) { /* 等待本次分片时间预算耗尽。 */ }
+				forcedChunk = true;
+			}
 			if (options.restoreSameBytes) {
 				// 模拟 Markdown 队列在静态占位交接后完成正文，任务绑定使用当前渲染参数。
 				queueMicrotask(() => {
@@ -482,7 +489,7 @@ export async function mobileRevisionGeometry(options: {
 	if (options.restoreSameBytes) results.querySelector<HTMLInputElement>("input[type=checkbox]")!.click();
 	if (options.expanded) { controller.loadMore(); await frames(); }
 	while (callbacks.size) { const [id, callback] = callbacks.entries().next().value!; callbacks.delete(id); callback(); }
-	return { samples, userPosition, replacements: replacements - beforeReplacements, readonlyBindings, imageLoads: h.loads(),
+	return { samples, userPosition, replacements: replacements - beforeReplacements, readonlyBindings, imageLoads: h.loads(), forcedChunk,
 		finalCount, nextCount: cards().length, requests, taskBindings,
 		readonlyCount: results.querySelectorAll("[data-knomo-readonly-transition]").length,
 		disabledCount: results.querySelectorAll("button:disabled, input:disabled").length,

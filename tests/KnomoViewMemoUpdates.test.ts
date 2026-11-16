@@ -96,6 +96,42 @@ test("任务勾选与正文引用提交同步全部已打开页面，不重新�
 	assert.equal(h.randomLoads(), 2);
 });
 
+test("任务写入区分过期、目标不可用和未知 I/O，列表补刷失败单独反馈", async t => {
+	const { Notice } = await import("obsidian");
+	const { t: translate } = await import("../src/i18n");
+	const notices = (Notice as unknown as { messages: string[] }).messages;
+	for (const failure of ["stale", "missing", "io-before", "io-after", "refresh"] as const) {
+		const h = await fixture({ body: "## Memos\n- 09:00 - [ ] task\n" });
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		const before = h.body();
+		const logs: unknown[][] = [];
+		const warn = t.mock.method(console, "warn", (...args: unknown[]) => { logs.push(args); });
+		Object.assign(h.view, { memoMarkdownRenderer: { syncTaskCheckboxesForMemo: () => {} }, reportViewRefreshFailure: () => {} });
+		Object.defineProperty(h.view, "mobileSearchResultsEl", { value: null });
+		if (failure === "refresh") {
+			h.failCatalog();
+			h.view.refresh = async () => { throw new Error("private body"); };
+		} else if (failure === "stale") {
+			await h.externalReplace(before + "- 10:00 concurrent\n");
+		} else if (failure === "missing") {
+			t.mock.method(app.vault, "getAbstractFileByPath", () => null);
+		} else {
+			const process = app.vault.process.bind(app.vault);
+			t.mock.method(app.vault, "process", async (file: TFile, update: (content: string) => string) => {
+				if (failure === "io-after") await process(file, update);
+				throw new Error("private body I/O");
+			});
+		}
+		notices.length = 0;
+		await h.view.handleCatalogTaskToggle(h.memos[0]!, 0, true);
+		assert.deepEqual(notices, [translate(failure === "stale" ? "task.targetChanged" : failure === "missing" ? "task.sourceUnavailable"
+			: failure.startsWith("io-") ? "task.updateFailed" : "task.refreshIncomplete")]);
+		assert.equal(h.body().includes("[x]"), failure === "refresh" || failure === "io-after");
+		assert.ok(!JSON.stringify(logs).includes("private body"));
+		warn.mock.restore();
+	}
+});
+
 test("删除、同文恢复和创建保持重逢本组，漫游同步独立 occurrence 与统计", async () => {
 	const h = await fixture();
 	const deleted = h.memos[2]!;
@@ -165,6 +201,174 @@ test("迟到的重逢校验不覆盖保存结果或关闭后的状态", async t 
 		assert.equal(h.random.getSnapshot().memos, committed);
 		if (!close) assert.equal(committed![0]!.contentSnapshot, "newest");
 	}
+});
+
+test("重逢复核固定实际送检成员，等待期间解除提交保护不移除未送检卡片", async t => {
+	const h = await fixture({ immediate: true });
+	h.failCatalog();
+	await h.command.create("confirmed creation");
+	const before = h.random.getSnapshot().memos!;
+	const gate = deferred<MemoViewItem[]>();
+	t.mock.method(h.read, "readMemoItems", async () => assert.fail("本轮没有任何成员送检"));
+	t.mock.method(h.read, "refreshMemoViews", async (memos: readonly MemoViewItem[]) => {
+		assert.deepEqual(memos, []);
+		return gate.promise;
+	});
+	const pending = h.view.refreshRandomReunionBatch();
+	h.view.confirmedDailyMemos!.remove(PATH);
+	gate.resolve([]); await pending;
+	assert.equal(h.random.getSnapshot().memos!.length, 3);
+	assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.id), before.map(memo => memo.id));
+	assert.equal(h.random.getSnapshot().error, null);
+});
+
+test("Knomo 编辑确认后仅文件头续写保留随机组原位成员，旧操作拒写且新卡可继续编辑", async t => {
+	for (const header of ["---\nmodified: now\n---\n", "---\nmodified: later\nextra: value\n...\n"]) await t.test(header, async () => {
+		const h = await fixture({ immediate: true });
+		h.view.viewStateController.activeNav = "random";
+		const selected = h.memos[2]!;
+		await h.edit(selected, "edited second occurrence");
+		const confirmed = h.random.getSnapshot().memos!;
+		await h.externalReplace(header + h.body());
+		await h.view.checkConfirmedDailyFile(PATH);
+		assert.equal(h.random.getSnapshot().memos!.length, 3, "磁盘通知不能先移除再加回成员");
+		await h.view.refreshRandomReunionBatch();
+		const current = h.random.getSnapshot().memos!;
+		assert.deepEqual(current.map(memo => memo.contentSnapshot), ["old", "same", "edited second occurrence"]);
+		assert.deepEqual(current.map(memo => memo.id), (await h.loadMemos()).map(memo => memo.id));
+		assert.equal(h.random.getSnapshot().error, null);
+		assert.equal(h.randomLoads(), 1);
+		await assert.rejects(h.edit(confirmed[2]!, "stale"), /stale|revision|changed/iu);
+		await h.edit(current[2]!, "next edit");
+		assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["old", "same", "next edit"]);
+	});
+});
+
+test("随机组从真实卡片编辑保存接续 Catalog 前后文件头更新，索引等待时跨文件卡仍可操作", async t => {
+	for (const order of ["before-publication", "after-publication"] as const) await t.test(order, async () => {
+		const publication = deferred<void>(), confirmed = deferred<void>();
+		const h = await fixture({ immediate: true, body: "## Memos\n- 10:00 same\n- 10:00 same\n", otherBody: "## Memos\n- 11:00 other file\n",
+			catalogGate: publication.promise, rejectStalePublication: true, onConfirmed: () => confirmed.resolve() });
+		h.view.viewStateController.activeNav = "random";
+		const dom = attachCardFlow(h.view);
+		try {
+			const selected = h.memos[1]!;
+			prepareComposer(h.view, "edited B", selected);
+			await h.view.saveInput(); await confirmed.promise;
+			const edited = h.random.getSnapshot().memos![1]!;
+			assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["same", "edited B", "other file"]);
+			if (order === "after-publication") { publication.resolve(); await h.view.composerSaveRefreshQueue; }
+			const latest = "---\nmodified: first\n---\n" + h.body();
+			h.vault.replace(PATH, latest);
+			await h.view.checkConfirmedDailyFile(PATH);
+			dom.render();
+			assert.equal(dom.root.querySelectorAll(".knomo-card").length, 3);
+			assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 2);
+			assert.equal(dom.findMemo(edited.id), null);
+			assert.equal(dom.findMemo(h.memos[2]!.id)?.contentSnapshot, "other file");
+			await h.view.refreshRandomReunionBatch();
+			assert.equal(h.random.getSnapshot().memos!.length, 3);
+			assert.equal(h.random.getSnapshot().error, null);
+			publication.resolve(); await h.view.composerSaveRefreshQueue;
+			await h.externalReplace(latest.replace("modified: first", "modified: second\nadded: true"));
+			// Catalog 通知先到也必须读取当前 Daily，不能先移除旧成员。
+			await h.view.refreshRandomReunionBatch(); dom.render();
+			const current = h.random.getSnapshot().memos!;
+			assert.deepEqual(current.map(memo => memo.contentSnapshot), ["same", "edited B", "other file"]);
+			assert.equal(new Set(current.map(memo => memo.id)).size, 3);
+			assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 0);
+			assert.equal(dom.findMemo(current[1]!.id), current[1]);
+			assert.equal(h.random.getSnapshot().error, null);
+			assert.equal(h.randomLoads(), 1);
+			await assert.rejects(h.edit(edited, "stale menu"), /stale|revision|changed/iu);
+			await h.edit(current[1]!, "B next");
+			assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["same", "B next", "other file"]);
+		} finally { publication.resolve(); await h.view.composerSaveRefreshQueue; dom.dispose(); }
+	});
+});
+
+test("随机组文件头续接拒绝正文、空白、分隔线、重排、删除和未闭合文件头的变化", async t => {
+	const mutations = [
+		(body: string) => body.replace("edited B", "external B"),
+		(body: string) => body + "\n",
+		(body: string) => body + "---\n",
+		(body: string) => body.replace("- 10:00 same\n- 10:00 edited B", "- 10:00 edited B\n- 10:00 same"),
+		(body: string) => body.replace("- 10:00 edited B\n", ""),
+		(body: string) => "---\nmodified: no closing delimiter\n" + body,
+	];
+	for (const [index, mutate] of mutations.entries()) await t.test(String(index), async () => {
+		const h = await fixture({ immediate: true, body: "## Memos\n- 10:00 same\n- 10:00 same\n", otherBody: "- 11:00 C\n" });
+		h.view.viewStateController.activeNav = "random";
+		await h.edit(h.memos[1]!, "edited B");
+		const body = mutate(h.body());
+		await h.externalReplace(index === mutations.length - 1 ? body : "---\nmodified: now\n---\n" + body);
+		await h.view.checkConfirmedDailyFile(PATH);
+		await h.view.refreshRandomReunionBatch();
+		assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["C"]);
+		assert.ok(h.random.getSnapshot().error);
+		assert.equal(h.randomLoads(), 1);
+		await h.view.refreshRandomReunionBatch();
+		assert.equal(h.random.getSnapshot().error, null, "无新增减员的成功复核清除上一次提示");
+	});
+});
+
+test("随机组文件头复核读取失败保留可读成员，恢复后接纳；同字节通知不减员", async t => {
+	const h = await fixture({ immediate: true, body: "## Memos\n- 10:00 same\n- 10:00 same\n", otherBody: "- 11:00 C\n" });
+	h.view.viewStateController.activeNav = "random";
+	await h.edit(h.memos[1]!, "edited B");
+	const dom = attachCardFlow(h.view);
+	try {
+		await h.view.checkConfirmedDailyFile(PATH); await h.view.refreshRandomReunionBatch();
+		assert.equal(h.random.getSnapshot().memos!.length, 3);
+		assert.equal(h.random.getSnapshot().error, null);
+		await h.externalReplace("---\nmodified: now\n---\n" + h.body());
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		const read = app.vault.read.bind(app.vault);
+		const failure = t.mock.method(app.vault, "read", async (file: TFile) => {
+			if (file.path === PATH) throw new Error("temporary read failure");
+			return read(file);
+		});
+		Object.assign(h.view, { reportViewRefreshFailure: () => {} });
+		await h.view.checkConfirmedDailyFile(PATH); await h.view.refreshRandomReunionBatch(); dom.render();
+		assert.equal(h.random.getSnapshot().memos!.length, 3);
+		assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 2);
+		assert.equal(dom.findMemo(h.memos[2]!.id)?.contentSnapshot, "C");
+		assert.ok(h.random.getSnapshot().error);
+		failure.mock.restore();
+		await h.view.checkConfirmedDailyFile(PATH); await h.view.refreshRandomReunionBatch(); dom.render();
+		assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.id), (await h.loadMemos()).map(memo => memo.id));
+		assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 0);
+		assert.equal(h.random.getSnapshot().error, null);
+	} finally { dom.dispose(); }
+});
+
+test("随机组复核期间再次写文件头、换组或关闭，旧结果不能回写或留下提示", async t => {
+	for (const action of ["rewrite", "next-batch", "close"] as const) await t.test(action, async () => {
+		const h = await fixture({ immediate: true });
+		await h.edit(h.memos[2]!, "edited B");
+		await h.externalReplace("---\nmodified: first\n---\n" + h.body());
+		const gate = deferred<void>(), entered = deferred<void>();
+		const read = h.read.readMemoItems.bind(h.read);
+		const delayed = t.mock.method(h.read, "readMemoItems", async (...args: Parameters<typeof read>) => {
+			const result = await read(...args); entered.resolve(); await gate.promise; return result;
+		});
+		const pending = h.view.refreshRandomReunionBatch(); await entered.promise;
+		delayed.mock.restore();
+		if (action === "rewrite") {
+			await h.externalReplace(h.body().replace("modified: first", "modified: second\nextra: true"));
+			await h.view.checkConfirmedDailyFile(PATH);
+		} else if (action === "next-batch") await h.random.refresh();
+		else { h.view.trashViewClosed = true; h.random.dispose(); }
+		const current = h.random.getSnapshot().memos;
+		gate.resolve(); await pending;
+		assert.equal(h.random.getSnapshot().memos, current);
+		assert.equal(h.random.getSnapshot().error, null);
+		if (action === "rewrite") {
+			await h.view.refreshRandomReunionBatch();
+			assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.id), (await h.loadMemos()).map(memo => memo.id));
+			assert.equal(h.randomLoads(), 1);
+		}
+	});
 });
 
 test("Catalog 读取校验完整句柄并拒绝读取期间发生的 revision 变化", async t => {
@@ -463,11 +667,125 @@ test("多页被引用筛选保存普通 Memo 后保留摘要与卡片，计数�
 			assert.ok(counting);
 			assert.equal(dom.root.querySelector(".knomo-relation-result-count"), summary, "首屏已返回、计数仍在查询时不撤下摘要");
 			countGate.resolve(); await counting;
-			assert.equal(dom.root.querySelector(".knomo-relation-result-count"), countFails ? null : summary);
+			assert.equal(dom.root.querySelector(".knomo-relation-result-count"), summary);
+			if (countFails) assert.equal(summary.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
 			assert.equal(card.parentElement, dom.root);
 			assert.equal(card.querySelector("img"), image);
 			assert.equal(h.view.getFilteredMemos().some(memo => memo.contentSnapshot === "ordinary new memo"), false);
 		} finally { unsubscribe(); catalogGate.resolve(); countGate.resolve(); await counting; dom.dispose(); }
+	}
+});
+
+test("多页列表深处编辑经实际保存广播和后台刷新后保留窗口、卡片与新分页", async t => {
+	t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 22, 12).getTime() });
+	for (const scope of ["all", "things", "review", "tag", "search", "stats"] as const) await t.test(scope, async () => {
+		const h = await fixture({ immediate: true, refreshViews: true,
+			body: "## Memos\n" + Array.from({ length: 160 }, (_, index) => `- 09:00 - [ ] kept-${index} #keep\n`).join("") });
+		const { toCatalogMemoView } = await import("../src/types/memoView");
+		const { getMemoListStateKey } = await import("../src/ui/MemoRenderRevision");
+		const production = Object.getPrototypeOf(h.view);
+		const state = h.view.viewStateController;
+		if (scope === "things" || scope === "review") state.activeNav = scope;
+		if (scope === "tag") { state.activeTag = "keep"; state.activeTagKey = "keep"; }
+		if (scope === "search") state.searchQuery = "kept";
+		if (scope === "stats") state.recordStatsSearchFilter = { type: "tag", tagKey: "keep", tagLabel: "keep", startDate: DATE, endDateExclusive: "2026-08-23" };
+		const query = production.buildCatalogActiveQuery.call(h.view, true);
+		let page = await h.read.query({ ...query, limit: 50 });
+		const items = [...page.items];
+		for (let index = 1; index < 3; index++) {
+			page = await h.read.query({ ...query, limit: 50, cursor: page.nextCursor });
+			items.push(...page.items);
+		}
+		h.view.memos = items.map(toCatalogMemoView);
+		assert.equal(h.view.memos.length, 150);
+		state.search.commitResult(query, page.catalogRevision, "complete");
+		Object.assign(h.view, {
+			memoSourceGeneration: 0, catalogDesktopCountRun: 0, catalogCursor: page.nextCursor,
+			catalogDesktopQueryFingerprint: production.getCatalogQueryFingerprint.call(h.view, true),
+			catalogCoverage: page.coverage, catalogRevision: page.catalogRevision, catalogStatus: page.status,
+			cardFlowError: null, shouldShowTodayTimeBuoys: () => false,
+			trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) },
+			getCatalogReadService: () => h.read, reloadMemos: production.reloadMemos,
+			retainMemoCardPreviews: () => {}, syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {},
+			syncSearchControls: () => {}, getMobileSearchStateKey: () => "closed", renderMobileSearchResultsIfChanged: () => {},
+			refreshCatalogDesktopTotalCount: async () => {}, renderNextCardBatch: () => {},
+			getCardFlowStateKey: () => getMemoListStateKey(h.view.getFilteredMemos()),
+		});
+		const dom = attachCardFlow(h.view);
+		Object.assign(h.view, { getInitialCardBatchSize: () => 150 }); dom.render();
+		const stable = dom.root.querySelectorAll(".knomo-card")[110]!;
+		try {
+			for (const index of [90, 130]) {
+				const memo = h.view.memos[index]!;
+				prepareComposer(h.view, memo.contentSnapshot + " edited", memo);
+				await h.view.saveInput(); await h.view.composerSaveRefreshQueue; await h.waitForViewRefresh();
+				assert.equal(h.view.memos.length, 150, "后台首批不能覆盖原来已读取的三页");
+				assert.equal(dom.root.querySelectorAll(".knomo-card").length, 150);
+				assert.match(h.view.memos[index]!.contentSnapshot, / edited$/);
+				assert.equal(dom.root.querySelectorAll(".knomo-card")[110], stable, "未编辑的深处卡片沿提交映射复用");
+			}
+			await production.restoreCardFlowAfterMobileSearch.call(h.view);
+			assert.equal(h.view.memos.length, 150, "搜索返回也保留同范围的已展开窗口");
+			const deleted = h.view.memos[120]!;
+			Object.assign(h.view, { closeCardMenu: () => {} });
+			await production.handleMemoAction.call(h.view, "delete", deleted); await h.waitForViewRefresh();
+			assert.equal(h.view.memos.length, 150, "真实菜单删除、本页收尾与跨页广播不能收起已读窗口");
+			assert.equal(h.view.memos.some(memo => memo.contentSnapshot === deleted.contentSnapshot), false);
+			assert.equal(await production.loadNextCatalogPage.call(h.view), true);
+			assert.equal(h.view.memos.length, 159);
+			assert.equal(new Set(h.view.memos.map(memo => memo.id)).size, 159);
+		} finally { dom.dispose(); }
+	});
+});
+
+test("Things 任务提交在 Daily、Catalog 和真实分页计数接续中保留摘要，连续修改也可收尾", async () => {
+	for (const tagged of [false, true]) for (const total of [2, 51]) {
+		const catalogGate = deferred<void>(), countGate = deferred<void>();
+		const h = await fixture({ immediate: true, catalogGate: catalogGate.promise,
+			body: "## Memos\n" + Array.from({ length: total }, (_, index) => `- 09:00 - [ ] task-${index}${tagged ? " #keep" : ""}\n`).join("") });
+		const { toCatalogMemoView } = await import("../src/types/memoView");
+		const production = Object.getPrototypeOf(h.view);
+		h.view.viewStateController.activeNav = "things";
+		if (tagged) { h.view.viewStateController.activeTag = "keep"; h.view.viewStateController.activeTagKey = "keep"; }
+		const query = production.buildCatalogActiveQuery.call(h.view, true);
+		const initial = await h.read.query({ ...query, limit: 50 });
+		h.view.memos = initial.items.map(toCatalogMemoView);
+		h.view.viewStateController.search.commitResult(query, initial.catalogRevision, "complete");
+		const counts: Promise<void>[] = [];
+		Object.assign(h.view, {
+			memoSourceGeneration: 0, catalogDesktopCountRun: 0, catalogDesktopTotalCount: total,
+			catalogDesktopQueryFingerprint: production.getCatalogQueryFingerprint.call(h.view, true),
+			catalogCoverage: initial.coverage, catalogRevision: initial.catalogRevision, catalogStatus: initial.status,
+			cardFlowError: null, shouldShowTodayTimeBuoys: () => false,
+			trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) },
+			getCatalogReadService: () => h.read, reloadMemos: production.reloadMemos,
+			retainMemoCardPreviews: () => {}, syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {},
+			syncSearchControls: () => {}, getMobileSearchStateKey: () => "closed", renderMobileSearchResultsIfChanged: () => {},
+			countCatalogFeature: async () => { const result = await h.read.count(query); await countGate.promise; return result; },
+			refreshCatalogDesktopTotalCount: (...args: unknown[]) => {
+				const promise = production.refreshCatalogDesktopTotalCount.apply(h.view, args) as Promise<void>; counts.push(promise); return promise;
+			},
+		});
+		const dom = attachCardFlow(h.view, false, true), summary = dom.root.querySelector(".knomo-list-summary")!;
+		Object.assign(h.view, { getCardFlowStateKey: () => JSON.stringify(h.view.getCurrentCardFlowPresentation()) });
+		const observer = new dom.window.MutationObserver(() => {}); observer.observe(dom.root, { childList: true, subtree: true });
+		let toggling: Promise<unknown> | null = null;
+		try {
+			toggling = h.view.handleCatalogTaskToggle(h.view.memos[0]!, 0, true);
+			await new Promise<void>(resolve => setImmediate(resolve)); await Reflect.get(h.view, "presentationChangeQueue");
+			assert.match(h.body(), /\[x\]/);
+			assert.equal(Reflect.get(h.view, "catalogDesktopTotalCount"), null);
+			assert.equal(dom.root.querySelector(".knomo-list-summary"), summary);
+			catalogGate.resolve(); await toggling; await h.view.refresh();
+			assert.equal(dom.root.querySelector(".knomo-list-summary"), summary);
+			await h.view.handleCatalogTaskToggle(h.view.memos[0]!, 0, false); await h.view.refresh();
+			assert.equal(dom.root.querySelector(".knomo-list-summary"), summary);
+			countGate.resolve(); await Promise.all(counts);
+			assert.equal(Reflect.get(h.view, "catalogDesktopTotalCount"), total);
+			assert.match(summary.textContent!, new RegExp(String(total)));
+			assert.equal(counts.length > 0, total > 50);
+			assert.ok(!observer.takeRecords().some(record => Array.from(record.removedNodes).includes(summary)));
+		} finally { catalogGate.resolve(); countGate.resolve(); await toggling; await Promise.all(counts); observer.disconnect(); dom.dispose(); }
 	}
 });
 
@@ -665,6 +983,7 @@ test("标签视图保存匹配或不匹配的新卡片均保留旧卡片 DOM、�
 			assert.equal(card.querySelector("img"), image);
 			assert.equal(card.querySelector("input"), checkbox);
 			assert.equal(checkbox.getAttribute("data-knomo-memo-id"), retained.id);
+			assert.equal(checkbox.getAttribute("data-knomo-source-revision"), retained.catalog!.observationHandle.sourceRevision);
 			assert.equal(dom.findMemo(retained.id), retained);
 			assert.equal(dom.root.scrollTop, 600);
 			assert.equal(dom.root.querySelectorAll(".knomo-card").length, content.endsWith("#keep") ? 2 : 1);
@@ -677,41 +996,43 @@ test("标签视图保存匹配或不匹配的新卡片均保留旧卡片 DOM、�
 	}
 });
 
-test("外部保存同一 Daily 的其他位置后，列表换成当前句柄并接续已就绪的预览图", async () => {
-	const h = await fixture({ immediate: true, body: "## Memos\n- 09:00 kept ![[image.png]]\n\n## Notes\nBefore\n" });
-	const dom = attachCardFlow(h.view, false, false, true);
-	const old = h.view.memos[0]!;
-	const oldCard = dom.root.querySelector(".knomo-card")!;
-	const image = oldCard.querySelector("img")!;
-	const button = image.parentElement;
-	const changes: MutationRecord[] = [];
-	const observer = new dom.window.MutationObserver(records => changes.push(...records));
-	observer.observe(image, { attributes: true, attributeFilter: ["src"] });
-	const reload = h.view.reloadMemos;
-	h.view.reloadMemos = async () => {
-		await reload();
-		Object.assign(h.view, { filteredMemosCache: null });
-		dom.render();
-		return true;
-	};
-	try {
-		await h.externalReplace(h.body().replace("Before", "After"));
-		assert.ok(oldCard.contains(image), "接纳新查询前图片留在原卡片");
-		await h.view.refresh();
-		const card = dom.root.querySelector(".knomo-card")!;
-		assert.notEqual(card, oldCard);
-		assert.notEqual(card.querySelector("button"), button);
-		assert.equal(card.querySelector("img"), image);
-		assert.equal(image.getAttribute("src"), "app://image.png?knomo-mtime=1");
-		assert.equal(card.querySelector(".is-loading"), null);
-		assert.equal(dom.imageLoads(), 1);
-		assert.deepEqual([...changes, ...observer.takeRecords()], []);
-		assert.equal(dom.findMemo(card.getAttribute("data-memo-id")!)?.id, h.view.memos[0]!.id);
-		await assert.rejects(h.edit(old, "stale edit"), /stale|revision|changed/iu);
-	} finally {
-		observer.disconnect();
-		dom.dispose();
-	}
+test("外部保存 Daily 的其它正文、frontmatter 或标题后，接纳当前句柄并接续图片", async t => {
+	for (const prefix of ["", "---\ntitle: Before\n---\n", "# Before\n\n"]) await t.test(prefix || "other-text", async () => {
+		const h = await fixture({ immediate: true, body: prefix + "## Memos\n- 09:00 kept ![[image.png]]\n\n## Notes\nBefore\n" });
+		const dom = attachCardFlow(h.view, false, false, true);
+		const old = h.view.memos[0]!;
+		const oldCard = dom.root.querySelector(".knomo-card")!;
+		const image = oldCard.querySelector("img")!;
+		const button = image.parentElement;
+		const changes: MutationRecord[] = [];
+		const observer = new dom.window.MutationObserver(records => changes.push(...records));
+		observer.observe(image, { attributes: true, attributeFilter: ["src"] });
+		const reload = h.view.reloadMemos;
+		h.view.reloadMemos = async () => {
+			await reload();
+			Object.assign(h.view, { filteredMemosCache: null });
+			dom.render();
+			return true;
+		};
+		try {
+			await h.externalReplace(h.body().replace("Before", "After"));
+			assert.ok(oldCard.contains(image), "接纳新查询前图片留在原卡片");
+			await h.view.refresh();
+			const card = dom.root.querySelector(".knomo-card")!;
+			assert.notEqual(card, oldCard);
+			assert.notEqual(card.querySelector("button"), button);
+			assert.equal(card.querySelector("img"), image);
+			assert.equal(image.getAttribute("src"), "app://image.png?knomo-mtime=1");
+			assert.equal(card.querySelector(".is-loading"), null);
+			assert.equal(dom.imageLoads(), 1);
+			assert.deepEqual([...changes, ...observer.takeRecords()], []);
+			assert.equal(dom.findMemo(card.getAttribute("data-memo-id")!)?.id, h.view.memos[0]!.id);
+			await assert.rejects(h.edit(old, "stale edit"), /stale|revision|changed/iu);
+		} finally {
+			observer.disconnect();
+			dom.dispose();
+		}
+	});
 });
 
 test("记录统计准备中的非 force 重绘保留同范围位置，完成时使用用户的新位置", async () => {
@@ -794,6 +1115,33 @@ test("浮标当前分组匹配时增量插入，不匹配时保留原面板，�
 	}
 });
 
+test("浮标真实任务勾选在 Catalog 等待和接续后保留已就绪图片与新句柄", async () => {
+	const gate = deferred<void>();
+	const h = await fixture({ immediate: true, catalogGate: gate.promise,
+		body: "## Memos\n- 09:00 - [ ] task @2099-12-31 ![[image.png]]\n" });
+	h.view.viewStateController.activeNav = "time-buoy";
+	h.buoy.setActiveTab("upcoming"); await h.buoy.loadInitial();
+	const dom = attachCardFlow(h.view, true, false, true);
+	const image = dom.root.querySelector("img"), oldMemo = h.view.memos[0]!;
+	assert.ok(image);
+	let toggling: Promise<unknown> | null = null;
+	try {
+		toggling = h.view.handleCatalogTaskToggle(oldMemo, 0, true);
+		await new Promise<void>(resolve => setImmediate(resolve)); await Reflect.get(h.view, "presentationChangeQueue");
+		assert.match(h.body(), /\[x\]/);
+		assert.equal(dom.root.querySelector("img"), image);
+		assert.equal(dom.imageLoads(), 1);
+		const currentId = dom.root.querySelector(".knomo-card")!.getAttribute("data-memo-id")!;
+		assert.notEqual(currentId, oldMemo.id);
+		assert.equal(dom.root.querySelector(".knomo-card-image-button")!.getAttribute("data-memo-id"), currentId);
+		assert.equal(dom.findMemo(currentId)?.catalog?.observationHandle.sourceRevision,
+			createHash("sha256").update(h.body()).digest("hex"));
+		gate.resolve(); await toggling; await h.buoy.loadInitial(); dom.render();
+		assert.equal(dom.root.querySelector("img"), image);
+		assert.equal(dom.imageLoads(), 1);
+	} finally { gate.resolve(); await toggling; dom.dispose(); }
+});
+
 test("首次 Catalog 读取失败后保存仍立即显示真实卡片，不被旧错误或历史构建占位遮盖", async () => {
 	const gate = deferred<void>();
 	const h = await fixture({ immediate: true, catalogGate: gate.promise });
@@ -864,11 +1212,321 @@ test("Catalog 失败保留已确认新卡片，后续外部 Daily 变化使即�
 	await h.view.composerSaveRefreshQueue;
 	assert.equal(h.view.getFilteredMemos().some(memo => memo.contentSnapshot === "confirmed despite Catalog failure"), true);
 	await h.externalReplace("## Memos\n- 09:00 external replacement\n");
-	h.view.checkConfirmedDailyFile(PATH);
-	await new Promise<void>(resolve => setTimeout(resolve, 10));
+	await h.view.checkConfirmedDailyFile(PATH);
 	assert.equal(h.view.getFilteredMemos().some(memo => memo.contentSnapshot === "confirmed despite Catalog failure"), false);
 	await h.view.reloadMemos();
 	assert.deepEqual(h.view.getFilteredMemos().map(memo => memo.contentSnapshot), ["external replacement"]);
+});
+
+test("确认展示被外部覆盖时保留只读过渡，旧绑定立即撤销，当前查询接纳后再替换", async () => {
+	const h = await fixture({ immediate: true });
+	h.failCatalog();
+	prepareComposer(h.view, "confirmed reading surface");
+	await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+	const dom = attachCardFlow(h.view);
+	try {
+		const before = dom.root.textContent;
+		Object.assign(h.view, { trashMemoController: { getSnapshot: () => ({ trashMemos: [] }) } });
+		const applyBuoys = h.view.timeBuoyViewController.applyMemoChanges.bind(h.view.timeBuoyViewController);
+		h.view.timeBuoyViewController.applyMemoChanges = (...args) => {
+			const changed = applyBuoys(...args);
+			h.view.renderCardFlow();
+			return changed;
+		};
+		await h.externalReplace("## Memos\n- 09:00 external replacement\n");
+		await h.view.checkConfirmedDailyFile(PATH);
+		assert.equal(h.view.getFilteredMemos().length, 0, "旧 occurrence 已退出操作集合");
+		assert.equal(dom.root.textContent, before, "索引接纳前保持可读画面");
+		const snapshot = dom.root.querySelector<HTMLElement>("[data-knomo-readonly-transition]")!;
+		assert.ok(snapshot?.hasAttribute("inert"));
+		assert.equal(snapshot.querySelector("[data-knomo-memo-id], [data-action]"), null);
+		assert.equal(dom.findMemo(h.memos[0]!.id), null);
+		dom.render();
+		assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 4, "普通重绘仍保留全部只读卡片");
+		assert.equal(dom.root.textContent, before);
+		await h.externalReplace("## Memos\n- 09:00 latest external replacement\n");
+		await h.view.checkConfirmedDailyFile("Daily");
+		const pending = Reflect.get(h.view, "externallyInvalidatedDailyRevisions") as Map<string, string | null>;
+		assert.equal(pending.get(PATH), await h.read.getFileSourceRevision(PATH), "目录事件继续验证尚在过渡的源文件");
+		await h.view.queryCatalogFeature({ limit: 50 }); h.view.prepareCatalogResultAcceptance()();
+		await h.view.reloadMemos(); dom.render();
+		assert.match(dom.root.textContent ?? "", /external replacement/);
+		assert.equal(dom.root.querySelector("[data-knomo-readonly-transition]"), null);
+	} finally { dom.dispose(); }
+});
+
+test("连续外部保存的重叠复核按最后事件接纳，较早读取不能覆盖最新版本", async t => {
+	for (const newestFirst of [false, true]) {
+		const h = await fixture({ immediate: true });
+		h.failCatalog(); prepareComposer(h.view, "confirmed");
+		await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		const reads = [deferred<string>(), deferred<string>()];
+		let index = 0, refreshes = 0;
+		t.mock.method(app.vault, "read", () => reads[index++]!.promise);
+		t.mock.method(h.view, "refresh", async () => { refreshes++; });
+		Object.assign(h.view, { presentationVisibilityReady: true, isPresentationHidden: () => false });
+		const oldRead = h.view.checkConfirmedDailyFile(PATH);
+		const newRead = h.view.checkConfirmedDailyFile(PATH);
+		const latest = "## Memos\n- 09:00 latest external\n";
+		await h.externalReplace(latest);
+		if (newestFirst) { reads[1]!.resolve(latest); await newRead; }
+		reads[0]!.resolve("## Memos\n- 09:00 superseded external\n"); await oldRead;
+		if (!newestFirst) { reads[1]!.resolve(latest); await newRead; }
+		const page = await h.view.queryCatalogFeature({ limit: 50 });
+		assert.deepEqual(page.items.map(item => item.content), ["latest external"]);
+		assert.ok(refreshes > 0, "最新复核完成后即使 Catalog 通知已到也会请求交接");
+	}
+});
+
+test("普通列表的只读交接在失败和两个视图间独立保留，其它文件仍可操作，当前零结果才清空", async t => {
+	const h = await fixture({ immediate: true, otherBody: "- 11:00 C\n" });
+	const other = await h.createView();
+	h.failCatalog(); prepareComposer(h.view, "confirmed");
+	await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+	const firstDom = attachCardFlow(h.view), secondDom = attachCardFlow(other.view);
+	try {
+		await h.externalReplace("## Memos\n");
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		Object.assign(h.view, { reportViewRefreshFailure() {} });
+		await h.view.checkConfirmedDailyFile(PATH); await other.view.checkConfirmedDailyFile(PATH);
+		for (const dom of [firstDom, secondDom]) {
+			dom.render();
+			assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 4);
+			assert.equal(dom.findMemo(h.memos[3]!.id)?.contentSnapshot, "C");
+		}
+		const read = t.mock.method(app.vault, "read", async () => { throw new Error("temporary source failure"); });
+		await h.view.checkConfirmedDailyFile(PATH); firstDom.render();
+		assert.equal(firstDom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 4);
+		read.mock.restore(); await h.view.checkConfirmedDailyFile(PATH);
+		await h.view.queryCatalogFeature({ limit: 50 }); h.view.prepareCatalogResultAcceptance()();
+		await h.view.reloadMemos(); firstDom.render(); secondDom.render();
+		assert.equal(firstDom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 0);
+		assert.equal(firstDom.root.querySelectorAll(".knomo-card").length, 1, "当前 Daily 确认零条，只留下另一个来源");
+		assert.equal(secondDom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 4, "另一视图尚未接纳，继续保持只读");
+		await other.view.queryCatalogFeature({ limit: 50 }); other.view.prepareCatalogResultAcceptance()();
+		await other.view.reloadMemos(); secondDom.render();
+		assert.equal(secondDom.root.querySelectorAll(".knomo-card").length, 1);
+	} finally { secondDom.dispose(); firstDom.dispose(); }
+});
+
+test("普通列表等待 A 的索引交接时，B 连续编辑立即更新且 A 始终只读", async t => {
+	const { CatalogDiscoveryInvalidatedError } = await import("../src/services/CatalogReadService");
+	const h = await fixture({ immediate: true, otherBody: "## Memos\n- 11:00 - [ ] other original\n- 11:01 other sibling\n" });
+	h.random.applyMemoChanges(new Map(h.memos.filter(memo => memo.dailyRef.path !== PATH).map(memo => [memo.id, null])));
+	await h.edit(h.memos[0]!, "confirmed A");
+	Object.assign(h.view, { trashMemoController: { getSnapshot: () => ({ trashMemos: [] }) } });
+	const dom = attachCardFlow(h.view);
+	try {
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		const processDaily = app.vault.process.bind(app.vault);
+		t.mock.method(app.vault, "process", async (file: TFile, update: (content: string) => string) => {
+			const result = await processDaily(file, update);
+			if (file.path !== PATH) await h.view.checkConfirmedDailyFile(file.path);
+			return result;
+		});
+		h.vault.replace(PATH, "---\nmodified: external\n---\n" + h.body());
+		await h.view.checkConfirmedDailyFile(PATH);
+		const readonlyCards = [...dom.root.querySelectorAll<HTMLElement>("[data-knomo-readonly-transition]")];
+		assert.equal(readonlyCards.length, 3);
+		await assert.rejects(h.view.queryCatalogFeature({ limit: 50 }), CatalogDiscoveryInvalidatedError);
+		let other = h.view.memos.find(memo => memo.contentSnapshot === "- [ ] other original")!;
+		const publication = deferred<void>();
+		h.afterCatalogPublished(() => publication.promise);
+		try {
+			for (const content of ["- [ ] other first edit", "- [x] other second edit"]) {
+				const previous = other;
+				prepareComposer(h.view, content, previous);
+				await h.view.saveInput(); dom.render();
+				const current = h.view.getFilteredMemos();
+				other = current.find(memo => memo.contentSnapshot === content)!;
+				assert.ok(other);
+				const card = [...dom.root.querySelectorAll<HTMLElement>(".knomo-card")]
+					.find(element => element.getAttribute("data-memo-id") === other.id);
+				assert.equal(card?.querySelector(".knomo-card-content")?.textContent, content);
+				assert.equal(card?.querySelector("input")?.getAttribute("data-knomo-memo-id"), other.id);
+				for (const memo of current) {
+					const selected = dom.findMemo(memo.id);
+					assert.ok(selected, "B 的未编辑卡片也立即使用当前操作目标");
+					assert.deepEqual(selected.catalog!.observationHandle, memo.catalog!.observationHandle);
+					assert.equal(selected.contentSnapshot, memo.contentSnapshot);
+				}
+				assert.equal(dom.findMemo(previous.id), null);
+				assert.deepEqual([...dom.root.querySelectorAll("[data-knomo-readonly-transition]")], readonlyCards);
+				assert.ok(readonlyCards.every(element => element.hasAttribute("inert") && element.querySelector("[data-knomo-memo-id], [data-action]") === null));
+				assert.equal(current.some(memo => memo.dailyRef.path === PATH), false);
+			}
+		} finally { publication.resolve(); await h.view.composerSaveRefreshQueue; }
+		await assert.rejects(h.edit(h.memos[0]!, "stale A"), /stale|revision|changed/iu);
+		await assert.rejects(h.view.queryCatalogFeature({ limit: 50 }), CatalogDiscoveryInvalidatedError);
+		await h.externalReplace(h.body());
+		await h.view.queryCatalogFeature({ limit: 50 }); h.view.prepareCatalogResultAcceptance()();
+		await h.view.reloadMemos(); dom.render();
+		assert.equal(dom.root.querySelectorAll("[data-knomo-readonly-transition]").length, 0);
+		assert.equal(dom.root.querySelectorAll(".knomo-card").length, 5);
+		assert.match(dom.root.textContent ?? "", /other second edit/u);
+	} finally { dom.dispose(); }
+});
+
+test("删除后创建或移入同名 Daily 的事件更新交接版本，真实删除可接纳空结果", async t => {
+	for (const event of ["create", "rename", "folder", "deleted"] as const) {
+		const h = await fixture({ immediate: true });
+		h.failCatalog(); prepareComposer(h.view, "confirmed");
+		await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		const listeners = new Map<string, (file: TFile, oldPath?: string) => unknown>();
+		Object.assign(app.vault, { on: (name: string, listener: (file: TFile, oldPath?: string) => unknown) => { listeners.set(name, listener); return {}; } });
+		Object.assign(h.view, { registerEvent: () => {} });
+		h.view.registerConfirmedDailyFileEvents();
+		const file = app.vault.getAbstractFileByPath(PATH) as TFile;
+		h.vault.remove(PATH);
+		await listeners.get("delete")!(file);
+		if (event === "deleted") {
+			await h.catalog.deleteFile(PATH);
+			assert.deepEqual((await h.view.queryCatalogFeature({ limit: 50 })).items, []);
+			continue;
+		}
+		const replacement = await app.vault.create(PATH, "## Memos\n- 09:00 recreated\n");
+		await h.externalReplace(h.body());
+		if (event === "create") await listeners.get("create")!(replacement);
+		else {
+			await listeners.get("rename")!(event === "folder" ? { path: "Daily" } as TFile : replacement,
+				event === "folder" ? "Incoming" : "Incoming/recreated.md");
+		}
+		const page = await h.view.queryCatalogFeature({ limit: 50 });
+		assert.deepEqual(page.items.map(item => item.content), ["recreated"], event);
+	}
+});
+
+test("逐页校验保留外部交接约束，到整轮接纳才消费，途中新事件使旧轮失效", async () => {
+	const h = await fixture({ immediate: true });
+	h.failCatalog(); prepareComposer(h.view, "confirmed");
+	await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+	await h.externalReplace("## Memos\n- 09:00 first\n- 10:00 second\n");
+	await h.view.checkConfirmedDailyFile(PATH);
+	const accept = h.view.prepareCatalogResultAcceptance();
+	await h.view.queryCatalogFeature({ limit: 1 });
+	const pending = Reflect.get(h.view, "externallyInvalidatedDailyRevisions") as Map<string, string | null>;
+	assert.ok(pending.has(PATH), "首批页成功不代表整轮查询已接纳");
+	await h.externalReplace("## Memos\n- 09:00 newer\n");
+	await h.view.checkConfirmedDailyFile(PATH);
+	assert.throws(accept, /snapshot changed/i);
+	const acceptCurrent = h.view.prepareCatalogResultAcceptance();
+	await h.view.queryCatalogFeature({ limit: 50 });
+	acceptCurrent();
+	assert.equal(pending.size, 0);
+});
+
+test("复核读取失败可在下一轮刷新恢复，关闭或新内部确认使旧读取失效", async t => {
+	for (const finish of ["retry", "close", "confirmed"] as const) {
+		const h = await fixture({ immediate: true });
+		h.failCatalog(); prepareComposer(h.view, "confirmed");
+		await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+		const app = Reflect.get(h.view, "app") as import("obsidian").App;
+		if (finish === "retry") {
+			const read = t.mock.method(app.vault, "read", async () => { throw new Error("unreadable"); });
+			const errors = t.mock.method(h.view, "reportViewRefreshFailure", () => {});
+			await h.view.checkConfirmedDailyFile(PATH);
+			assert.equal(errors.mock.callCount(), 1);
+			await assert.rejects(h.view.queryCatalogFeature({ limit: 50 }), /snapshot changed/i);
+			read.mock.restore();
+			await h.view.refresh();
+			await h.view.queryCatalogFeature({ limit: 50 });
+			continue;
+		}
+		const gate = deferred<string>();
+		const read = t.mock.method(app.vault, "read", () => gate.promise);
+		const pending = h.view.checkConfirmedDailyFile(PATH);
+		read.mock.restore();
+		if (finish === "close") { h.view.invalidateConfirmedDailyMemos(); h.view.trashViewClosed = true; }
+		else { prepareComposer(h.view, "new internal"); await h.view.saveInput(); await h.view.composerSaveRefreshQueue; }
+		gate.resolve("## Memos\n- 09:00 old external\n"); await pending;
+		assert.equal(Reflect.get(h.view, "externallyInvalidatedDailyRevisions")?.size ?? 0, 0);
+		if (finish === "confirmed") assert.ok(h.view.getFilteredMemos().some(memo => memo.contentSnapshot === "new internal"));
+	}
+});
+
+test("真实移动搜索三页经历连续外部保存、一次读取失败后接纳最新版本并继续翻页", async t => {
+	const body = "## Memos\n" + Array.from({ length: 200 }, (_, index) => `- 09:00 memo-${index}\n`).join("");
+	const h = await fixture({ immediate: true, body });
+	h.failCatalog(); prepareComposer(h.view, "memo-confirmed", h.memos[0]);
+	await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+	await h.externalReplace(h.body());
+	const first = await h.read.query({ textTerms: ["memo"], limit: 50 });
+	Object.assign(h.view, { containerEl: { win: { setTimeout, clearTimeout } },
+		catalogCoverage: first.coverage, catalogRevision: first.catalogRevision, catalogStatus: first.status,
+		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {},
+	});
+	const search = h.view.createMobileSearchController();
+	Object.assign(h.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	search.searchQuery = "memo"; search.isOpen = true; search.searchVisibleCount = 50;
+	await search.refreshAppliedResults();
+	search.loadMore(); await new Promise<void>(resolve => setImmediate(resolve));
+	search.loadMore(); await new Promise<void>(resolve => setImmediate(resolve));
+	search.searchVisibleCount = 150;
+	assert.equal(search.getDisplayedMemos().length, 150);
+	const app = Reflect.get(h.view, "app") as import("obsidian").App;
+	const reads = [deferred<string>(), deferred<string>()]; let index = 0;
+	const read = t.mock.method(app.vault, "read", () => reads[index++]!.promise);
+	const checks = [h.view.checkConfirmedDailyFile(PATH), h.view.checkConfirmedDailyFile(PATH)];
+	const latest = "---\naliases: latest\n---\n" + body;
+	await h.externalReplace(latest);
+	reads[0]!.resolve("---\naliases: older\n---\n" + body); await checks[0];
+	reads[1]!.resolve(latest); await checks[1]; read.mock.restore();
+	assert.equal(search.getDisplayedMemos().length, 0, "旧操作集合已经撤销");
+	const queryPage = h.read.query.bind(h.read), pageEntered = deferred<void>();
+	const secondPage = deferred<Awaited<ReturnType<typeof queryPage>>>();
+	const partial = t.mock.method(h.read, "query", (request: Parameters<typeof queryPage>[0], signal?: AbortSignal) => {
+		if (request.cursor) { pageEntered.resolve(); return secondPage.promise; }
+		return queryPage(request, signal);
+	});
+	const cancelled = search.refreshAppliedResults();
+	await pageEntered.promise;
+	search.cancelPendingRequest(true);
+	secondPage.resolve(await queryPage({ textTerms: ["memo"], limit: 50 }));
+	await cancelled; partial.mock.restore();
+	assert.ok((Reflect.get(h.view, "externallyInvalidatedDailyRevisions") as Map<string, unknown>).has(PATH), "第二页取消保留源版本约束");
+	assert.equal(search.getDisplayedMemos().length, 0);
+	const query = t.mock.method(h.read, "query", async () => { throw new Error("temporary failure"); });
+	t.mock.method(console, "warn", () => {});
+	await search.refreshAppliedResults();
+	assert.equal(search.session.requestStatus, "failed");
+	assert.ok((Reflect.get(h.view, "externallyInvalidatedDailyRevisions") as Map<string, unknown>).has(PATH));
+	query.mock.restore();
+	await search.refreshAppliedResults();
+	assert.equal(search.getDisplayedMemos().length, 150);
+	const revision = createHash("sha256").update(latest).digest("hex");
+	assert.ok(search.getDisplayedMemos().every(memo => memo.catalog?.observationHandle.sourceRevision === revision));
+	search.loadMore(); await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(search.getDisplayedMemos().length, 200);
+	assert.equal(new Set(search.getDisplayedMemos().map(memo => memo.id)).size, 200);
+	search.searchQuery = "memo-199";
+	await search.refreshAppliedResults();
+	assert.equal(search.getDisplayedMemos().length, 1);
+	search.isOpen = false;
+});
+
+test("只读画面恢复原字节后重新创建可操作卡片和任务正文", async () => {
+	const h = await fixture({ immediate: true, body: "## Memos\n- 09:00 - [ ] task\n" });
+	h.failCatalog(); prepareComposer(h.view, "confirmed", h.memos[0]);
+	await h.view.saveInput(); await h.view.composerSaveRefreshQueue;
+	const original = h.body();
+	const dom = attachCardFlow(h.view);
+	try {
+		await h.externalReplace("## Memos\n- 09:00 external\n");
+		await h.view.checkConfirmedDailyFile(PATH);
+		assert.ok(dom.root.querySelector("[data-knomo-readonly-transition]"));
+		await h.externalReplace(original);
+		await h.view.checkConfirmedDailyFile(PATH);
+		await h.view.queryCatalogFeature({ limit: 50 }); h.view.prepareCatalogResultAcceptance()();
+		await h.view.checkConfirmedDailyFile(PATH);
+		await h.view.reloadMemos(); dom.render();
+		assert.equal(dom.root.querySelector("[inert], [data-knomo-readonly-transition]"), null);
+		const checkbox = dom.root.querySelector<HTMLInputElement>("input")!;
+		assert.equal(checkbox.disabled, false);
+		assert.equal(checkbox.getAttribute("data-knomo-memo-id"), h.view.getFilteredMemos()[0]!.id);
+	} finally { dom.dispose(); }
 });
 
 test("刚保存卡片的任务操作继续更新确认展示，索引追上后不重复插入", async () => {
@@ -1033,7 +1691,8 @@ test("真实 Daily 编辑后的移动分页失效不会被等价输入及取消�
 	}
 });
 
-async function fixture(options: { body?: string; immediate?: boolean; catalogGate?: Promise<void> } = {}) {
+async function fixture(options: { body?: string; otherBody?: string; immediate?: boolean; catalogGate?: Promise<void>;
+	refreshViews?: boolean; rejectStalePublication?: boolean; onConfirmed?: () => void } = {}) {
 	await ensureObsidianStub();
 	const { InMemoryVault } = await import("./helpers/InMemoryVault");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1054,6 +1713,8 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	const { KnomoViewStateController } = await import("../src/ui/KnomoViewStateController");
 	const { default: KnomoPlugin } = await import("../src/main");
 	const vault = new InMemoryVault({ [PATH]: options.body ?? "## Memos\n- 09:00 old\n- 10:00 same\n- 10:00 same\n" });
+	const otherPath = "Daily/2026-08-21.md";
+	if (options.otherBody !== undefined) await vault.app.vault.create(otherPath, options.otherBody);
 	const app = vault.app;
 	const views: TestView[] = [];
 	Object.assign(app, {
@@ -1069,19 +1730,22 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	const store = new InMemoryMemoCatalogStore();
 	const catalog = new MemoCatalogService(store);
 	await catalog.open();
-	const seed = async (parsed: Awaited<ReturnType<typeof parser.parse>>) => {
-		await catalog.replaceFile({ inventory: { sourcePath: PATH, logicalDate: DATE, mtime: 1, size: vault.read(PATH)!.length },
+	const seed = async (parsed: Awaited<ReturnType<typeof parser.parse>>, sourcePath = PATH, logicalDate = DATE) => {
+		await catalog.replaceFile({ inventory: { sourcePath, logicalDate, mtime: 1, size: vault.read(sourcePath)!.length },
 			sourceRevision: parsed.sourceRevision, observations: parsed.observations, parserVersion: 2, settingsFingerprint: "settings", auditedAt: 1 });
-		await store.setCoverage({ kind: "complete", coveredFromDate: DATE, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 });
+		const fileCount = options.otherBody === undefined ? 1 : 2;
+		await store.setCoverage({ kind: "complete", coveredFromDate: DATE, pendingFileCount: 0, coveredFileCount: fileCount, totalFileCount: fileCount });
 	};
 	const externalReplace = async (body: string) => {
 		vault.replace(PATH, body);
 		await seed(await parser.parse({ sourcePath: PATH, logicalDate: DATE, bytes: Buffer.from(body) }));
 	};
 	await externalReplace(vault.read(PATH)!);
+	if (options.otherBody !== undefined) await seed(await parser.parse({ sourcePath: otherPath, logicalDate: "2026-08-21", bytes: Buffer.from(options.otherBody) }), otherPath, "2026-08-21");
 	const read = new CatalogReadService({ catalog });
-	const loadMemos = async () => (await read.query({ sourcePaths: [PATH], limit: 20 })).items.map(toCatalogMemoView)
-		.sort((left, right) => left.catalog!.observationHandle.startLine - right.catalog!.observationHandle.startLine);
+	const loadMemos = async () => (await read.query({ sourcePaths: options.otherBody === undefined ? [PATH] : [PATH, otherPath], limit: 20 })).items.map(toCatalogMemoView)
+		.sort((left, right) => right.dailyRef.path.localeCompare(left.dailyRef.path)
+			|| left.catalog!.observationHandle.startLine - right.catalog!.observationHandle.startLine);
 	const memos = await loadMemos();
 	let randomLoads = 0;
 	let discoveryGate: Promise<MemoViewItem[]> | null = null;
@@ -1118,11 +1782,17 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	const primary = await createView();
 	const plugin = Object.create(KnomoPlugin.prototype) as {
 		updateCommittedCatalogPartition: (input: MarkdownCatalogCommitInput) => Promise<void>;
+		runRefreshOpenViews: () => Promise<void>;
 	};
 	let afterPublished = async () => {};
+	let viewRefresh = Promise.resolve();
 	Object.assign(plugin, { app, catalogIndexCoordinator: { replaceCommittedFile: async (input: MarkdownCatalogCommitInput) => {
-		await seed(input.parsed); await afterPublished();
-	} }, queueRefreshOpenViews: async () => {} });
+		if (options.rejectStalePublication && vault.read(input.file.path) !== input.content) throw new Error("Daily changed before Catalog publication");
+		await seed(input.parsed, input.file.path, input.logicalDate); await afterPublished();
+	} }, queueRefreshOpenViews: () => {
+		if (options.refreshViews) viewRefresh = viewRefresh.then(() => plugin.runRefreshOpenViews());
+		return viewRefresh;
+	} });
 	let failCatalog = false;
 	const updateCatalogPartition = async (input: MarkdownCatalogCommitInput) => {
 		await options.catalogGate;
@@ -1131,10 +1801,10 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 	};
 	const gateway = new DailyMemoWriteGateway(app, parser);
 	const mutationOptions = { getWriteHeading: () => "## Memos", getDailyFileForDate: async () => file,
-		getLogicalDateForPath: () => DATE, getMemoTimeFormat: () => "HH:mm",
+		getLogicalDateForPath: (path: string) => path === otherPath ? "2026-08-21" : DATE, getMemoTimeFormat: () => "HH:mm",
 		updateCatalogPartition, refreshCatalogPaths: async () => {} };
 	if (options.immediate) Object.assign(mutationOptions, {
-		onDailyConfirmed: (change: ConfirmedDailyMemoPresentation) => { for (const view of views) view.handleConfirmedDailyMemoChange(change); },
+		onDailyConfirmed: (change: ConfirmedDailyMemoPresentation) => { for (const view of views) view.handleConfirmedDailyMemoChange(change); options.onConfirmed?.(); },
 		onCatalogUpdateSettled: (change: DailyMemoPresentationChange) => { for (const view of views) view.handleConfirmedCatalogSettled(change); },
 	});
 	const mutations = new MarkdownMutationService(app, { ...mutationOptions, getMemoTimeFormat: () => "HH:mm" }, gateway);
@@ -1147,14 +1817,17 @@ async function fixture(options: { body?: string; immediate?: boolean; catalogGat
 		now: () => new Date(2026, 7, 22, 12), refreshCatalogPaths: async () => {},
 		refreshLocalCatalog: async () => { throw new Error("Unexpected refresh"); }, rebuildLocalCatalog: async () => {} }, mutations);
 	Object.assign(primary.view, { memoCommandService: command });
-	return { ...primary, memos, read, loadMemos, command, trash, catalog, body: () => vault.read(PATH)!,
+	return { ...primary, memos, read, loadMemos, command, trash, catalog, vault, body: () => vault.read(PATH)!,
 		randomLoads: () => randomLoads, createView, externalReplace, failCatalog: () => { failCatalog = true; },
 		afterCatalogPublished: (action: () => Promise<void>) => { afterPublished = action; },
 		setDiscoveryGate: (gate: Promise<MemoViewItem[]> | null) => { discoveryGate = gate; },
+		waitForViewRefresh: () => viewRefresh,
 		edit: (memo: MemoViewItem, content: string) => command.edit(memo.catalog!, content) };
 }
 
 interface TestView {
+	timeBuoyViewController: import("../src/ui/TimeBuoyViewController").TimeBuoyViewController;
+	renderCardFlow: () => void;
 	createMobileSearchController: () => import("../src/ui/MobileSearchController").MobileSearchController;
 	renderUiState: () => void;
 	getCurrentCardFlowPresentation: () => import("../src/ui/KnomoCardFlowPresenter").CardFlowPresentation;
@@ -1165,7 +1838,11 @@ interface TestView {
 	handleConfirmedDailyMemoChange: (change: ConfirmedDailyMemoPresentation) => void;
 	handleConfirmedCatalogSettled: (change: DailyMemoPresentationChange) => void;
 	invalidateConfirmedDailyMemos: () => void;
-	checkConfirmedDailyFile: (path: string) => void;
+	checkConfirmedDailyFile: (path: string) => Promise<void> | void;
+	registerConfirmedDailyFileEvents: () => void;
+	prepareCatalogResultAcceptance: () => () => void;
+	reportViewRefreshFailure: (error: unknown, stage?: string) => void;
+	queryCatalogFeature: (request: import("../src/types/catalogView").CatalogFeatureQuery, signal?: AbortSignal) => Promise<import("../src/types/catalogView").CatalogMemoPage>;
 	inputEl: { value: string } | null;
 	saveInput: () => Promise<void>;
 	getFilteredMemos: () => MemoViewItem[];
@@ -1311,6 +1988,7 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		setText(this: HTMLElement, text: string) { this.textContent = text; },
 		addClass(this: HTMLElement, name: string) { this.classList.add(name); },
 		removeClass(this: HTMLElement, name: string) { this.classList.remove(name); },
+		toggleClass(this: HTMLElement, name: string, active: boolean) { this.classList.toggle(name, active); },
 		setCssProps(this: HTMLElement, props: Record<string, string>) {
 			for (const [name, value] of Object.entries(props)) this.style.setProperty(name, value);
 		},
@@ -1339,7 +2017,10 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		const card = dom.window.document.createElement("article"); card.className = "knomo-card";
 		card.setAttribute("data-memo-id", memo.id); card.setAttribute("data-memo-render-key", memo.catalog!.renderKey);
 		card.setAttribute("data-time-presentation", JSON.stringify({ mode: "full" }));
-		const body = dom.window.document.createElement("div"); body.className = "knomo-card-content"; body.textContent = memo.contentSnapshot;
+		if (_body instanceof dom.window.HTMLElement) {
+			card.append(_body); container.append(card); return card;
+		}
+		const body = dom.window.document.createElement("div"); body.className = "knomo-card-body knomo-card-content"; body.textContent = memo.contentSnapshot;
 		const checkbox = dom.window.document.createElement("input"); checkbox.type = "checkbox";
 		checkbox.setAttribute("data-knomo-memo-id", memo.id); checkbox.setAttribute("data-knomo-task-index", "0"); body.append(checkbox);
 		card.append(body); container.append(card);
@@ -1354,9 +2035,16 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		}
 		return card;
 	};
-	const render = () => timeBuoy ? renderingView.renderTimeBuoyPage() : renderingView.syncCardFlowPresentation(usePresentation ? view.getCurrentCardFlowPresentation() : {
-		type: "items", mode: "memo", headers: [], memos: view.getFilteredMemos(),
-	}, null);
+	const render = () => {
+		const previous = globalThis.HTMLElement;
+		globalThis.HTMLElement = dom.window.HTMLElement;
+		try {
+			if (timeBuoy) renderingView.renderTimeBuoyPage();
+			else renderingView.syncCardFlowPresentation(usePresentation ? view.getCurrentCardFlowPresentation() : {
+				type: "items", mode: "memo", headers: [], memos: view.getFilteredMemos(),
+			}, null);
+		} finally { globalThis.HTMLElement = previous; }
+	};
 	Object.assign(view, {
 		cardFlowEl: root, renderedCardMemos: new Map(), popupState: { activeMenuMemoId: null },
 		containerEl: { win: dom.window }, getA11yId: () => "buoy", getInitialCardBatchSize: () => 20,
@@ -1377,7 +2065,11 @@ function attachCardFlow(view: TestView, timeBuoy = false, usePresentation = fals
 		timeBuoyLoadMoreObserver: null,
 		prepareRecentTimeFlow: () => { Object.assign(view, { recentTimeFlowContext: { enabled: false, dates: [], pinnedKeys: new Set() },
 			recentDecorations: { next: () => null } }); },
-		renderCardForMode: renderCard, renderMemoCardInContainer: renderCard, removeCardElement: (card: HTMLElement) => card.remove(),
+		renderCardForMode: renderCard,
+		renderMemoCardInContainer: (container: HTMLElement, memo: MemoViewItem, generation: number, index: number,
+			_actions: unknown, _random: unknown, _surface: unknown, _body: unknown, _images: unknown, _buoy: unknown, handoff?: ReadyCardImageHandoff) =>
+			renderCard(container, memo, generation, index, undefined, undefined, undefined, handoff),
+		removeCardElement: (card: HTMLElement) => card.remove(),
 		renderTimeBuoyIntro: () => null, renderCardFlowSentinelIfNeeded: () => {}, renderHistoryLoadMore: () => {},
 		syncCardMenuState: () => {}, restorePendingCardFlowScrollTop: () => {},
 		getCardFlowScrollTop: () => root.scrollTop, restoreCardFlowScrollTop: (scroll: number) => { root.scrollTop = scroll; },

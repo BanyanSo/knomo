@@ -177,8 +177,15 @@ export class CatalogReadService {
 		signal?.throwIfAborted();
 	}
 
-	async getFileSourceRevision(sourcePath: string): Promise<string | null> {
-		return (await this.options.catalog.getStore().getFile(sourcePath))?.sourceRevision ?? null;
+	async getFileSourceRevision(sourcePath: string, expectedCatalogRevision?: number, signal?: AbortSignal): Promise<string | null> {
+		signal?.throwIfAborted();
+		const store = this.options.catalog.getStore(), generation = expectedCatalogRevision === undefined ? undefined : store.getRuntimeGeneration();
+		const file = await store.getFile(sourcePath);
+		signal?.throwIfAborted();
+		if (expectedCatalogRevision !== undefined && (await store.getCatalogRevision() !== expectedCatalogRevision
+			|| store !== this.options.catalog.getStore() || generation !== store.getRuntimeGeneration())) throw new CatalogDiscoveryInvalidatedError();
+		signal?.throwIfAborted();
+		return file?.sourceRevision ?? null;
 	}
 
 	async query(request: CatalogFeatureQuery, signal?: AbortSignal): Promise<CatalogMemoPage> {

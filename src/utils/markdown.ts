@@ -17,32 +17,8 @@ export function parseMemoMarkdown(content: string) {
 	return memoMarkdown.parse(content);
 }
 
-export function extractLeadingParagraphBlockId(content: string): { text: string; blockId: string | null } {
-	if (!content.includes(" ^")) return { text: content, blockId: null };
-	const paragraph = parseMemoMarkdown(content).topNode.firstChild;
-	if (paragraph?.name !== "Paragraph") return { text: content, blockId: null };
-	const start = content.lastIndexOf("\n", paragraph.to - 1) + 1;
-	const nextLine = content.indexOf("\n", start);
-	const end = nextLine === -1 ? content.length : nextLine;
-	const match = content.slice(start, end).match(/^(.*) \^([A-Za-z0-9_-]+)$/u);
-	if (match === null) return { text: content, blockId: null };
-	// 贪婪保留原有行尾空白，只移除段末 ID 及写入时追加的单个分隔空格。
-	return { text: content.slice(0, start) + match[1] + content.slice(end), blockId: match[2] };
-}
-
 export function isValidMarkdownHeading(value: string): boolean {
 	return MARKDOWN_HEADING_REGEX.test(value.trim());
-}
-
-export function extractTrailingBlockId(value: string): { text: string; blockId: string | null } {
-	const match = value.match(/^(.*?)(?:\s+\^([A-Za-z0-9_-]+)\s*)$/);
-	if (!match) {
-		return { text: value, blockId: null };
-	}
-	return {
-		text: match[1],
-		blockId: match[2],
-	};
 }
 
 export function isMemoStartLine(value: string): boolean {
@@ -66,15 +42,6 @@ export function splitMarkdownLines(value: string): string[] {
 	return normalizeMarkdownLineEndings(value).split("\n");
 }
 
-export function findLastEffectiveLineIndex(lines: string[]): number {
-	for (let index = lines.length - 1; index >= 0; index -= 1) {
-		if (lines[index].trim().length > 0) {
-			return index;
-		}
-	}
-	return -1;
-}
-
 export function isMemoContinuationLine(value: string, columns: 2 | 4 = 2): boolean {
 	return MEMO_CONTINUATION_INDENT_REGEX.test(value) || (columns === 4 && FOUR_COLUMN_MEMO_INDENT_REGEX.test(value));
 }
@@ -95,7 +62,7 @@ export function getFourColumnMemoPrefix(lines: readonly string[], startLine = 0)
 	const match = lines[startLine]?.match(/^- {3}\d{2}:\d{2}(?::\d{2})?(?: (.*))?$/u);
 	if (!match) return null;
 	const headerContent = match[1];
-	const headerId = headerContent?.match(/^\^([A-Za-z0-9_-]+)$/u)?.[1];
+	const headerId = headerContent?.match(/^\^([A-Za-z0-9-]+)[\t ]*$/u)?.[1];
 	if (headerContent !== undefined && headerId === undefined) {
 		return { firstContent: headerContent, blockId: null, contentStartLineOffset: 0 };
 	}

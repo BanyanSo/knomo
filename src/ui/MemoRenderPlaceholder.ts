@@ -1,4 +1,23 @@
 import type { MemoViewItem } from "../types/memoView";
+import { retainReadonlyCardImages } from "./KnomoCardImages";
+
+export function makeReadonlyMemoCard(card: HTMLElement): HTMLElement {
+	const snapshot = card.cloneNode(true) as HTMLElement;
+	snapshot.setAttribute("data-knomo-readonly-transition", "");
+	snapshot.setAttribute("inert", "");
+	for (const element of [snapshot, ...Array.from(snapshot.querySelectorAll<HTMLElement>("*"))]) {
+		for (const attribute of Array.from(element.attributes)) {
+			if (attribute.name === "data-action" || attribute.name === "data-memo-id" || attribute.name === "href"
+				|| attribute.name === "data-href" || attribute.name === "tabindex" || attribute.name === "contenteditable"
+				|| attribute.name.startsWith("data-knomo-") && attribute.name !== "data-knomo-readonly-transition"
+				|| attribute.name.startsWith("data-relation-")) element.removeAttribute(attribute.name);
+		}
+	}
+	for (const input of Array.from(snapshot.querySelectorAll<HTMLInputElement>("input, button, select, textarea"))) input.disabled = true;
+	retainReadonlyCardImages(card, snapshot);
+	card.replaceWith(snapshot);
+	return snapshot;
+}
 
 // 只保存本次重绘期间的静态显示，不复用旧 occurrence 句柄或交互监听。
 export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewItem; card: HTMLElement }[]) {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { undoDepth } from "@codemirror/commands";
+import { redo, undo, undoDepth } from "@codemirror/commands";
 import type { TFile } from "obsidian";
 import type { KnomoTagSuggest } from "../src/ui/KnomoTagSuggest";
 import type { KnomoWikiLinkSuggest } from "../src/ui/KnomoWikiLinkSuggest";
@@ -19,7 +19,7 @@ async function fixture(kind: "tag" | "link", mobile = true) {
 		app: { vault: object; metadataCache: object }; getWikiLinkSourcePath: () => string };
 	const names = ["Alpha", "Beta", "Delta", "Epsilon", "Gamma", "Iota", "Kappa", "Lambda", "Omega", "Theta"];
 	const files = names.map(basename => ({ basename, path: `Notes/${basename}.md`, extension: "md" }) as TFile);
-	Object.assign(view.tagSuggest, { vaultTagIndex: { getSnapshot: () => ({ status: "ready", revision: 1, suggestions: names.map(name => name.toLowerCase()) }) } });
+	Object.assign(view.tagSuggest, { vaultTagIndex: { watchSuggestions: () => () => {}, getSnapshot: () => ({ status: "ready", revision: 1, suggestions: names.map(name => name.toLowerCase()) }) } });
 	Object.assign(view.app.vault, { getMarkdownFiles: () => files });
 	view.app.metadataCache = {
 		fileToLinktext: (file: TFile) => file.basename,
@@ -60,6 +60,188 @@ async function fixture(kind: "tag" | "link", mobile = true) {
 	};
 	return { ...f, input, suggest, initial, open, key };
 }
+
+for (const method of ["Enter", "mouse", "touch", "Tab"] as const) test(`tag: ${method} keeps the completed tag cursor on its line`, async () => {
+	const f = await fixture("tag", method === "touch");
+	const initial = "今天 #al";
+	const completed = "今天 #alpha";
+	try {
+		for (const [suffix, confirmedSuffix] of [
+			["\n下一行", " \n下一行"], ["\n", " \n"], ["\n\n下一行", " \n\n下一行"], [" \n下一行", " \n下一行"],
+			[" 正文", " 正文"], ["\t正文", "\t正文"], ["正文", " 正文"], ["", " "],
+		] as const) {
+			f.input.composer.reset(initial + suffix);
+			f.input.setSelectionRange(initial.length, initial.length);
+			f.input.composer.view.focus();
+			(f.suggest as KnomoTagSuggest).open();
+			const row = f.win.document.querySelector<HTMLElement>(".knomo-tag-suggest-popover .suggestion-item")!;
+			assert.equal(row.textContent, "alpha");
+			if (method === "Enter" || method === "Tab") assert.equal(f.key(method), true);
+			else if (method === "mouse") {
+				for (const type of ["pointerdown", "mousedown", "pointerup"]) {
+					const event = new f.win.MouseEvent(type, { bubbles: true, cancelable: true, button: 0 });
+					Object.defineProperties(event, { pointerType: { value: "mouse" }, pointerId: { value: 1 } });
+					row.dispatchEvent(event);
+				}
+				await f.click(row);
+			} else {
+				const touch = (type: "touchstart" | "touchend") => {
+					const point = { identifier: 1, clientX: 20, clientY: 20, target: row };
+					const event = new f.win.Event(type, { bubbles: true, cancelable: true });
+					Object.defineProperties(event, { touches: { value: type === "touchstart" ? [point] : [] }, changedTouches: { value: [point] } });
+					row.dispatchEvent(event);
+				};
+				f.pointer(row, "pointerdown");
+				touch("touchstart");
+				f.pointer(row, "pointerup");
+				touch("touchend");
+				await f.click(f.input);
+			}
+			const expected = completed + (method === "Tab" ? suffix : confirmedSuffix);
+			const cursor = completed.length + (method === "Tab" ? 0 : 1);
+			assert.equal(f.input.value, expected, JSON.stringify(suffix));
+			assert.equal(f.input.selectionStart, cursor, JSON.stringify(suffix));
+			assert.equal(f.input.selectionEnd, cursor);
+			assert.equal(f.win.document.activeElement, f.input);
+			assert.equal(f.win.document.querySelector(".knomo-tag-suggest-popover") !== null, method === "Tab");
+			assert.equal(undoDepth(f.input.composer.view.state), 1);
+			assert.equal(undo(f.input.composer.view), true);
+			assert.equal(f.input.value, initial + suffix);
+			assert.equal(f.input.selectionStart, initial.length);
+			assert.equal(redo(f.input.composer.view), true);
+			assert.equal(f.input.value, expected);
+			assert.equal(f.input.selectionStart, cursor);
+		}
+	} finally { f.close(); }
+});
+
+for (const mobile of [false, true]) test(`tag/${mobile ? "mobile" : "desktop"}: published candidates refresh without input and reject removed selections`, async () => {
+	const f = await fixture("tag", mobile);
+	const listeners = new Set<() => void>();
+	let tags = ["alpha", "beta", "gamma"];
+	const publish = (next: string[]) => { tags = next; for (const listener of [...listeners]) listener(); };
+	Object.assign(f.suggest, { vaultTagIndex: {
+		getSnapshot: () => ({ status: "ready", revision: 1, suggestions: tags }),
+		watchSuggestions: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+	} });
+	try {
+		f.input.composer.reset("#"); f.input.composer.view.focus();
+		(f.suggest as KnomoTagSuggest).open();
+		f.key("ArrowDown");
+		const oldList = f.win.document.querySelector<HTMLElement>(".knomo-suggest-list")!;
+		oldList.scrollTop = 32;
+		publish(["beta", "gamma"]);
+		const list = f.win.document.querySelector<HTMLElement>(".knomo-suggest-list")!;
+		assert.deepEqual(Array.from(list.children, row => row.textContent), ["beta", "gamma"]);
+		assert.equal(list.querySelector(".is-selected")?.textContent, "beta");
+		assert.equal(list.scrollTop, 32);
+		publish(["gamma"]);
+		(f.suggest as KnomoTagSuggest).selectSuggestion({ tag: "beta", result: null });
+		assert.equal(f.input.value, "#", "旧事件不能选择已移除候选");
+		f.key("Enter");
+		assert.equal(f.input.value, "#gamma ");
+		assert.equal(listeners.size, 0);
+		publish(["later"]);
+		assert.equal(f.win.document.querySelector(".knomo-tag-suggest-popover"), null);
+	} finally { f.close(); }
+});
+
+test("tag: unexpected build rejection retains usable rows and retries only in a new session", async () => {
+	const f = await fixture("tag");
+	let requests = 0;
+	let status = "building";
+	let revision = 1;
+	Object.assign(f.suggest, { vaultTagIndex: {
+		getSnapshot: () => ({ status, revision, suggestions: ["alpha"] }),
+		watchSuggestions: () => () => {},
+		ensureReady: async () => {
+			if (++requests === 1) { status = "idle"; throw new Error("unexpected build failure"); }
+			status = "ready"; revision++;
+		},
+	} });
+	try {
+		f.input.composer.reset("#"); f.input.composer.view.focus();
+		(f.suggest as KnomoTagSuggest).open();
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		assert.equal(f.win.document.querySelector(".suggestion-item")?.textContent, "alpha");
+		for (let i = 0; i < 5; i++) (f.suggest as KnomoTagSuggest).refresh();
+		assert.equal(requests, 1);
+		f.suggest.close(); (f.suggest as KnomoTagSuggest).open();
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		assert.equal(requests, 2);
+		f.key("Enter");
+		assert.equal(f.input.value, "#alpha ");
+	} finally { f.close(); }
+});
+
+for (const action of ["escape", "blur", "ime", "reset", "close", "destroy"] as const) test(`tag: publication cannot reopen after ${action}`, async () => {
+	const f = await fixture("tag");
+	const listeners = new Set<() => void>();
+	let tags = ["alpha"];
+	Object.assign(f.suggest, { vaultTagIndex: {
+		getSnapshot: () => ({ status: "ready", revision: 1, suggestions: tags }),
+		watchSuggestions: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+	} });
+	try {
+		f.open();
+		const queued = [...listeners];
+		if (action === "escape") f.key("Escape");
+		if (action === "blur") { f.input.blur(); f.input.composer.view.focus(); }
+		if (action === "ime") f.input.dispatchEvent(new f.win.CompositionEvent("compositionstart", { bubbles: true }));
+		if (action === "reset") f.input.composer.reset("#");
+		if (action === "close") f.suggest.close();
+		if (action === "destroy") f.close();
+		assert.equal(listeners.size, 0);
+		tags = ["later"];
+		for (const listener of queued) listener();
+		if (action !== "destroy") assert.equal(f.win.document.querySelector(".knomo-tag-suggest-popover"), null);
+	} finally { if (action !== "destroy") f.close(); }
+});
+
+test("tag: a real index updates an open empty session when exclusions change without typing", async () => {
+	const f = await fixture("tag");
+	const { VaultTagIndex } = await import("../src/services/VaultTagIndex");
+	const { TFile } = await import("obsidian");
+	const file = Object.assign(new TFile(), { path: "Monthly/a.md", extension: "md", stat: { mtime: 1 } });
+	let rules: string[] = [];
+	let activeRules: string[] = [];
+	let unavailable = false;
+	const callbacks = new Map<string, (...args: unknown[]) => void>();
+	const on = (key: string, callback: (...args: unknown[]) => void) => { callbacks.set(key, callback); return {}; };
+	const index = new VaultTagIndex({
+		workspace: { containerEl: { win: f.win } },
+		vault: { getConfig: () => { if (unavailable) throw new Error("rules unavailable"); return rules; }, getMarkdownFiles: () => [file], on, offref() {} },
+		metadataCache: { on, getFileCache: () => ({ allTags: ["#Current"] }),
+			updateUserIgnoreFilters: () => { activeRules = [...rules]; },
+			isUserIgnored: (path: string) => activeRules.some(rule => path.startsWith(rule)),
+		},
+	} as never);
+	index.load();
+	Object.assign(f.suggest, { vaultTagIndex: index });
+	try {
+		f.input.composer.reset("#"); f.input.composer.view.focus();
+		(f.suggest as KnomoTagSuggest).open();
+		await index.ensureReady(); await Promise.resolve();
+		assert.equal(f.win.document.querySelector(".suggestion-item")?.textContent, "Current");
+		const originalList = f.win.document.querySelector(".knomo-suggest-list");
+		unavailable = true; callbacks.get("config-changed")!("userIgnoreFilters");
+		await index.ensureReady();
+		assert.equal(index.getSnapshot().exclusionState, "degraded");
+		assert.equal(f.win.document.querySelector(".knomo-suggest-list"), originalList);
+		unavailable = false;
+		rules = ["Monthly/"]; callbacks.get("config-changed")!("userIgnoreFilters");
+		await index.ensureReady();
+		assert.equal(f.win.document.querySelector(".knomo-tag-suggest-popover"), null);
+		rules = []; callbacks.get("config-changed")!("userIgnoreFilters");
+		await index.ensureReady();
+		assert.equal(f.win.document.querySelector(".suggestion-item")?.textContent, "Current");
+		assert.equal(f.input.value, "#");
+		unavailable = true; callbacks.get("config-changed")!("userIgnoreFilters");
+		await index.ensureReady();
+		f.key("Enter");
+		assert.equal(f.input.value, "#Current ", "降级候选仍可补全");
+	} finally { f.close(); index.unload(); }
+});
 
 for (const mobile of [false, true]) for (const kind of ["tag", "link"] as const) {
 	const context = `${mobile ? "mobile" : "desktop"}/${kind}`;

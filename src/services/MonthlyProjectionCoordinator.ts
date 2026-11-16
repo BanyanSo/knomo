@@ -136,6 +136,10 @@ export class MonthlyProjectionCoordinator {
 			this.periodPriorities.clear();
 			this.metadata.clear();
 			this.discoveryPending = true;
+			// 输出规则或设置升级不依赖 Catalog settle；缓存刚清空时也调度实际 Daily 月份。
+			if (checkpoint !== null && checkpoint.renderFingerprint !== this.configuration.renderFingerprint) {
+				for (const period of this.configuration.dailyPeriods) this.markPending(period, MONTHLY_NORMAL_PRIORITY);
+			}
 		}
 		this.markPending(this.getCurrentPeriod(), MONTHLY_URGENT_PRIORITY);
 		await this.persistCheckpoint();

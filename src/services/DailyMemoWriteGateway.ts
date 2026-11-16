@@ -65,7 +65,7 @@ export class DailyMemoWriteGateway {
 		this.assertTarget(target);
 		const editor = this.getActiveEditor(input.file);
 		const mode: DailyWriteMode = editor === null ? "vault_process" : "active_editor";
-		const beforeContent = editor?.getValue() ?? await this.app.vault.cachedRead(input.file);
+		const beforeContent = editor?.getValue() ?? await this.app.vault.read(input.file);
 		if (input.requireDiskMatch && await this.app.vault.read(input.file) !== beforeContent) {
 			throw new StaleDailyWriteError(input.file.path);
 		}

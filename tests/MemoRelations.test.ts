@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test, { before, after } from "node:test";
 import { createHash } from "node:crypto";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { MemoCatalogService } from "../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { MemoRelationService, MemoRelationsChangedError, relationChangeAffects } from "../src/services/MemoRelationService";
@@ -28,6 +29,45 @@ async function fixture() {
 	};
 	return { store, catalog, seed, relations: new MemoRelationService(catalog) };
 }
+
+test("紧凑两列格式保留正文引用关联，重复保存不更换主块 ID 或别名", async () => {
+	const { seed, relations } = await fixture();
+	const writer = new MarkdownBlockService();
+	const target = "target\n\n- [ ] task";
+	const referrer = "[[A#^a|自定义别名]]\n> quote";
+	try {
+		for (let save = 0; save < 2; save += 1) {
+			const targetRaw = writer.buildMemoBlockWithBlockId(target, "10:00", "a");
+			const sourceRaw = writer.buildMemoBlockWithBlockId(referrer, "11:00", "b");
+			assert.ok(targetRaw.startsWith("- 10:00 target ^a\n"));
+			assert.ok(sourceRaw.startsWith("- 11:00 [[A#^a|自定义别名]] ^b\n"));
+			const [a] = await seed("A.md", targetRaw);
+			await seed("B.md", sourceRaw);
+			const current = await relations.read();
+			assert.equal(current.complete, true);
+			assert.equal(current.referrers.get(a!)?.length, 1);
+			assert.equal(current.nodes.size, 2);
+		}
+	} finally { relations.dispose(); }
+});
+
+test("Catalog 缺省锚点计数不重复计算正文末项，整文件重复 ID 仍 unresolved", async () => {
+	const { catalog, seed, relations, store } = await fixture();
+	const raw = "- 09:00 intro\n  \n  - child ^child-anchor \t";
+	const parsed = new DiaryMemoParser().parseRevision({ sourcePath: "A.md", logicalDate: "2026-10-25", content: raw, sourceRevision: "a" });
+	try {
+		await catalog.replaceFile({ inventory: { sourcePath: "A.md", logicalDate: "2026-10-25", mtime: 1, size: raw.length },
+			sourceRevision: parsed.sourceRevision, observations: parsed.observations, parserVersion: 19, settingsFingerprint: "test", auditedAt: 1 });
+		const file = (await catalog.listFiles())[0];
+		assert.equal(file.relations!.anchors["child-anchor"], 1);
+		const key = observationHandleKey(parsed.observations[0]);
+		await seed("B.md", "- 10:00 [[A#^child-anchor|原有别名]]");
+		assert.equal((await relations.read()).referrers.get(key)?.length, 1);
+		await seed("A.md", raw + "\noutside ^child-anchor");
+		assert.equal((await relations.read()).referrers.has(key), false);
+		assert.equal((await store.query({ sourcePaths: ["B.md"], limit: 1 })).items[0].content, "[[A#^child-anchor|原有别名]]");
+	} finally { relations.dispose(); }
+});
 
 function holdFinalCoverage(store: InMemoryMemoCatalogStore) {
 	const coverage = store.getCoverage.bind(store);

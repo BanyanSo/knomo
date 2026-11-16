@@ -7,6 +7,25 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 const PATH = "Daily/2026-09-08.md";
 const BODY = "## Memos\n- 10:30 same memo\n- 10:30 same memo\n";
 
+test("snapshot-first 删除不越过历史裸空行范围，子块 ID 展示与 raw 恢复保持一致", async () => {
+	for (const rawBlock of ["- 10:30 body", "- 10:30 intro\n  \n  - child ^child \t", "- 10:30 ^main\n  > quote"]) {
+		const suffix = "\n\n  outside\n- 11:00 neighbor\n";
+		const original = "## Memos\n" + rawBlock + suffix;
+		const f = await fixture(original);
+		const target = f.initial[0];
+		const deleted = await f.service.delete(target);
+		const snapshot = await f.store.read(deleted.snapshotId);
+		assert.equal(snapshot.rawBlock, rawBlock);
+		assert.equal(f.vault.read(PATH), "## Memos\n" + suffix.slice(1));
+		const { toTrashMemoItem } = await import("../src/types/memoView");
+		assert.equal(toTrashMemoItem(snapshot).content, target.content);
+		await f.service.restore(snapshot);
+		assert.ok(f.vault.read(PATH)!.includes(rawBlock));
+		assert.ok(f.vault.read(PATH)!.includes("  outside\n- 11:00 neighbor\n"));
+		assert.equal((await f.store.query()).items.length, 0);
+	}
+});
+
 for (const field of ["snapshotId", "deletedAt", "sourcePath", "logicalDate", "section", "rawBlock"] as const) {
 test(`首次 restore 核对选中快照的 ${field}，不创建 Daily`, async () => {
 	const f = await fixture();

@@ -23,7 +23,7 @@ import {
 	type PreparedDailyWrite,
 } from "./DailyMemoWriteGateway";
 import { MarkdownBlockService } from "./MarkdownBlockService";
-import { buildDailyMemoPresentationChange, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
+import { buildDailyMemoPresentationChange, createDailyMemoBodyProof, type DailyMemoBodyProof, type DailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 
 export interface MarkdownCatalogCommitInput {
 	file: TFile;
@@ -52,6 +52,13 @@ export class MarkdownMutationStaleError extends Error {
 	constructor(path: string) {
 		super(`Daily observation is stale or ambiguous: ${path}`);
 		this.name = "MarkdownMutationStaleError";
+	}
+}
+
+export class DailySourceUnavailableError extends Error {
+	constructor(path: string) {
+		super(`Daily file is unavailable: ${path}`);
+		this.name = "DailySourceUnavailableError";
 	}
 }
 
@@ -90,10 +97,8 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		const createdAt = input.createdAt ?? this.now();
 		const logicalDate = input.targetLogicalDate ?? formatDatePart(createdAt);
 		const file = await this.options.getDailyFileForDate(logicalDate);
-		const rawBlock = this.blockService.buildMemoBlock(
-			content,
-			formatTimePart(createdAt, this.options.getMemoTimeFormat()),
-		);
+		const { rawBlock } = this.blockService.serializeObservation({ content,
+			time: formatTimePart(createdAt, this.options.getMemoTimeFormat()), existingBlockId: null, blockAnchor: null });
 		return this.appendRawBlock(file, logicalDate, rawBlock, input.onDailyCommitted, input.validateImageSource);
 	}
 
@@ -105,6 +110,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		return this.withStaleRefresh([file.path], async () => {
 			let beforeObservation: MemoObservation | null = null;
 			let afterRawBlock = "";
+			let expectedBlockId: string | null = null;
 			const prepared = await this.dailyGateway.prepare({
 				file,
 				logicalDate,
@@ -113,16 +119,14 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				update: (currentContent, parsed) => {
 					input.validateImageSource?.(file.path);
 					beforeObservation = findObservation(parsed, input.observation, file.path);
-					afterRawBlock = this.blockService.buildMemoBlockWithBlockId(
-						content,
-						beforeObservation.time,
-						beforeObservation.existingBlockId,
-					);
+					const serialized = this.blockService.serializeObservation(beforeObservation, content);
+					afterRawBlock = serialized.rawBlock;
+					expectedBlockId = serialized.existingBlockId;
 					return replaceObservation(currentContent, beforeObservation, afterRawBlock, false);
 				},
 			});
-			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted, undefined, requireObservation(beforeObservation), changed);
+			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock, expectedBlockId);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, input.onDailyCommitted, undefined, requireObservation(beforeObservation), changed, true);
 			return committedResult(changed, catalogUpdatePending);
 		});
 	}
@@ -152,7 +156,8 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					return replaceObservation(currentContent, beforeObservation, afterRawBlock, false);
 				},
 			});
-			const changed = findReplacementObservation(prepared, requireObservation(beforeObservation), afterRawBlock);
+			const before = requireObservation(beforeObservation);
+			const changed = findReplacementObservation(prepared, before, afterRawBlock, before.existingBlockId);
 			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed);
 			return committedResult(changed, catalogUpdatePending);
 		});
@@ -174,12 +179,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 					beforeObservation = findObservation(parsed, input.observation, file.path);
 					if (beforeObservation.existingBlockId !== null) {
 						blockId = beforeObservation.existingBlockId;
+						if (parsed.blockAnchors?.[blockId] !== 1) throw new KnomoError("memo_reference_ambiguous");
 						afterRawBlock = getRawBlock(content, beforeObservation);
 						return content;
 					}
 					if (blockId.length === 0) blockId = this.createUniqueBlockId(content);
 					if (hasBlockId(content, blockId)) throw new MarkdownMutationStaleError(file.path);
-					afterRawBlock = this.blockService.buildMemoBlockWithBlockId(beforeObservation.content, beforeObservation.time, blockId);
+					afterRawBlock = this.blockService.serializeObservation(beforeObservation, beforeObservation.content, blockId).rawBlock;
 					return replaceObservation(content, beforeObservation, afterRawBlock, false);
 				},
 			});
@@ -226,7 +232,13 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		insertedObservation?: MemoObservation,
 		changedBefore: MemoObservation | null = null,
 		changedAfter: MemoObservation | null = insertedObservation ?? null,
+		retainRandomReunion = false,
 	): Promise<boolean> {
+		let bodyProof: DailyMemoBodyProof | undefined;
+		if (retainRandomReunion && this.options.onDailyConfirmed) {
+			try { bodyProof = await createDailyMemoBodyProof(prepared.afterContent); }
+			catch (error) { logContinuationFailure("save", "continuation-proof", error); }
+		}
 		await this.dailyGateway.commit(prepared);
 		const presentationChange = buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter);
 		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
@@ -236,8 +248,9 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 			catch { diskConfirmed = false; }
 		}
 		try {
-			if (diskConfirmed) this.options.onDailyConfirmed?.({
+			if (diskConfirmed && this.options.onDailyConfirmed) this.options.onDailyConfirmed({
 				change: presentationChange, observations: prepared.after.observations,
+				...(bodyProof ? { bodyProof } : {}),
 			});
 		} catch (error) {
 			logContinuationFailure("save", "confirmed-render", error);
@@ -298,7 +311,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 
 	private getSourceFile(sourcePath: string): TFile {
 		const file = this.app.vault.getAbstractFileByPath(normalizePath(sourcePath));
-		if (!(file instanceof TFile)) throw new Error(`Daily file is unavailable: ${sourcePath}`);
+		if (!(file instanceof TFile)) throw new DailySourceUnavailableError(sourcePath);
 		return file;
 	}
 
@@ -368,7 +381,7 @@ function findReplacementObservation(
 	prepared: PreparedDailyWrite,
 	before: MemoObservation,
 	afterRawBlock: string,
-	existingBlockId: string | null = before.existingBlockId,
+	existingBlockId: string | null,
 ): MemoObservation {
 	const matches = prepared.after.observations.filter((item) => item.startLine === before.startLine
 		&& item.existingBlockId === existingBlockId

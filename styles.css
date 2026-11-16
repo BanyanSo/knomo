@@ -2466,6 +2466,79 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	margin: 0 0 10px;
 }
 
+.knomo-plugin .knomo-result-summary-count {
+	display: inline-block;
+	position: relative;
+	vertical-align: baseline;
+	white-space: nowrap;
+}
+
+.knomo-plugin .knomo-result-summary-value:empty::before {
+	content: "...";
+	visibility: hidden;
+}
+
+.knomo-plugin .knomo-result-summary-dots {
+	position: absolute;
+	inset: 0;
+	opacity: 0;
+}
+
+.knomo-plugin .knomo-result-summary-dots > span {
+	display: inline-block;
+}
+
+.knomo-plugin .knomo-result-summary-dots > span::before {
+	content: ".";
+}
+
+.knomo-plugin .knomo-result-summary-count[data-state="pending"] .knomo-result-summary-dots {
+	opacity: 1;
+}
+
+.knomo-plugin .knomo-result-summary-count[data-state="pending"] .knomo-result-summary-dots > span {
+	animation: knomo-result-count-dot 900ms ease-in-out infinite;
+}
+
+.knomo-plugin .knomo-result-summary-dots > span:nth-child(2) {
+	animation-delay: 120ms;
+}
+
+.knomo-plugin .knomo-result-summary-dots > span:nth-child(3) {
+	animation-delay: 240ms;
+}
+
+.knomo-plugin .knomo-result-summary-count.is-revealing .knomo-result-summary-value {
+	animation: knomo-result-count-reveal 120ms ease-out;
+}
+
+.knomo-plugin .knomo-result-summary-count.is-revealing .knomo-result-summary-dots {
+	animation: knomo-result-count-dismiss 120ms ease-out;
+}
+
+@keyframes knomo-result-count-dot {
+	0%, 60%, 100% { transform: translateY(0); }
+	30% { transform: translateY(-0.12em); }
+}
+
+@keyframes knomo-result-count-reveal {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+@keyframes knomo-result-count-dismiss {
+	from { opacity: 1; }
+	to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.knomo-plugin .knomo-result-summary-count.is-revealing .knomo-result-summary-value,
+	.knomo-plugin .knomo-result-summary-count.is-revealing .knomo-result-summary-dots,
+	.knomo-plugin .knomo-result-summary-count[data-state="pending"] .knomo-result-summary-dots > span {
+		animation: none;
+	}
+}
+
 .knomo-plugin .knomo-list-toolbar .knomo-list-summary {
 	margin: 0;
 }
@@ -3162,26 +3235,16 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 /* --------------------------------------------------------------------------
    12b. Mobile Navbar Compact Mode
    -------------------------------------------------------------------------- */
-/* 导航背景只在 Knomo 接管期间替换，宿主尺寸、圆角和按钮状态继续生效。 */
+/* 导航背景只在 Knomo 接管期间替换，边缘装饰、尺寸、圆角和按钮状态继续跟随宿主。 */
 body.is-mobile.knomo-mobile-navbar-compact-active .mobile-navbar.knomo-mobile-navbar-compact {
 	background: linear-gradient(to top, var(--knomo-glass-nav-top) 0%, var(--knomo-glass-nav-middle) var(--navbar-bottom-offset, 0px), var(--knomo-glass-nav-bottom) 100%);
 	backdrop-filter: var(--knomo-glass-nav-filter);
 	-webkit-backdrop-filter: var(--knomo-glass-nav-filter);
-	box-shadow: none;
 }
 
 body.is-mobile.knomo-mobile-navbar-compact-active.knomo-mobile-navbar-floating .mobile-navbar.knomo-mobile-navbar-compact {
 	/* 悬浮胶囊使用均匀底色，减少玻璃效果时仍回退为实色。 */
 	background: var(--knomo-glass-nav-floating);
-	box-shadow: inset 0 0 0 var(--border-width, 1px) var(--knomo-glass-popup-border), var(--knomo-glass-depth);
-}
-
-body.is-mobile.knomo-mobile-navbar-compact-active .mobile-navbar.knomo-mobile-navbar-compact::before,
-body.is-mobile.knomo-mobile-navbar-compact-active .mobile-navbar.knomo-mobile-navbar-compact::after {
-	/* 背景由栏本身绘制，避免宿主边缘滤镜与材质重复叠加。 */
-	content: none;
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
 }
 
 body.knomo-mobile-navbar-compact-active .mobile-navbar .knomo-mobile-navbar-hidden {
@@ -3480,18 +3543,20 @@ body .knomo-mobile-create-fab.is-hidden {
 	transform: translate3d(0, calc(0px - var(--knomo-mobile-composer-bottom-offset, 0px)), 0);
 }
 
-/* 可见边缘从窗口底部升起，正文和工具栏按实际键盘位置停靠。 */
-.knomo-mobile-composer-layer:where(.is-active:is(.is-open, .is-closing)) .knomo-mobile-composer-content {
-	animation: knomo-mobile-composer-enter var(--knomo-mobile-composer-enter-motion);
-}
-
-@keyframes knomo-mobile-composer-enter {
-	from {
-		clip-path: inset(calc(100% + var(--knomo-mobile-composer-fill-height)) 0
-			calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+/* 默认保留透明度过渡；支持圆角裁剪时，可见边缘从窗口底部升起。 */
+@supports (clip-path: inset(calc(100% + 1px) 0 -1px round 18px 18px 0 0)) {
+	.knomo-mobile-composer-layer:where(.is-active:is(.is-open, .is-closing)) .knomo-mobile-composer-content {
+		animation: knomo-mobile-composer-enter var(--knomo-mobile-composer-enter-motion);
 	}
-	to {
-		clip-path: inset(-40px 0 calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+
+	@keyframes knomo-mobile-composer-enter {
+		from {
+			clip-path: inset(calc(100% + var(--knomo-mobile-composer-fill-height)) 0
+				calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+		}
+		to {
+			clip-path: inset(-40px 0 calc(0px - var(--knomo-mobile-composer-fill-height)) round 18px 18px 0 0);
+		}
 	}
 }
 
@@ -5181,7 +5246,6 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 	--knomo-glass-rim: rgba(255, 255, 255, 0.38);
 	--knomo-glass-action-sheen: none;
 	--knomo-glass-depth: 0 4px 12px rgba(0, 0, 0, 0.14);
-	--knomo-glass-popup-border: var(--background-modifier-border);
 }
 
 body.is-mobile.theme-dark :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface, .mobile-navbar.knomo-mobile-navbar-compact) {
@@ -5200,7 +5264,7 @@ body.is-mobile.theme-dark :is(.workspace-leaf-content[data-type="knomo-view"], .
 	}
 }
 
-/* 背景滤镜增强导航材质；边框变量仍供悬浮导航使用。 */
+/* 背景滤镜增强导航材质，边缘装饰继续跟随宿主。 */
 @supports (background: color-mix(in srgb, black 94%, transparent)) and ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
 	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface, .mobile-navbar.knomo-mobile-navbar-compact) {
 		/* 顶部栏让文字轮廓隐约透出，避免与标题叠读；模糊只落在既有背景层。 */
@@ -5209,7 +5273,6 @@ body.is-mobile.theme-dark :is(.workspace-leaf-content[data-type="knomo-view"], .
 		--knomo-glass-nav-bottom: color-mix(in srgb, var(--background-primary) 30%, transparent);
 		--knomo-glass-nav-floating: color-mix(in srgb, var(--background-primary) 40%, transparent);
 		--knomo-glass-nav-filter: blur(2px) saturate(1.1);
-		--knomo-glass-popup-border: color-mix(in srgb, var(--text-normal) 14%, var(--background-primary));
 	}
 }
 
@@ -5319,7 +5382,6 @@ body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugi
 /* 增强对比度时用主题前景描边，不依靠微弱高光区分功能表面。 */
 @media (prefers-contrast: more) {
 	body.is-mobile :is(.workspace-leaf-content[data-type="knomo-view"], .knomo-plugin.is-layout-mobile, .knomo-mobile-glass-surface) {
-		--knomo-glass-popup-border: var(--text-normal);
 		--knomo-glass-rim: var(--text-on-accent);
 	}
 }

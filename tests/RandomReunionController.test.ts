@@ -5,6 +5,23 @@ import { createDeferred } from "./helpers/deferred";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("实际减员才提示来源变化，同组下一次无减员复核清除旧提示", async () => {
+	const { RandomReunionController } = await loadController();
+	let renders = 0;
+	const controller = new RandomReunionController({ loadRandomReunionMemos: async () => [makeMemo("a"), makeMemo("b")],
+		openRandomReunionMemo: async () => {}, markRandomReunionReviewed: async () => {},
+		isRandomActive: () => true, showNotice: () => {}, requestRender: () => { renders++; } });
+	await controller.refresh();
+	const original = controller.getSnapshot().memos!;
+	controller.reconcileMemos([original[0]!], original);
+	assert.ok(controller.getSnapshot().error);
+	const current = controller.getSnapshot().memos!;
+	const before = renders;
+	controller.reconcileMemos([...current], current);
+	assert.equal(controller.getSnapshot().error, null);
+	assert.equal(renders, before + 1);
+});
+
 test("refreshes random reunion once while loading and preserves render transitions", async () => {
 	const { RandomReunionController } = await loadController();
 	const sourceMemos = [makeMemo("memo-1"), makeMemo("memo-2")];

@@ -43,8 +43,8 @@ export function getRunTestSelection(sourceFileNames: readonly string[], args: re
 	const runnerArgs = markerIndex === -1 ? args : args.slice(0, markerIndex);
 	const suiteArgs = runnerArgs.filter((arg) => arg.startsWith("--suite="));
 	const suite = suiteArgs[0]?.slice("--suite=".length) ?? "product";
-	if (suiteArgs.length > 1 || !["product", "tooling", "stress", "all"].includes(suite)) {
-		throw new Error("Pass one --suite=product, --suite=tooling, --suite=stress or --suite=all.");
+	if (suiteArgs.length > 1 || !["product", "tooling", "stress", "node", "browser", "all"].includes(suite)) {
+		throw new Error("Pass one --suite=product, --suite=tooling, --suite=stress, --suite=node, --suite=browser or --suite=all.");
 	}
 	if (markerIndex !== -1 && suiteArgs.length > 0) {
 		throw new Error("Use either --suite or --files, not both.");
@@ -55,7 +55,7 @@ export function getRunTestSelection(sourceFileNames: readonly string[], args: re
 			extraNodeTestArgs: ["--test-name-pattern=规模边界", ...runnerArgs.filter(arg => !arg.startsWith("--suite="))],
 		};
 		return {
-			sourceFileNames: sourceFileNames.filter((fileName) => suite === "all"
+			sourceFileNames: sourceFileNames.filter((fileName) => ["all", "node", "browser"].includes(suite)
 				|| TOOLING_TEST_FILES.has(fileName) === (suite === "tooling")),
 			extraNodeTestArgs: runnerArgs.filter((arg) => !arg.startsWith("--suite=")),
 		};
@@ -80,10 +80,37 @@ export function getRunTestSelection(sourceFileNames: readonly string[], args: re
 	};
 }
 
+export function getBrowserTestSources(sourceFileNames: readonly string[]): string[] {
+	// 与现有浏览器用例的显式跳过条件一致，不依赖文件命名或本地设计资料。
+	return sourceFileNames.filter(file => file.endsWith(".test.ts")
+		&& /skip:\s*!process\.env\.KNOMO_LAYOUT_PLAYWRIGHT/u.test(fs.readFileSync(path.join(TESTS_DIR, file), "utf8")));
+}
+
+export async function prepareTestEnvironment(args: readonly string[], environment: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+	const env = { ...environment };
+	if (args.includes("--suite=node")) {
+		delete env.KNOMO_LAYOUT_PLAYWRIGHT;
+		return env;
+	}
+	if (!args.includes("--suite=all") && !args.includes("--suite=browser")) return env;
+	try {
+		const modulePath = require.resolve(env.KNOMO_LAYOUT_PLAYWRIGHT || "playwright");
+		const { chromium } = require(modulePath) as typeof import("playwright");
+		const channel = env.KNOMO_LAYOUT_BROWSER || "chromium";
+		// 先确认浏览器可启动，缺少安装或系统依赖时不运行其余测试并报告全量成功。
+		const browser = await chromium.launch({ channel, headless: true });
+		await browser.close();
+		return { ...env, KNOMO_LAYOUT_PLAYWRIGHT: modulePath, KNOMO_LAYOUT_BROWSER: channel };
+	} catch (error) {
+		throw new Error(`Browser tests are required. Run npm ci and npm run test:browser:install (Linux CI: npx playwright install --with-deps chromium).\n${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
 export async function runTests(args: readonly string[] = []): Promise<number> {
 	let selection: RunTestSelection;
 	try {
 		selection = getRunTestSelection(fs.readdirSync(TESTS_DIR), args);
+		if (args.includes("--suite=browser")) selection.sourceFileNames = getBrowserTestSources(selection.sourceFileNames);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
@@ -106,11 +133,18 @@ export async function runTests(args: readonly string[] = []): Promise<number> {
 		return 1;
 	}
 
+	let environment: NodeJS.ProcessEnv;
+	try { environment = await prepareTestEnvironment(args); }
+	catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 1; }
+	if (!environment.KNOMO_LAYOUT_PLAYWRIGHT && getBrowserTestSources(selection.sourceFileNames).length > 0) {
+		console.warn("Node-only run: real browser checks will be skipped. Run npm run test:browser or npm run test:all for browser coverage.");
+	}
 	await prepareObsidianStub();
-	const scale = args.includes("--suite=stress") || args.includes("--suite=all") ? "stress" : "normal";
-	const result = spawnSync(process.execPath, getNodeTestArgs(compiledTestFiles, selection.extraNodeTestArgs), {
+	const scale = ["--suite=stress", "--suite=node", "--suite=all"].some(arg => args.includes(arg)) ? "stress" : "normal";
+	const browserArgs = args.includes("--suite=browser") || args.includes("--suite=all") ? ["--test-concurrency=1"] : [];
+	const result = spawnSync(process.execPath, getNodeTestArgs(compiledTestFiles, [...browserArgs, ...selection.extraNodeTestArgs]), {
 		stdio: "inherit",
-		env: { ...process.env, KNOMO_TEST_PREPARED: "1", KNOMO_TEST_SCALE: scale },
+		env: { ...environment, KNOMO_TEST_PREPARED: "1", KNOMO_TEST_SCALE: scale },
 	});
 
 	if (result.error !== undefined) {

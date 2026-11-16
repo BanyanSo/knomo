@@ -4,7 +4,7 @@ import { parser, GFM } from "@lezer/markdown";
 import type { SyntaxNode } from "@lezer/common";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
-import { memoMarkdownConsistencyFixtures, expectedDailyMemo } from "./fixtures/memoMarkdownConsistency";
+import { memoMarkdownConsistencyFixtures, expectedDailyMemo, expectedLegacyDailyMemo } from "./fixtures/memoMarkdownConsistency";
 
 const markdown = parser.configure(GFM);
 const blocks = new MarkdownBlockService();
@@ -13,6 +13,17 @@ const diary = new DiaryMemoParser();
 function parseDaily(content: string) {
 	return diary.parseRevision({ sourcePath: "Daily/2026-10-24.md", logicalDate: "2026-10-24", content, sourceRevision: "revision" }).observations;
 }
+
+test("已发布两列/四列表示继续原样读取，同步与协作式解析结果一致", async () => {
+	for (const fixture of memoMarkdownConsistencyFixtures) for (const blockId of [null, "legacy-anchor"]) {
+		const raw = expectedLegacyDailyMemo(fixture, "12:34:56", blockId);
+		const input = { sourcePath: "Daily/2026-10-24.md", logicalDate: "2026-10-24", bytes: Buffer.from(raw) };
+		const parsed = await diary.parse(input);
+		assert.equal(parsed.observations[0].content, fixture.content, fixture.name);
+		assert.equal(parsed.observations[0].existingBlockId, blockId, fixture.name);
+		assert.deepEqual(await diary.parse(input, { maxLinesPerSlice: 1, yieldControl: async () => {} }), parsed);
+	}
+});
 
 // 只比较块结构和行内语法；Daily 的列表 marker 与时间段落单独移除。
 function structure(node: SyntaxNode): string {

@@ -7,6 +7,115 @@ import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
 import type { MemoViewItem } from "../src/types/memoView";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import type { CatalogFeatureQuery, CatalogFeatureFilter } from "../src/types/catalogView";
+import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
+
+test("结果页入口先建立查询等待状态，勾事记、标签、搜索和组合筛选不先闪不可用占位", async t => {
+	type EntryView = {
+		setSidebarNav(nav: "things" | "review"): void;
+		applySidebarTagFilter(tag: string, key: string): void;
+		setSearchQuery(query: string): void;
+		setSearchDateFilter(filter: "month"): void;
+		setScope(scope: "no-tag" | "with-link" | "with-image" | "referenced" | "anniversary"): void;
+		openRecordStatsSearchFilter(filter: { type: "day"; date: string }): void;
+		returnFromRecordStats(): void;
+	};
+	const entries: Array<{ name: string; setup?: (state: KnomoViewStateController) => void; enter: (view: EntryView) => void }> = [
+		{ name: "things", enter: view => view.setSidebarNav("things") },
+		{ name: "review", enter: view => view.setSidebarNav("review") },
+		{ name: "tag", enter: view => view.applySidebarTagFilter("Project", "project") },
+		{ name: "search", enter: view => view.setSearchQuery("memo") },
+		{ name: "date", enter: view => view.setSearchDateFilter("month") },
+		...["no-tag", "with-link", "with-image", "referenced", "anniversary"].map(scope => ({
+			name: scope, enter: (view: EntryView) => view.setScope(scope as Parameters<EntryView["setScope"]>[0]),
+		})),
+		{ name: "record-stats", enter: view => view.openRecordStatsSearchFilter({ type: "day", date: "2026-11-11" }) },
+		{ name: "things-combo", setup: state => { state.activeNav = "things"; state.activeTag = "Project"; state.activeTagKey = "project"; state.searchQuery = "memo"; },
+			enter: view => view.setSearchDateFilter("month") },
+		{ name: "return-from-stats", setup: state => { state.activeNav = "things"; state.setSidebarNav("record-stats"); }, enter: view => view.returnFromRecordStats() },
+	];
+	for (const entry of entries) for (const outcome of ["immediate", "counted", "unavailable", "failed"] as const) await t.test(`${entry.name}:${outcome}`, async () => {
+		const h = await transitionSummaryHarness();
+		if (outcome === "failed") t.mock.method(console, "warn", () => {});
+		const result = { ...makeCatalogCount(9, 1), count: outcome === "unavailable" ? null : 9, complete: outcome !== "unavailable" };
+		h.failCount = outcome === "failed";
+		entry.setup?.(h.state);
+		try {
+			entry.enter(h.view as unknown as EntryView);
+			if (entry.name === "referenced") assert.equal(h.states.length, 0, "被引用入口等待首批确认前不显示结果摘要");
+			else assert.equal(h.states[0], "pending", "首次可见摘要必须已经知道查询在等待");
+			assert.doesNotMatch(h.root.textContent!, /—/u);
+			assert.equal(h.queryCalls(), 1);
+			const loading = h.view.memoLoadingPromise;
+			assert.ok(loading);
+			const page = { ...makeCatalogLoad(1, completeCoverage()), memos: h.initialMemos,
+				nextCursor: outcome === "immediate" ? null : { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } } };
+			h.page.resolve(page); await loading;
+			if (outcome !== "immediate") {
+				assert.ok(h.states.every(state => state === "pending"));
+				h.count.resolve(result); await Promise.all(h.counting);
+			}
+			assert.equal(h.states.at(-1), outcome === "unavailable" || outcome === "failed" ? "unavailable" : "ready");
+			assert.equal(h.states.includes("unavailable"), outcome === "unavailable" || outcome === "failed");
+		} finally { h.page.resolve(makeCatalogLoad(1, completeCoverage())); h.count.resolve(result); await h.view.memoLoadingPromise; await Promise.all(h.counting); h.close(); }
+	});
+});
+
+async function transitionSummaryHarness() {
+	const dom = await createMobilePopupFixture();
+	const { view: presentationView, state } = await progressPresentationHarness();
+	const { syncKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
+	const root = dom.root.createDiv(), states: Array<string | null> = [];
+	const page = createDeferred<TestCatalogMemoLoad>(), count = createDeferred<TestCatalogMemoCount>();
+	const counting: Promise<void>[] = []; let queries = 0;
+	const view = Object.assign(presentationView as unknown as QueryView, {
+		memoLoadingPromise: null as Promise<boolean> | null, memoLoadingFingerprint: null, catalogDesktopTotalCount: null,
+		catalogDesktopCountRun: 0, catalogDesktopQueryFingerprint: null, trashViewClosed: false, currentLayout: "desktop-wide",
+		memos: presentationView.getFilteredMemos(), mobileSearchController: { isOpen: false, resetState() {} },
+		rememberHistoryBrowsePosition() {}, clearSearchDebounce() {}, applyViewStateTransitionEffects() {},
+		syncRootState() {}, renderScopeState() {}, syncSearchInputs() {}, restoreCardFlowScrollTop() {},
+		isPresentationHidden: () => false, getMobileSearchStateKey: () => "closed", renderMobileSearchResultsIfChanged() {},
+		settingsService: { getSettings: () => ({ timeBuoyEnabled: false, timeBuoyIntroDismissed: true, recentTimeFlowEnabled: false }) },
+		getDailyNotesStatus: () => ({ enabled: true }), syncPageFeedback() {},
+		cardFlowCoordinator: { deferredForAllMemos: false }, popupState: { scopeMenuOpen: false, activeMenuMemoId: null },
+		retainMemoCardPreviews() {}, resetVisibleMemos() {},
+	});
+	const h = { view: view as typeof view & { setSidebarNav: (nav: "things" | "review") => void }, initialMemos: view.memos, state, root, states, page, count, counting, failCount: false,
+		queryCalls: () => queries, close: dom.close };
+	const render = (options?: { renderCardFlow?: boolean }) => {
+		if (options?.renderCardFlow === false) return;
+		const presentation = presentationView.getCurrentCardFlowPresentation();
+		syncKnomoCardFlowHeaders(root, presentation.headers ?? [], JSON.stringify([state.activeNav, state.scopeFilter, state.activeTagKey]));
+		const slot = root.querySelector(".knomo-result-summary-count");
+		if (slot) states.push(slot.getAttribute("data-state"));
+	};
+	const refreshCount = view.refreshCatalogDesktopTotalCount.bind(view);
+	Object.assign(view, {
+		getFilteredMemos: () => view.memos,
+		getCardFlowStateKey: () => JSON.stringify(presentationView.getCurrentCardFlowPresentation()),
+		renderUiState: render, renderCardFlow: () => render(),
+		renderCardFlowIfChanged: () => render(),
+		loadCatalogMemos: () => { queries++; return page.promise; },
+		countCatalogFeature: async () => { const result = await count.promise; if (h.failCount) throw new Error("count unavailable"); return result; },
+		refreshCatalogDesktopTotalCount: (options: Parameters<QueryView["refreshCatalogDesktopTotalCount"]>[0]) => { const pending = refreshCount(options); counting.push(pending); return pending; },
+	});
+	Object.assign(view.randomReunionController, { cancelPending() {} });
+	Object.assign(view.shuffleDayController, { cancelPending() {} });
+	return h;
+}
+
+test("等价搜索复用已接纳的计数，不启动新查询或短暂进入等待", async () => {
+	const h = await transitionSummaryHarness();
+	const { catalogCoverageKey } = await import("../src/ui/KnomoViewStateKeys");
+	try {
+		h.state.searchQuery = "memo";
+		h.state.search.commitResult(h.state.search.getFilter(h.state.getSearchSource()), 1, catalogCoverageKey(completeCoverage()));
+		Object.assign(h.view, { catalogRevision: 1, catalogDesktopTotalCount: 9 });
+		Reflect.get(h.view, "setSearchQuery").call(h.view, "memo");
+		assert.equal(h.queryCalls(), 0);
+		assert.deepEqual(h.states, ["ready"]);
+		assert.match(h.root.textContent!, /9/u);
+	} finally { h.close(); }
+});
 
 test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛选覆盖历史，日期筛选跨月", async context => {
 	await ensureObsidianStub();
@@ -621,7 +730,7 @@ test("标签首屏只有 50 条时摘要使用完整匹配总数", async () => {
 	assert.equal(presentation.type, "items");
 	if (presentation.type !== "items") return;
 	assert.equal(presentation.memos.length, 50);
-	assert.deepEqual(presentation.headers, [{ type: "summary", text: "#Project: 90 Memos" }]);
+	assert.deepEqual(presentation.headers, [{ type: "result-summary", summary: { template: "filterSummary.tag", params: { tag: "#Project" }, count: 90, pending: false } }]);
 });
 
 test("同筛选的分页后台刷新保留计数摘要直到新计数返回，切换筛选则使旧计数失效", async () => {
@@ -661,11 +770,14 @@ test("那年今日已有结果在今日 Daily 更新的索引过渡期间保留�
 	state.scopeFilter = "with-image";
 	const changed = view.getCurrentCardFlowPresentation();
 	assert.equal(changed.type, "items");
-	if (changed.type === "items") assert.deepEqual(changed.headers, [], "切换筛选不能沿用那年今日的摘要");
+	if (changed.type === "items") assert.deepEqual(changed.headers, [{ type: "result-summary", summary: {
+		template: "filterSummary.label", params: { label: "With images" }, count: null, pending: false,
+	} }], "切换筛选显示本范围固定摘要，不能沿用那年今日的数量");
 	state.scopeFilter = "anniversary";
 	view.invalidateConfirmedDailyMemos();
 	const invalidated = view.getCurrentCardFlowPresentation();
-	if (invalidated.type === "items") assert.deepEqual(invalidated.headers, [], "配置失效后不能沿用旧摘要");
+	if (invalidated.type === "items") assert.ok(invalidated.headers.every(header => header.type !== "result-summary"
+		|| header.summary.count === null), "配置失效后不能沿用旧数量");
 });
 
 test("首次保存的查询先于进度通知返回不完整覆盖时保留已显示摘要", async t => {
@@ -716,14 +828,8 @@ test("所有标题入口和日期筛选在索引过渡期间保留已提交卡�
 		const before = view.getCurrentCardFlowPresentation();
 		view.updateCatalogProgress({ ...completeCoverage(), kind: "partial", coveredFromDate: null, pendingFileCount: 1 });
 		const after = view.getCurrentCardFlowPresentation();
-		if (option.mode === "things") {
-			assert.equal(after.type, "items");
-			if (after.type === "items") assert.equal(after.headers.length, 1, "保留 Things 原有的覆盖不足提示，不叠加旧摘要");
-			assert.equal(renders(), 1);
-		} else {
-			assert.deepEqual(after, before);
-			assert.equal(renders(), 0);
-		}
+		assert.deepEqual(after, before);
+		assert.equal(renders(), 0);
 	});
 	for (const option of SEARCH_DATE_OPTIONS) await t.test(option.filter, async () => {
 		const { view, state, renders } = await progressPresentationHarness();
@@ -740,6 +846,81 @@ test("所有标题入口和日期筛选在索引过渡期间保留已提交卡�
 		state.activeNav = nav;
 		view.updateCatalogProgress({ ...completeCoverage(), kind: "partial", coveredFromDate: null, pendingFileCount: 1 });
 		assert.equal(renders(), 0, "独立页面不因普通列表计数失效而重绘");
+	});
+});
+
+test("Things 与普通摘要的计数终结但不可用时清除旧数字，真实覆盖故障仍提示", async t => {
+	for (const things of [false, true]) for (const failed of [false, true]) await t.test(`${things}:${failed}`, async () => {
+		const { view, state } = await progressPresentationHarness();
+		state.activeNav = things ? "things" : "all";
+		state.activeTag = "keep"; state.activeTagKey = "keep";
+		assert.equal(view.getCurrentCardFlowPresentation().headers?.length, 1);
+		const runtime = view as unknown as QueryView;
+		Object.assign(runtime, { memoSourceGeneration: 0, catalogDesktopQueryRun: 1, catalogDesktopCountRun: 0, trashViewClosed: false,
+			catalogDesktopQueryFingerprint: runtime.getCatalogQueryFingerprint(true),
+			catalogDesktopTotalCount: null, getCardFlowStateKey: () => "cards", renderCardFlowIfChanged: () => {},
+			countCatalogFeature: async () => { if (failed) throw new Error("count unavailable"); return { ...makeCatalogCount(1, 1), count: null, complete: false }; },
+		});
+		if (failed) t.mock.method(console, "warn", () => {});
+		await runtime.refreshCatalogDesktopTotalCount({ loadAll: true, queryFingerprint: runtime.getCatalogQueryFingerprint(true),
+			queryRun: 1, sourceGeneration: 0, catalogRevision: 1 });
+		const summary = view.getCurrentCardFlowPresentation().headers?.find(header => header.type === "result-summary");
+		assert.ok(summary?.type === "result-summary");
+		assert.equal(summary.summary.count, null); assert.equal(summary.summary.pending, false);
+		Object.assign(runtime, { catalogCoverage: { ...completeCoverage(), kind: "partial", pendingFileCount: 1 },
+			catalogStatus: { content: "ready", catalog: "partial", projection: "ready", scan: { state: "waiting-retry" } } });
+		assert.ok((view.getCurrentCardFlowPresentation().headers?.length ?? 0) > 0);
+	});
+});
+
+test("桌面首次计数始终为 null 时，等待摘要在计数结束后同步终态", async t => {
+	for (const nav of ["all", "things", "review"] as const) for (const failed of [false, true]) await t.test(`${nav}:${failed}`, async () => {
+		const { view, state } = await progressPresentationHarness();
+		state.activeNav = nav; state.activeTag = "keep"; state.activeTagKey = "keep";
+		const gate = createDeferred<TestCatalogMemoCount>();
+		let renders = 0;
+		const runtime = view as unknown as QueryView;
+		Object.assign(runtime, { memoSourceGeneration: 0, catalogDesktopQueryRun: 1, catalogDesktopCountRun: 0, trashViewClosed: false,
+			catalogDesktopQueryFingerprint: runtime.getCatalogQueryFingerprint(true), catalogDesktopTotalCount: null,
+			countCatalogFeature: async () => { const value = await gate.promise; if (failed) throw new Error("count unavailable"); return value; },
+			getCardFlowStateKey: () => JSON.stringify(view.getCurrentCardFlowPresentation()),
+			renderCardFlowIfChanged: (before: string) => { if (before !== runtime.getCardFlowStateKey()) renders++; },
+		});
+		if (failed) t.mock.method(console, "warn", () => {});
+		const pending = runtime.refreshCatalogDesktopTotalCount({ loadAll: true, queryFingerprint: runtime.getCatalogQueryFingerprint(true),
+			queryRun: 1, sourceGeneration: 0, catalogRevision: 1 });
+		const loading = view.getCurrentCardFlowPresentation().headers?.find(header => header.type === "result-summary");
+		assert.ok(loading, "首批已有卡片时不能等待精确数量再建立摘要");
+		gate.resolve({ ...makeCatalogCount(1, 1), count: null, complete: false }); await pending;
+		assert.equal(renders, 1, "清除活动计数之前必须捕获仍在等待的展示键");
+		assert.notDeepEqual(view.getCurrentCardFlowPresentation().headers, [loading]);
+	});
+});
+
+test("桌面 A→B→A 的第一轮计数成功或失败迟到都不能接管第二轮摘要", async t => {
+	for (const failed of [false, true]) await t.test(String(failed), async () => {
+		const { view, state } = await progressPresentationHarness();
+		const runtime = view as unknown as QueryView;
+		const gates = Array.from({ length: 3 }, () => createDeferred<TestCatalogMemoCount>()); let reads = 0, renders = 0;
+		Object.assign(runtime, { memoSourceGeneration: 0, catalogDesktopCountRun: 0, trashViewClosed: false,
+			countCatalogFeature: async () => { const index = reads++; const result = await gates[index]!.promise;
+				if (index === 0 && failed) throw new Error("old A failed"); return result; },
+			getCardFlowStateKey: () => JSON.stringify(view.getCurrentCardFlowPresentation()),
+			renderCardFlowIfChanged: () => { renders++; },
+		});
+		const start = (input: string, queryRun: number) => {
+			state.setSearchQuery(input); state.search.commitResult(state.search.getFilter(), 1, "complete");
+			Object.assign(runtime, { catalogDesktopQueryRun: queryRun, catalogDesktopTotalCount: null, catalogDesktopCountPresentation: null,
+				catalogDesktopQueryFingerprint: runtime.getCatalogQueryFingerprint(true) });
+			return runtime.refreshCatalogDesktopTotalCount({ loadAll: true, queryFingerprint: runtime.getCatalogQueryFingerprint(true),
+				queryRun, sourceGeneration: 0, catalogRevision: 1 });
+		};
+		const oldA = start("A", 1), oldB = start("B", 2), currentA = start("A", 3);
+		gates[2]!.resolve(makeCatalogCount(9, 1)); await currentA;
+		const accepted = view.getCurrentCardFlowPresentation();
+		gates[0]!.resolve(makeCatalogCount(999, 1)); gates[1]!.resolve(makeCatalogCount(888, 1)); await Promise.all([oldA, oldB]);
+		assert.deepEqual(view.getCurrentCardFlowPresentation(), accepted); assert.equal(runtime.catalogDesktopTotalCount, 9);
+		assert.equal(renders, 1);
 	});
 });
 
@@ -969,6 +1150,24 @@ test("CAT-PAGE-001：分页合并超过旧窗口阈值时不丢失已显示的�
 	assert.equal(merged.length, 200);
 	assert.equal(merged.some((memo) => memo.id === "memo-000"), true);
 	assert.equal(merged.some((memo) => memo.id === "memo-199"), true);
+});
+
+test("Catalog 分页合并兼容直接解析的展示数据，分钟与零秒同刻沿源区间倒序且保留显示精度", async () => {
+	await ensureObsidianStub();
+	const { mergeCatalogMemoPages } = await import("../src/ui/KnomoView");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { toCatalogMemoItem } = await import("../src/services/CatalogReadService");
+	const { toCatalogMemoView } = await import("../src/types/memoView");
+	const { createCatalogCapabilities, createResolvedMemoCapabilities } = await import("../src/services/MemoCapabilityModel");
+	const parsed = new DiaryMemoParser().parseRevision({ sourcePath: "Daily.md", logicalDate: "2026-08-22", sourceRevision: "revision",
+		content: "- 09:00 minute\n- 09:00:00 zero seconds\n- 09:00 another minute\n" });
+	const capabilities = createCatalogCapabilities(completeCoverage());
+	const memos = parsed.observations.map(observation => toCatalogMemoView(toCatalogMemoItem({
+		kind: "observation", observation, capabilities: createResolvedMemoCapabilities(),
+	}, capabilities)));
+	const merged = mergeCatalogMemoPages(memos);
+	assert.deepEqual(merged.map(memo => memo.contentSnapshot), ["another minute", "zero seconds", "minute"]);
+	assert.deepEqual(merged.map(memo => memo.createdAt), ["2026-08-22T09:00", "2026-08-22T09:00:00", "2026-08-22T09:00"]);
 });
 
 type QueryMemo = MemoViewItem;

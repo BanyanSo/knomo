@@ -60,7 +60,8 @@ export function verificationInputs(root) {
 		platform: process.platform, arch: process.arch,
 		installedLock: fs.existsSync(installedLock) ? sha256(fs.readFileSync(installedLock)) : null,
 		options: sha256(JSON.stringify([process.env.NODE_OPTIONS, process.env.NODE_ENV, process.env.CI, process.env.TZ,
-			process.env.ESBUILD_BINARY_PATH])),
+			process.env.ESBUILD_BINARY_PATH, process.env.KNOMO_LAYOUT_PLAYWRIGHT, process.env.KNOMO_LAYOUT_BROWSER,
+			process.env.PLAYWRIGHT_BROWSERS_PATH])),
 	};
 	const inputs = hash.digest("hex");
 	return { inputs, environment, fingerprint: sha256(JSON.stringify({ inputs, environment })) };

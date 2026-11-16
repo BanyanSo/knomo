@@ -14,13 +14,15 @@ import { remapUnchangedMemo } from "./ConfirmedMemoPresentation";
 import { renderKnomoLoadingPlaceholder } from "./KnomoFeed";
 import { canFocusSurface, focusForNavigation, isKeyboardActivation, releaseNavigationFocus } from "./NavigationFocus";
 import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
+import { ReadyCardImageHandoff } from "./KnomoCardImages";
+import { createMemoRenderPlaceholders } from "./MemoRenderPlaceholder";
 
 interface RelationFrame { handle: ObservationHandle; scroll: number; focus: string | null; anchor?: { key: string; offset: number } | null }
 
 export interface MemoRelationsPageOptions {
 	read: CatalogReadService;
 	getHost: () => HTMLElement | null;
-	renderCard: (container: HTMLElement, memo: MemoViewItem, index: number) => HTMLElement;
+	renderCard: (container: HTMLElement, memo: MemoViewItem, index: number, handoff?: ReadyCardImageHandoff) => HTMLElement;
 	releaseCard: (card: HTMLElement) => void;
 	retainCard?: (card: HTMLElement, memo: MemoViewItem) => void;
 	onChanged: (open: boolean) => void;
@@ -61,7 +63,7 @@ export class MemoRelationsPage {
 	private pendingFocus: { frame: RelationFrame; visible: boolean; epoch: number } | null = null;
 	private releaseFocusEvents: (() => void) | null = null;
 	private focusRecovery: MobileViewFocusRecovery | null = null;
-	private readonly pendingRows = new Map<HTMLElement, { node: MemoRelationNode; index: number; done: () => void; signal: AbortSignal; generation: number }>();
+	private readonly pendingRows = new Map<HTMLElement, { node: MemoRelationNode; index: number; done: () => void; signal: AbortSignal; generation: number; handoff?: ReadyCardImageHandoff }>();
 	private rowsQueued = false;
 	private rowsTimer: number | null = null;
 	private readonly unsubscribe: () => void;
@@ -272,7 +274,7 @@ export class MemoRelationsPage {
 		this.loading = new DelayedLoadingIndicator({ scheduleTask: (callback, delay) => el.win.setTimeout(callback, delay), cancelTask: id => el.win.clearTimeout(id) });
 		this.listEl = el.createDiv({ cls: "knomo-relations-list" });
 		this.referrersWindow = new MemoRelationWindow(this.listEl, el, 260,
-			(row, node, index) => this.renderRow(row, node, index), row => this.releaseRow(row), () => this.paused);
+			(row, node, index, handoff) => this.renderRow(row, node, index, handoff), row => this.releaseRow(row), () => this.paused);
 		this.syncLoading(true);
 	}
 
@@ -287,12 +289,14 @@ export class MemoRelationsPage {
 		const focused = this.subject.contains(this.subject.doc.activeElement), active = this.subject.doc.activeElement as HTMLElement | null;
 		const focusVisible = !active?.hasAttribute("data-knomo-pointer-focus");
 		const selector = active?.classList.contains("knomo-card-time") ? ".knomo-card-time" : ".knomo-card-menu";
-		this.options.releaseCard(this.subject);
+		const handoff = new ReadyCardImageHandoff(card ? [card] : [], this.el ?? this.subject);
+		const seedPlaceholder = createMemoRenderPlaceholders(before && card ? [{ memo: before, card }] : []);
+		const replacement = this.options.renderCard(this.subject, memo, 0, handoff);
+		seedPlaceholder(memo, replacement);
+		if (card) { this.options.releaseCard(card); card.remove(); }
 		if (old) this.memos.delete(old);
-		this.subject.empty();
 		this.subject.dataset.subject = memo.id;
 		this.memos.set(memo.id, memo);
-		this.options.renderCard(this.subject, memo, 0);
 		const target = this.subject.querySelector<HTMLElement>(selector);
 		if (focused && target && this.canOwnFocus()) this.focusTarget(target, focusVisible);
 	}
@@ -381,10 +385,10 @@ export class MemoRelationsPage {
 		}
 	}
 
-	private renderRow(row: HTMLElement, node: MemoRelationNode, index: number): Promise<void> {
+	private renderRow(row: HTMLElement, node: MemoRelationNode, index: number, handoff?: ReadyCardImageHandoff): Promise<void> {
 		if (this.paused) return Promise.resolve();
 		return new Promise(done => {
-			this.pendingRows.set(row, { node, index, done, signal: this.rowController.signal, generation: this.generation });
+			this.pendingRows.set(row, { node, index, done, signal: this.rowController.signal, generation: this.generation, handoff });
 			if (!this.rowsQueued) {
 				this.rowsQueued = true;
 				this.rowsTimer = this.el?.win.setTimeout(() => { this.rowsQueued = false; this.rowsTimer = null; void this.flushRows(); }, 0) ?? null;
@@ -413,7 +417,7 @@ export class MemoRelationsPage {
 				const memo = toCatalogMemoView(items[index]);
 				this.memos.set(memo.id, memo);
 				delete row.dataset.relationReadState;
-				this.options.renderCard(row, memo, task.index + 1);
+				this.options.renderCard(row, memo, task.index + 1, task.handoff);
 			}
 		} catch (error) {
 			if (signal.aborted || generation !== this.generation) return;

@@ -1,6 +1,7 @@
 import type { TrashMemoItem, TrashSnapshot } from "./trash";
 import { hashText } from "../utils/hash";
-import { extractLeadingParagraphBlockId, getFourColumnMemoPrefix, splitMarkdownLines, stripMemoContinuationIndent } from "../utils/markdown";
+import { parseDiaryMemoBlock } from "../services/DiaryMemoParser";
+import { getFourColumnMemoPrefix, splitMarkdownLines, stripMemoContinuationIndent } from "../utils/markdown";
 import type { CatalogMemoItem } from "./catalogView";
 import type { DailyRef, MemoImageRef, MemoLinkRef, MemoStatus } from "./memo";
 
@@ -80,14 +81,17 @@ export function toTrashMemoItem(item: TrashSnapshot): TrashMemoItem {
 
 function readDeletedPayloadContent(rawBlock: string): string {
 	const lines = splitMarkdownLines(rawBlock);
+	const parsed = parseDiaryMemoBlock(lines, 0);
+	if (parsed !== null) return parsed.content;
 	const prefix = getFourColumnMemoPrefix(lines);
 	if (prefix !== null) {
 		const continuation = lines.slice(Math.max(1, prefix.contentStartLineOffset))
 			.map(line => stripMemoContinuationIndent(line, 4));
 		const content = [...(prefix.firstContent === null ? [] : [prefix.firstContent]), ...continuation].join("\n");
-		return prefix.contentStartLineOffset === 0 ? extractLeadingParagraphBlockId(content).text : content;
+		return content;
 	}
 	const first = /^- (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s(.*))?$/u.exec(lines[0] ?? "")?.[1] ?? "";
 	const continuation = lines.slice(1).map((line) => line.replace(/^ {2}/u, ""));
-	return [first, ...continuation].join("\n").replace(/\s+\^[A-Za-z0-9-]+\s*$/u, "").trim();
+	// 非标准旧载荷只用于展示；缺少可确认的源归属时保留文本，不猜测末行 ID 或裁剪空白。
+	return [first, ...continuation].join("\n");
 }

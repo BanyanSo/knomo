@@ -129,6 +129,42 @@ test("移动筛选与搜索在保存和同结果重查期间保留摘要、正�
 	}
 });
 
+test("移动已有成员实际编辑后在查询和计数接续期间保留原摘要", async () => {
+	const cases = [
+		{ query: "memo" }, { query: "memo", things: true }, { date: "month" as const },
+		{ stats: { type: "tag" as const, startDate: "2026-10-01", endDateExclusive: "2026-11-01", tagKey: "keep", tagLabel: "keep" } },
+		{ referenced: true },
+	];
+	for (const scenario of cases) {
+		const countGate = deferred<CatalogMemoCountResult>(), started = deferred<void>();
+		const h = await searchFixture(scenario, { countRemoteResults: async () => { started.resolve(); return countGate.promise; } });
+		const countResult = { count: 7, complete: true, catalogRevision: 1, coverage: h.page().coverage };
+		try {
+			const root = h.controller.results!, summary = root.querySelector(".knomo-search-result-count")!;
+			const observer = new root.ownerDocument.defaultView!.MutationObserver(() => {});
+			observer.observe(root, { childList: true, subtree: true });
+			const edited = { ...h.memo, contentHash: "changed", contentSnapshot: "memo changed #keep" };
+			h.controller.applyMemoChanges(new Map([[h.memo.id, edited]]));
+			assert.equal(h.controller.getDisplayedCount(), null);
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary, JSON.stringify(scenario));
+			assert.match(root.querySelector(".knomo-card")!.textContent!, /memo changed/);
+			const pageGate = deferred<MobileSearchPage>(); h.setLoad(() => pageGate.promise);
+			const refreshing = h.controller.refreshAppliedResults();
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			const page = h.page(); page.items = [edited];
+			page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } };
+			pageGate.resolve(page); await refreshing; await started.promise;
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			countGate.resolve(countResult); await new Promise<void>(resolve => setImmediate(resolve));
+			assert.equal(h.controller.getDisplayedCount(), 7);
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			assert.match(summary.textContent!, /7/);
+			assert.ok(!observer.takeRecords().some(record => Array.from(record.removedNodes).includes(summary)));
+			observer.disconnect();
+		} finally { countGate.resolve(countResult); h.close(); }
+	}
+});
+
 test("移动被引用多页查询等待新计数时保留摘要，计数不可用时清除旧数量", async () => {
 	for (const complete of [true, false]) {
 		const countGate = deferred<CatalogMemoCountResult>(), countStarted = deferred<void>();
@@ -145,7 +181,8 @@ test("移动被引用多页查询等待新计数时保留摘要，计数不可�
 			assert.equal(h.controller.getDisplayedCount(), null);
 			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
 			countGate.resolve(countResult); await new Promise<void>(resolve => setImmediate(resolve));
-			assert.equal(root.querySelector(".knomo-search-result-count"), complete ? summary : null);
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			if (!complete) assert.match(summary!.textContent!, /—/u);
 			assert.equal(h.controller.getDisplayedCount(), complete ? 2 : null);
 			assert.equal(root.querySelector(".knomo-card"), card);
 		} finally { countGate.resolve(countResult); h.close(); }
@@ -168,6 +205,78 @@ test("移动被引用查询确认新成员或移除引用时更新结果，同�
 		assert.equal(root.querySelectorAll(".knomo-card").length, 0);
 		assert.equal(root.querySelector(".knomo-search-result-count"), null);
 		assert.ok(root.querySelector(".knomo-mobile-search-empty"));
+	} finally { h.close(); }
+});
+
+test("移动计数失败、不完整和配置失效清除旧数字，旧计数收尾不能清除新摘要", async t => {
+	for (const mode of ["failed", "incomplete", "stale", "configuration"] as const) await t.test(mode, async () => {
+		const gate = deferred<CatalogMemoCountResult>(), started = deferred<void>();
+		let reads = 0;
+		const h = await searchFixture({ query: "memo" }, { countRemoteResults: async () => {
+			reads++; if (reads > 1) return { count: 9, complete: true, catalogRevision: 1, coverage: h.page().coverage };
+			started.resolve(); if (mode === "failed") { await gate.promise; throw new Error("count unavailable"); }
+			return gate.promise;
+		} });
+		const result = { count: null, complete: false, catalogRevision: 1, coverage: h.page().coverage };
+		if (mode === "failed") t.mock.method(console, "warn", () => {});
+		try {
+			const root = h.controller.results!, summary = root.querySelector(".knomo-search-result-count");
+			const page = h.page(); page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } };
+			h.setLoad(async () => page); await h.controller.refreshAppliedResults(); await started.promise;
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			if (mode === "stale") {
+				await h.controller.refreshAppliedResults(); await new Promise(resolve => setTimeout(resolve, 5));
+				assert.equal(h.controller.getDisplayedCount(), 9);
+			} else if (mode === "configuration") {
+				h.controller.updateCatalogProgress({ ...page.coverage, kind: "partial", configurationComplete: false });
+			}
+			gate.resolve(result); await new Promise<void>(resolve => setImmediate(resolve));
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			if (mode !== "stale") assert.match(summary!.textContent!, /—/u);
+		} finally { gate.resolve(result); h.close(); }
+	});
+});
+
+test("移动删除最后已加载成员时不以窗口长度当总数，新范围和确认零结果正确替换摘要", async () => {
+	const gate = deferred<CatalogMemoCountResult>(), started = deferred<void>();
+	const h = await searchFixture({ query: "memo" }, { countRemoteResults: async () => { started.resolve(); return gate.promise; } });
+	const count = { count: 8, complete: true, catalogRevision: 1, coverage: h.page().coverage };
+	try {
+		const root = h.controller.results!, summary = root.querySelector(".knomo-search-result-count")!;
+		const page = h.page(); page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } };
+		h.setLoad(async () => page); await h.controller.refreshAppliedResults(); await started.promise;
+		gate.resolve(count); await new Promise<void>(resolve => setImmediate(resolve));
+		h.controller.applyMemoChanges(new Map([[h.memo.id, null]]));
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+		assert.match(summary.textContent!, /8/);
+		const empty = h.page(); empty.items = []; h.setLoad(async () => empty);
+		await h.controller.refreshAppliedResults();
+		assert.equal(h.controller.getDisplayedCount(), 0);
+		assert.equal(root.querySelector(".knomo-search-result-count"), null);
+		assert.ok(root.querySelector(".knomo-mobile-search-empty"));
+		h.controller.searchQuery = "new scope"; h.setLoad(async () => h.page());
+		await h.controller.refreshAppliedResults();
+		const current = root.querySelector(".knomo-search-result-count")!;
+		assert.match(current.textContent!, /new scope/);
+		assert.doesNotMatch(current.textContent!, /8/);
+	} finally { gate.resolve(count); h.close(); }
+});
+
+test("受阻状态下删除最后已加载成员清除旧摘要", async () => {
+	let blocked = false;
+	const h = await searchFixture({ query: "memo" }, {
+		getResultStatus: () => ({ headers: blocked ? [{ type: "summary", text: "unavailable" }] : [], complete: !blocked, blocked }),
+	});
+	try {
+		const root = h.controller.results!;
+		assert.ok(root.querySelector(".knomo-search-result-count"));
+		blocked = true;
+		h.controller.applyMemoChanges(new Map([[h.memo.id, null]]));
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(root.querySelectorAll(".knomo-card").length, 0);
+		assert.equal(root.querySelector(".knomo-search-result-count"), null);
+		assert.match(root.querySelector(".knomo-search-result-feedback")!.textContent!, /unavailable/u);
 	} finally { h.close(); }
 });
 
@@ -223,3 +332,171 @@ function deferred<T>() {
 	const promise = new Promise<T>(complete => { resolve = complete; });
 	return { promise, resolve };
 }
+
+test("新范围首批卡片与摘要同批出现，延迟计数只更新数字节点", async t => {
+	for (const source of ["search", "things", "referenced"]) for (const outcome of ["ready", "unavailable", "failed"] as const) await t.test(`${source}:${outcome}`, async () => {
+		const firstPage = deferred<MobileSearchPage>(), count = deferred<CatalogMemoCountResult>(), started = deferred<void>();
+		if (outcome === "failed") t.mock.method(console, "warn", () => {});
+		const h = await searchFixture({ query: "memo 2026 {{count}}", things: source === "things", referenced: source === "referenced" }, {
+			loadRemoteResults: () => firstPage.promise,
+			countRemoteResults: async () => { started.resolve(); const result = await count.promise; if (outcome === "failed") throw new Error("count unavailable"); return result; },
+		});
+		const result = { count: outcome === "ready" ? 12345 : null, complete: outcome === "ready", catalogRevision: 1, coverage: h.page().coverage };
+		try {
+			const root = h.controller.results!;
+			assert.equal(root.querySelector(".knomo-search-result-count"), null);
+			const page = h.page(); page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" }, relationsVersion: 1 };
+			firstPage.resolve(page); await started.promise;
+			const summary = root.querySelector(".knomo-search-result-count")!;
+			const card = root.querySelector(".knomo-card")!;
+			assert.ok(summary, "第一张卡片出现时摘要必须已经存在");
+			assert.ok(card); assert.equal(card.previousElementSibling, summary);
+			const fixed = summary.firstChild, slot = summary.querySelector(".knomo-result-summary-count")!;
+			assert.ok(slot); assert.equal(slot.getAttribute("data-state"), "pending");
+			assert.match(summary.textContent!, /memo 2026 \{\{count\}\}/u);
+			count.resolve(result); await new Promise<void>(resolve => setImmediate(resolve));
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			assert.equal(summary.firstChild, fixed); assert.equal(summary.querySelector(".knomo-result-summary-count"), slot);
+			assert.equal(root.querySelector(".knomo-card"), card);
+			assert.equal(slot.getAttribute("data-state"), outcome === "ready" ? "ready" : "unavailable");
+			assert.match(slot.textContent!, outcome === "ready" ? /12345/u : /—/u);
+		} finally { firstPage.resolve(h.page()); count.resolve(result); h.close(); }
+	});
+});
+
+test("结果摘要保留固定文字和数字槽，与前置故障提示分别复用，过渡只播放一次", async () => {
+	const h = await createMobilePopupFixture();
+	const { syncKnomoCardFlowHeaders } = await import("../src/ui/KnomoFeed");
+	try {
+		const root = h.root.createDiv();
+		const summary = { template: "filterSummary.search" as const, params: { query: "2026 {{count}} <b>memo</b>" }, count: null as number | null, pending: true };
+		const render = (feedback = false) => syncKnomoCardFlowHeaders(root, [
+			...(feedback ? [{ type: "summary" as const, text: "temporarily unavailable", feedback: true }] : []),
+			{ type: "result-summary", summary },
+		], "same-filter").at(-1)!;
+		const element = render(), fixed = element.firstChild, slot = element.querySelector(".knomo-result-summary-count")!;
+		const card = root.createEl("article", { cls: "knomo-card" });
+		assert.equal(element.querySelectorAll('[aria-label="Loading"]').length, 1);
+		assert.equal(element.querySelector("b"), null);
+		assert.equal(render(true), element); assert.equal(element.firstChild, fixed);
+		summary.count = 900; summary.pending = false; render();
+		assert.equal(element.querySelector(".knomo-result-summary-count"), slot);
+		assert.equal(element.firstChild, fixed); assert.equal(card.previousElementSibling, element);
+		assert.equal(slot.getAttribute("aria-label"), "900"); assert.ok(slot.classList.contains("is-revealing"));
+		const ended = new h.win.Event("animationend"); Object.assign(ended, { animationName: "knomo-result-count-reveal" }); slot.dispatchEvent(ended);
+		summary.count = null; summary.pending = true; render();
+		summary.count = 901; summary.pending = false; render();
+		assert.ok(!slot.classList.contains("is-revealing"), "同一结果的后续刷新不重复播放入场");
+		assert.match(element.textContent!, /2026 \{\{count\}\} <b>memo<\/b>/u);
+		const immediate = syncKnomoCardFlowHeaders(root, [{ type: "result-summary", summary }], "new-filter")[0]!;
+		assert.ok(!immediate.querySelector(".is-revealing"), "首屏已有真实数量时直接显示");
+	} finally { h.close(); }
+});
+
+test("移动 A→B→A 后第一轮 A 的成功或失败都不能覆盖第二轮摘要", async t => {
+	for (const failed of [false, true]) await t.test(String(failed), async () => {
+		const gate = deferred<CatalogMemoCountResult>(), started = deferred<void>(); let reads = 0;
+		const h = await searchFixture({ query: "A" }, { countRemoteResults: async () => {
+			if (++reads > 1) return { count: 9, complete: true, catalogRevision: 1, coverage: h.page().coverage };
+			started.resolve(); const result = await gate.promise; if (failed) throw new Error("old A failed"); return result;
+		} });
+		const result = { count: 999, complete: true, catalogRevision: 1, coverage: h.page().coverage };
+		try {
+			const page = h.page(); page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } };
+			h.setLoad(async () => page); await h.controller.refreshAppliedResults(); await started.promise;
+			h.setLoad(async () => h.page()); h.controller.searchQuery = "B"; await new Promise<void>(resolve => setImmediate(resolve));
+			h.setLoad(async () => page); h.controller.searchQuery = "A"; await new Promise(resolve => setTimeout(resolve, 10));
+			assert.equal(h.controller.getDisplayedCount(), 9);
+			const root = h.controller.results!, summary = root.querySelector(".knomo-search-result-count"), card = root.querySelector(".knomo-card");
+			gate.resolve(result); await new Promise<void>(resolve => setImmediate(resolve));
+			assert.equal(h.controller.getDisplayedCount(), 9); assert.equal(root.querySelector(".knomo-search-result-count"), summary);
+			assert.equal(root.querySelector(".knomo-card"), card); assert.doesNotMatch(summary!.textContent!, /999/u);
+			h.controller.session.updateDraft("unsubmitted B"); h.controller.renderResults("content-change", true, true);
+			assert.equal(root.querySelector(".knomo-search-result-count"), summary); assert.match(summary!.textContent!, /“A”/u);
+		} finally { gate.resolve(result); h.close(); }
+	});
+});
+
+test("组合筛选确认零结果只显示现有空态，空搜索不生成计数摘要", async () => {
+	const h = await searchFixture({ query: "memo", date: "month", things: true });
+	try {
+		const page = h.page(); page.items = []; h.setLoad(async () => page); await h.controller.refreshAppliedResults();
+		const root = h.controller.results!;
+		assert.equal(root.querySelectorAll(".knomo-mobile-search-empty").length, 1);
+		assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+		assert.equal(root.querySelector(".knomo-search-result-count"), null);
+	} finally { h.close(); }
+	const empty = await searchFixture({});
+	try { assert.equal(empty.controller.results!.querySelector(".knomo-search-result-count"), null); }
+	finally { empty.close(); }
+});
+
+test("移动组合首查等待、失败及不完整空切片不显示零条，确认完整空结果后才显示", async t => {
+	for (const outcome of ["ready", "empty", "partial", "failed"] as const) await t.test(outcome, async () => {
+		const pending = deferred<MobileSearchPage>();
+		let complete = true;
+		const h = await searchFixture({ query: "memo", date: "month", things: true }, {
+			loadRemoteResults: async () => {
+				const page = await pending.promise;
+				if (outcome === "failed") throw new Error("Combination unavailable");
+				return page;
+			},
+			onResultsAccepted: page => { complete = page.coverage.kind === "complete"; },
+			getResultStatus: () => ({ complete, blocked: false,
+				headers: complete ? [] : [{ type: "summary", text: "Coverage incomplete" }] }),
+		});
+		try {
+			const root = h.controller.results!;
+			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			const page = h.page();
+			if (outcome !== "ready") page.items = [];
+			if (outcome === "partial") page.coverage = { ...page.coverage, kind: "partial", pendingFileCount: 1 };
+			pending.resolve(page);
+			await new Promise<void>(resolve => setImmediate(resolve));
+			if (outcome === "empty") assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			else assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			if (outcome === "partial") assert.match(root.textContent!, /Coverage incomplete/u);
+			if (outcome === "failed") assert.match(root.textContent!, /Could not load this view/u);
+		} finally { pending.resolve(h.page()); h.close(); }
+	});
+});
+
+test("移动组合空窗口仍有下一页时保留加载入口，数量确认为零才显示空态，失效后撤下结论", async t => {
+	for (const total of [null, 0]) await t.test(String(total), async () => {
+		const pending = deferred<MobileSearchPage>(), count = deferred<CatalogMemoCountResult>(), started = deferred<void>();
+		const h = await searchFixture({ query: "memo", date: "month", things: true }, {
+			loadRemoteResults: () => pending.promise,
+			countRemoteResults: async () => { started.resolve(); return count.promise; },
+		});
+		const page = h.page();
+		page.items = [];
+		page.nextCursor = { catalog: { catalogRevision: 1, createdAtKey: "next", observationKey: "next" } };
+		const result = { count: total, complete: total !== null, catalogRevision: 1, coverage: page.coverage };
+		try {
+			pending.resolve(page);
+			await started.promise;
+			const root = h.controller.results!;
+			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "pending");
+			assert.ok(root.querySelector(".knomo-mobile-search-more"));
+			count.resolve(result);
+			await new Promise<void>(resolve => setImmediate(resolve));
+			if (total === null) {
+				assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+				assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
+			} else {
+				assert.equal(root.querySelector(".knomo-search-result-count"), null);
+				assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			}
+			page.nextCursor = null;
+			await h.controller.refreshAppliedResults();
+			assert.equal(root.querySelector(".knomo-search-result-count"), null);
+			assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			h.controller.updateCatalogProgress({ ...page.coverage, coveredFileCount: 2, totalFileCount: 2 });
+			h.controller.renderResults();
+			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
+			assert.ok(root.querySelector(".knomo-mobile-search-more"));
+		} finally { pending.resolve(page); count.resolve(result); h.close(); }
+	});
+});

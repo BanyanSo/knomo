@@ -22,6 +22,15 @@ export interface ObservationHandle {
 	rawBlockHash: string;
 }
 
+// 当前 raw block（LF 规范化）的临时源范围，不是永久身份或写入权限。
+export interface MemoBlockAnchor {
+	blockId: string;
+	kind: "header" | "paragraph" | "body";
+	from: number;
+	to: number;
+	trailingWhitespace: string;
+}
+
 // Observation 只描述当前 Daily 字节，不承担身份职责。
 export interface MemoObservation extends ObservationHandle {
 	// 关系查询优先使用 Memo 级锚点；缺失时兼容末行合法段落/列表项锚点，不改变原生引用或写权限。
@@ -34,6 +43,7 @@ export interface MemoObservation extends ObservationHandle {
 	content: string;
 	contentHash: string;
 	existingBlockId: string | null;
+	blockAnchor?: MemoBlockAnchor | null;
 	tags: string[];
 	links: MemoLinkRef[];
 	images: MemoImageRef[];

@@ -31,10 +31,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install test browser
+        run: npx playwright install --with-deps chromium
+
       - name: Build plugin
         run: npm run build
 
-      - name: Run all product and tooling tests
+      - name: Run all product, tooling and browser tests
         run: npm run test:all
 
       - name: Verify release assets

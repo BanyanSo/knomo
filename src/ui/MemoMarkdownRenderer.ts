@@ -203,7 +203,9 @@ export class MemoMarkdownRenderer {
 			}
 			for (const checkboxEl of container.findAll(".knomo-task-checkbox")) {
 				const input = checkboxEl as HTMLInputElement;
-				if (input.getAttr("data-knomo-memo-id") === memo.id) {
+				if (input.getAttr("data-knomo-memo-id") === memo.id
+					&& memo.catalog?.observationHandle.sourceRevision !== undefined
+					&& input.getAttr("data-knomo-source-revision") === memo.catalog.observationHandle.sourceRevision) {
 					const index = this.getTaskCheckboxIndex(input);
 					if (index !== null && tasks[index] !== undefined) applyTaskCheckboxDomState(input, tasks[index].marker);
 				}
@@ -477,6 +479,7 @@ export function prepareRenderedTaskCheckboxes(container: HTMLElement, memo: Memo
 		input.setAttr("title", "");
 		input.addClass("knomo-task-checkbox");
 		input.setAttr("data-knomo-memo-id", memo.id);
+		if (memo.catalog) input.setAttr("data-knomo-source-revision", memo.catalog.observationHandle.sourceRevision);
 		input.setAttr("data-knomo-task-index", String(taskIndex));
 		item.setAttr("data-knomo-task-index", String(taskIndex));
 	}

@@ -5,10 +5,29 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
+import { DiaryMemoParser, getDailyBodyBoundary } from "../src/services/DiaryMemoParser";
+import { createDailyMemoBodyProof } from "../src/services/DailyMemoPresentationChange";
 
 const FIXTURE_DIR = path.join("tests", "fixtures", "catalog", "phase1");
 const parser = new DiaryMemoParser(async (bytes) => sha256(bytes));
+
+test("文件头续接摘要使用 Parser 边界并保留正文原始换行、空白与分隔线", async () => {
+	const body = "## Memos\r\n- 09:00 same\r\n  ---\r\n  paragraph  \r\n\r\n";
+	const original = await createDailyMemoBodyProof(body);
+	for (const header of ["---\nmodified: now\n---\n", "\uFEFF---\r\ncreated: now\r\nmodified: later\r\n...\r\n"]) {
+		const content = header + body, boundary = getDailyBodyBoundary(content)!;
+		assert.equal(content.slice(boundary.offset), body);
+		assert.equal((await createDailyMemoBodyProof(content))!.digest, original!.digest);
+		const parsed = await parser.parse({ sourcePath: "Daily.md", logicalDate: "2026-08-22", bytes: Buffer.from(content) });
+		assert.equal(parsed.observations[0]!.startLine, boundary.startLine + 1);
+	}
+	for (const changed of [body.replace(/\r\n/gu, "\n"), body + "\n", body.replace("paragraph  ", "paragraph")]) {
+		assert.notEqual((await createDailyMemoBodyProof(changed))!.digest, original!.digest);
+	}
+	const unclosed = "---\nmodified: now\n## Memos\n- 09:00 same\n";
+	assert.equal(getDailyBodyBoundary(unclosed), null);
+	assert.equal(await createDailyMemoBodyProof(unclosed), undefined);
+});
 
 test("Daily SHA-256 revision 和完整 raw block 的历史摘要保持固定", async () => {
 	const result = await new DiaryMemoParser().parse({
@@ -173,7 +192,7 @@ test("PARSE-CODE-FENCES：代码块中的伪 memo、task、link、image 与浮�
 	assert.deepEqual(observation.timeBuoyDates, ["2026-08-02"]);
 });
 
-test("PARSE-EXISTING-BLOCK-ID：content 剥离 trailing ID，existingBlockId 单独保留且源字节不变", async () => {
+test("PARSE-EXISTING-BLOCK-ID：仅剥离合法首段 ID，非法 token 保留且源字节不变", async () => {
 	const filePath = fixturePath("PARSE-EXISTING-BLOCK-ID");
 	const before = fs.readFileSync(filePath);
 	const beforeDigest = sha256(before);
@@ -187,7 +206,7 @@ test("PARSE-EXISTING-BLOCK-ID：content 剥离 trailing ID，existingBlockId 单
 	assert.equal(sha256(after), beforeDigest);
 	assert.deepEqual(result.observations.map((item) => [item.content, item.existingBlockId]), [
 		["one line", "single-id"],
-		["multi line\nkeeps content\nfinal line", "multi_id"],
+		["multi line\nkeeps content\nfinal line ^multi_id", null],
 	]);
 });
 
@@ -265,7 +284,7 @@ test("parses list-leading memo content from a detached timestamp line", () => {
 
 	assert.ok(parsed);
 	assert.equal(parsed.existingBlockId, "abc123");
-	assert.equal(parsed.content, "- 第一项\n- 第二项");
+	assert.equal(parsed.content, "- 第一项\n- 第二项 ^abc123");
 });
 
 test("parses tab-indented memo continuation lines", () => {
@@ -277,7 +296,7 @@ test("parses tab-indented memo continuation lines", () => {
 
 	assert.ok(parsed);
 	assert.equal(parsed.existingBlockId, "abc123");
-	assert.equal(parsed.content, "第一行\n- 子项\n\t- 嵌套子项");
+	assert.equal(parsed.content, "第一行\n- 子项\n\t- 嵌套子项 ^abc123");
 });
 
 test("does not parse an empty detached timestamp line as a memo", () => {
@@ -482,12 +501,12 @@ test("treats numeric-only Markdown image labels as sizes for local and remote im
 	]);
 });
 
-test("ignores blockId on the first line", () => {
+test("首行非段末的 ID 保留为可见正文，不作为原生锚点", () => {
 	const parsed = parseCurrentDiary(["- 12:00:00 第一行 ^abc123", "  第二行"].join("\n"))[0];
 
 	assert.ok(parsed);
-	assert.equal(parsed.existingBlockId, "abc123");
-	assert.equal(parsed.content, "第一行\n第二行");
+	assert.equal(parsed.existingBlockId, null);
+	assert.equal(parsed.content, "第一行 ^abc123\n第二行");
 });
 
 test("ignores blockId on the last effective content line", () => {

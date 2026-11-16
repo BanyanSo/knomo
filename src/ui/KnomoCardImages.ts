@@ -1,3 +1,5 @@
+export { normalizeImagePath } from "../utils/imagePath";
+import { normalizeImagePath } from "../utils/imagePath";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { CardImageLoadItem } from "./CardImageLoadQueue";
 import type { MemoPreviewImage } from "./MemoCardPreview";
@@ -18,6 +20,19 @@ export interface RenderedMemoCardImages {
 
 const previewNodes = new WeakMap<HTMLElement, HTMLImageElement>();
 const readyPreviews = new WeakSet<HTMLImageElement>();
+
+// 只转移已完成的图片节点；只读副本不继承旧按钮、重试监听或 occurrence 绑定。
+export function retainReadonlyCardImages(source: HTMLElement, snapshot: HTMLElement): void {
+	const targets = Array.from(snapshot.querySelectorAll<HTMLElement>(".knomo-card-image-item"));
+	for (const [index, item] of Array.from(source.querySelectorAll<HTMLElement>(".knomo-card-image-item")).entries()) {
+		const image = previewNodes.get(item), target = targets[index], clone = target?.querySelector("img");
+		if (!image || !target || !clone || !item.contains(image) || !readyPreviews.has(image) || !image.complete || image.naturalWidth <= 0) continue;
+		clone.replaceWith(image);
+		previewNodes.set(target, image);
+		const resource = item.getAttribute("data-knomo-image-resource");
+		if (resource !== null) target.setAttribute("data-knomo-image-resource", resource);
+	}
+}
 
 function previewResourceKey(image: MemoPreviewImage): string {
 	return encodeImageKeyParts([
@@ -63,9 +78,7 @@ export class ReadyCardImageHandoff {
 	}
 }
 
-export function normalizeImagePath(path: string): string {
-	return path.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
-}
+
 
 // 仅缓存当前视图移除的已就绪节点；取出即转移所有权，按图片数量保持有界。
 export class MemoCardImageCache {
@@ -315,7 +328,7 @@ function updateMemoCardImage(
 	index: number,
 	hiddenCount: number,
 ): void {
-	const button = item.find(".knomo-card-image-button")!;
+	const button = item.find(".knomo-card-image-button");
 	const imageEl = previewNodes.get(item);
 	button.setAttr("data-memo-id", memo.id);
 	button.setAttr("data-image-index", String(index));

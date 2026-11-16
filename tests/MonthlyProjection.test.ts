@@ -16,6 +16,44 @@ import type { CatalogObservation } from "../src/types/catalog";
 import type { KnomoSettings } from "../src/types/settings";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { memoMarkdownConsistencyFixtures } from "./fixtures/memoMarkdownConsistency";
+import { memoPrefixHistory } from "./fixtures/memoPrefix/history";
+import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
+
+test("Monthly 保留分隔线内的正文锚点", async () => {
+	const raw = "-   09:00\n\t\n\t---\n\t\n\ttext ^inside\n\t\n\t---";
+	const parser = new DiaryMemoParser();
+	const observations = parser.parseRevision({ sourcePath: "Daily/2026-08-01.md", logicalDate: "2026-08-01", content: raw, sourceRevision: "daily" }).observations;
+	const result = await buildMonthlyProjection({ period: "2026-08", settings: makeSettings(), observations });
+	assert.ok(result.content.includes(raw));
+	assert.equal(result.content.match(/\^inside/gu)?.length, 1);
+});
+
+test("Monthly 可投影带逻辑首空行的旧式 paragraph 锚点", async () => {
+	const parser = new DiaryMemoParser();
+	const raw = "- 09:00 \n  text ^legacy-leading-space";
+	const observations = parser.parseRevision({ sourcePath: "Daily/2025-06-08.md", logicalDate: "2025-06-08", content: raw, sourceRevision: "daily" }).observations;
+	const projection = await buildMonthlyProjection({ period: "2025-06", settings: makeSettings(), observations });
+	assert.ok(projection.content.includes(raw));
+	const after = parser.parseRevision({ sourcePath: projection.path, logicalDate: "2025-06-08", content: projection.content, sourceRevision: projection.outputHash }).observations[0];
+	assert.equal(after.content, "\ntext");
+	assert.equal(after.blockAnchor?.kind, "paragraph");
+	assert.equal(after.existingBlockId, "legacy-leading-space");
+});
+
+test("Monthly 消费当前锚点源信息，不重复附加历史末项或移动主锚点", async () => {
+	const parser = new DiaryMemoParser();
+	for (const version of memoPrefixHistory) for (const sample of version.samples) for (const raw of [sample.raw, sample.anchoredRaw]) {
+		const before = parser.parseRevision({ sourcePath: "Daily/2026-08-01.md", logicalDate: "2026-08-01", content: raw, sourceRevision: "daily" }).observations[0];
+		const projection = await buildMonthlyProjection({ period: "2026-08", settings: makeSettings(), observations: [before] });
+		const after = parser.parseRevision({ sourcePath: projection.path, logicalDate: before.logicalDate,
+			content: projection.content, sourceRevision: projection.outputHash }).observations[0];
+		assert.equal(after.content, sample.content, sample.name);
+		assert.equal(after.existingBlockId, before.existingBlockId, sample.name);
+		assert.equal(after.blockAnchor?.kind, before.blockAnchor?.kind, sample.name);
+		assert.equal(after.time, before.time);
+		assert.equal((projection.content.match(/\^child-anchor/gu) ?? []).length, sample.category === "20" ? 1 : 0);
+	}
+});
 
 test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 Daily 已有 block ID", async () => {
 	const settings = makeSettings();
@@ -42,8 +80,9 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 	const second = await buildMonthlyProjection({ period: "2026-08", settings, observations: [earlier, later] });
 
 	assert.equal(first.content, second.content);
-	assert.equal(first.sourceDigest, "08ed925cc9bf21dc89eff9789fa0d5f8eb8362c10ce8db61e90a3838219b557b");
-	assert.equal(first.outputHash, "8644cf1375b8cd6663444c15bbd25d1b1d5f4339142f2e3a8ed15e0fb907eb03");
+	// 输出规则版本与锚点源信息进入输入摘要，投影字节及 outputHash 仍保持原有固定值。
+	assert.equal(first.sourceDigest, "ccc661c3d0cdf4c563898f10afd69efe667ca93596061f05fc44a6bb5cbe3a4e");
+	assert.equal(first.outputHash, "45655fa980004f2c9c6bc6bae67bcccce918d3c782da0d6a67aa500fa5dd1c18");
 	assert.equal(first.path, "Knomo/Memos-2026-08.md");
 	assert.equal(first.content, [
 		"<!-- knomo:monthly-archive -->",
@@ -52,7 +91,7 @@ test("Monthly projection 对同一 Catalog 输入生成确定字节且只保留 
 		"## [[2026-08-01]]",
 		"- 08:00:00 first",
 		"## [[2026-08-02]]",
-		"-   09:30 second\n\tline ^kept-id",
+		"- 09:30 second\n  line ^kept-id",
 		"",
 	].join("\n\n").replace(/\n\n$/u, "\n"));
 	assert.equal(first.content.includes("^kept-id"), true);
@@ -180,7 +219,7 @@ function makeSettings(locale = "en"): KnomoSettings & { locale: string } {
 }
 
 function makeObservation(overrides: Partial<CatalogObservation>): CatalogObservation {
-	return {
+	const observation: CatalogObservation = {
 		occurrenceIndex: 0,
 		occurrenceCount: 1,
 		observationKey: "Daily/2026-08-09.md\u00000000000001",
@@ -213,4 +252,8 @@ function makeObservation(overrides: Partial<CatalogObservation>): CatalogObserva
 		hasTimeBuoy: 0,
 		...overrides,
 	};
+	const raw = new MarkdownBlockService().buildMemoBlockWithBlockId(observation.content, observation.time, observation.existingBlockId);
+	observation.blockAnchor = new DiaryMemoParser().parseRevision({ sourcePath: observation.sourcePath, logicalDate: observation.logicalDate,
+		content: raw, sourceRevision: observation.sourceRevision }).observations[0].blockAnchor;
+	return observation;
 }

@@ -1,13 +1,10 @@
 import { parseMarkdownReferences } from "../utils/markdownReferences";
-import type { MemoObservation } from "../types/catalog";
+import type { MemoBlockAnchor, MemoObservation } from "../types/catalog";
 import type { MemoLinkRef } from "../types/memo";
 import { hashMemoContent, hashText } from "../utils/hash";
 import { sha256Bytes } from "../utils/sha256";
 import { getMarkdownTaskLines } from "../utils/markdownTasks";
 import {
-	extractTrailingBlockId,
-	extractLeadingParagraphBlockId,
-	findLastEffectiveLineIndex,
 	getFourColumnMemoPrefix,
 	isMarkdownHeadingLine,
 	isMemoContinuationLine,
@@ -21,9 +18,9 @@ import { extractTimeBuoyDates } from "../utils/timeBuoyParser";
 import { CooperativeYieldController } from "./CooperativeTask";
 import type { CooperativeTaskRuntime } from "./CooperativeTask";
 import { assignObservationOccurrences } from "./ObservationOccurrences";
-import { collectRelationBlockAnchors, memoLevelRelationBlockId } from "../utils/memoRelations";
+import { collectRelationBlockAnchors, findMemoBlockAnchor } from "../utils/memoRelations";
 
-export const CATALOG_PARSER_VERSION = 18;
+export const CATALOG_PARSER_VERSION = 19;
 
 export interface DiaryMemoParseInput {
 	sourcePath: string;
@@ -63,6 +60,7 @@ interface ParsedDiaryMemoBlock {
 	contentStartLineOffset: number;
 	contentHash: string;
 	blockId: string | null;
+	blockAnchor: MemoBlockAnchor | null;
 }
 
 export class DiaryMemoParser {
@@ -173,60 +171,17 @@ export class DiaryMemoParser {
 	}
 }
 
-function parseDiaryMemoBlock(lines: readonly string[], startLine: number): ParsedDiaryMemoBlock | null {
-	const firstLine = lines[startLine];
-	const match = firstLine?.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
-	if (match === null) {
-		return null;
-	}
-
-	const contentLines: string[] = [];
+export function parseDiaryMemoBlock(lines: readonly string[], startLine: number): ParsedDiaryMemoBlock | null {
+	const match = matchMemoHeader(lines[startLine]);
+	if (match === null) return null;
 	const prefix = getFourColumnMemoPrefix(lines, startLine);
 	const continuationColumns = prefix === null ? 2 : 4;
-	const firstContent = extractTrailingBlockId(match[2] ?? "");
-	let blockId = prefix === null ? firstContent.blockId : prefix.blockId;
-	if (prefix?.firstContent !== undefined && prefix.firstContent !== null) {
-		contentLines.push(prefix.firstContent);
-	} else if (prefix === null && (match[2] !== undefined || blockId !== null)) {
-		contentLines.push(firstContent.text);
-	}
-	const contentStartLineOffset = prefix?.contentStartLineOffset ?? (match[2] === undefined ? 1 : 0);
 	let endLine = startLine;
-	for (let lineIndex = startLine + Math.max(1, contentStartLineOffset); lineIndex < lines.length; lineIndex += 1) {
-		const line = lines[lineIndex];
-		if (!isMemoContinuationLine(line, continuationColumns)) {
-			break;
-		}
-		contentLines.push(stripMemoContinuationIndent(line, continuationColumns));
+	for (let lineIndex = startLine + 1; lineIndex < lines.length; lineIndex += 1) {
+		if (!isMemoContinuationLine(lines[lineIndex], continuationColumns)) break;
 		endLine = lineIndex;
 	}
-
-	const lastEffectiveLineIndex = findLastEffectiveLineIndex(contentLines);
-	if (prefix === null && lastEffectiveLineIndex !== -1) {
-		const lastContent = extractTrailingBlockId(contentLines[lastEffectiveLineIndex]);
-		if (lastContent.blockId !== null) {
-			contentLines[lastEffectiveLineIndex] = lastContent.text;
-			blockId = lastContent.blockId;
-		}
-	}
-	let content = contentLines.join("\n");
-	if (prefix?.contentStartLineOffset === 0) {
-		const paragraph = extractLeadingParagraphBlockId(content);
-		content = paragraph.text;
-		blockId = paragraph.blockId;
-	}
-	if (content.trim().length === 0) {
-		return null;
-	}
-	return {
-		startLine,
-		endLine,
-		time: match[1],
-		content,
-		contentStartLineOffset,
-		contentHash: hashMemoContent(content),
-		blockId,
-	};
+	return decodeDiaryMemoBlock(lines, startLine, endLine, match, prefix);
 }
 
 async function parseDiaryMemoBlockCooperatively(
@@ -234,41 +189,49 @@ async function parseDiaryMemoBlockCooperatively(
 	startLine: number,
 	yieldController: CooperativeYieldController,
 ): Promise<ParsedDiaryMemoBlock | null> {
-	const firstLine = lines[startLine];
-	const match = firstLine?.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
+	const match = matchMemoHeader(lines[startLine]);
 	if (match === null) return null;
-
-	const contentLines: string[] = [];
 	const prefix = getFourColumnMemoPrefix(lines, startLine);
 	const continuationColumns = prefix === null ? 2 : 4;
-	const firstContent = extractTrailingBlockId(match[2] ?? "");
-	let blockId = prefix === null ? firstContent.blockId : prefix.blockId;
-	if (prefix?.firstContent !== undefined && prefix.firstContent !== null) contentLines.push(prefix.firstContent);
-	else if (prefix === null && (match[2] !== undefined || blockId !== null)) contentLines.push(firstContent.text);
-	const contentStartLineOffset = prefix?.contentStartLineOffset ?? (match[2] === undefined ? 1 : 0);
 	let endLine = startLine;
-	for (let lineIndex = startLine + Math.max(1, contentStartLineOffset); lineIndex < lines.length; lineIndex += 1) {
+	for (let lineIndex = startLine + 1; lineIndex < lines.length; lineIndex += 1) {
 		if (yieldController.shouldYield()) await yieldController.yieldNow();
-		const line = lines[lineIndex];
-		if (!isMemoContinuationLine(line, continuationColumns)) break;
-		contentLines.push(stripMemoContinuationIndent(line, continuationColumns));
+		if (!isMemoContinuationLine(lines[lineIndex], continuationColumns)) break;
 		endLine = lineIndex;
 	}
+	return decodeDiaryMemoBlock(lines, startLine, endLine, match, prefix);
+}
 
-	const lastEffectiveLineIndex = findLastEffectiveLineIndex(contentLines);
-	if (prefix === null && lastEffectiveLineIndex !== -1) {
-		const lastContent = extractTrailingBlockId(contentLines[lastEffectiveLineIndex]);
-		if (lastContent.blockId !== null) {
-			contentLines[lastEffectiveLineIndex] = lastContent.text;
-			blockId = lastContent.blockId;
-		}
+function matchMemoHeader(line: string | undefined): RegExpMatchArray | null {
+	return line?.match(/^-(?: | {3})(\d{2}:\d{2}(?::\d{2})?)(?: (.*))?$/u) ?? null;
+}
+
+// 同步与协作式读取只共用解码，不改变逐行收集、取消或历史 occurrence 边界。
+function decodeDiaryMemoBlock(
+	lines: readonly string[], startLine: number, endLine: number, match: RegExpMatchArray,
+	prefix: ReturnType<typeof getFourColumnMemoPrefix>,
+): ParsedDiaryMemoBlock | null {
+	const raw = lines.slice(startLine, endLine + 1).join("\n");
+	const blockAnchor = findMemoBlockAnchor(raw);
+	const detached = match[2] === undefined || blockAnchor?.kind === "header";
+	const contentStartLineOffset = detached ? (prefix?.contentStartLineOffset ?? 1) : 0;
+	const columns = prefix === null ? 2 : 4;
+	const contentLines: string[] = contentStartLineOffset === 0 ? [match[2]] : [];
+	for (let index = startLine + Math.max(1, contentStartLineOffset); index <= endLine; index++) {
+		contentLines.push(stripMemoContinuationIndent(lines[index], columns));
 	}
-	let content = contentLines.join("\n");
-	if (prefix?.contentStartLineOffset === 0) {
-		const paragraph = extractLeadingParagraphBlockId(content);
-		content = paragraph.text;
-		blockId = paragraph.blockId;
+	if (blockAnchor?.kind === "paragraph") {
+		const lineOffset = raw.slice(0, blockAnchor.from).split("\n").length - 1;
+		const rawLine = lines[startLine + lineOffset];
+		const contentIndex = lineOffset - contentStartLineOffset;
+		const lineStart = raw.lastIndexOf("\n", blockAnchor.from) + 1;
+		const removedPrefixLength = rawLine.length - contentLines[contentIndex].length;
+		const tokenStart = blockAnchor.from - lineStart - removedPrefixLength;
+		const logicalLine = contentLines[contentIndex];
+		const from = logicalLine[tokenStart - 1] === " " ? tokenStart - 1 : tokenStart;
+		contentLines[contentIndex] = logicalLine.slice(0, from) + logicalLine.slice(tokenStart + blockAnchor.blockId.length + 1);
 	}
+	const content = contentLines.join("\n");
 	if (content.trim().length === 0) return null;
 	return {
 		startLine,
@@ -277,7 +240,8 @@ async function parseDiaryMemoBlockCooperatively(
 		content,
 		contentStartLineOffset,
 		contentHash: hashMemoContent(content),
-		blockId,
+		blockId: blockAnchor?.blockId ?? null,
+		blockAnchor,
 	};
 }
 
@@ -308,7 +272,8 @@ function buildMemoObservation(
 		occurrenceIndex: 0,
 		occurrenceCount: 1,
 		existingBlockId: parsed.blockId,
-		relationBlockId: memoLevelRelationBlockId(lines.slice(parsed.startLine, parsed.endLine + 1).join("\n")),
+		blockAnchor: parsed.blockAnchor,
+		relationBlockId: parsed.blockId,
 		tags: parseMemoTags(metadataContent),
 		links: parseMemoLinksInSourceOrder(metadataContent),
 		images: dedupeStable(parseMemoImages(metadataContent), (image) => `${image.syntax}\0${image.path}\0${image.altText}`),
@@ -333,6 +298,21 @@ function normalizeVaultPath(path: string): string {
 
 function startsWithFrontmatter(lines: readonly string[]): boolean {
 	return lines[0]?.trim() === "---";
+}
+
+// 与 Daily 解析使用同一文件头边界；offset 指向原始字符串，不规范化正文换行或空白。
+export function getDailyBodyBoundary(content: string): { offset: number; startLine: number } | null {
+	const lines = splitMarkdownLines(content);
+	if (!startsWithFrontmatter(lines)) return { offset: 0, startLine: 0 };
+	const endLine = lines.findIndex((line, index) => index > 0 && isFrontmatterEnd(line));
+	if (endLine < 0) return null;
+	const endings = /\r\n|\r|\n/gu;
+	let offset = 0;
+	for (let index = 0; index <= endLine; index++) {
+		const ending = endings.exec(content);
+		offset = ending ? ending.index + ending[0].length : content.length;
+	}
+	return { offset, startLine: endLine + 1 };
 }
 
 function isFrontmatterEnd(line: string): boolean {

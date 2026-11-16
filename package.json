@@ -1,6 +1,6 @@
 {
 	"name": "knomo",
-	"version": "1.14.5",
+	"version": "1.14.8",
 	"description": "Capture local-first memos into daily notes and monthly archives.",
 	"main": "main.js",
 	"scripts": {
@@ -17,6 +17,9 @@
 		"test:stress": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=stress",
 		"test:tooling": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=tooling",
 		"test:all": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=all",
+		"test:node": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=node",
+		"test:browser": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=browser",
+		"test:browser:install": "playwright install chromium",
 		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files"
 	},
 	"keywords": [
@@ -42,6 +45,7 @@
 		"fake-indexeddb": "^6.2.5",
 		"jsdom": "26.1.0",
 		"obsidian": "https://codeload.github.com/obsidianmd/obsidian-api/tar.gz/9abd9605ce081383674aae1ed111c456edde0688",
+		"playwright": "1.62.1",
 		"typescript": "^5.8.0"
 	},
 	"dependencies": {

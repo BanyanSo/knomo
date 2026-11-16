@@ -71,7 +71,11 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 				for (const selector of selectors) {
 					const target = await page.locator(selector).first().evaluate((button: HTMLElement) => {
 						const rect = button.getBoundingClientRect();
-						return { width:rect.width, height:rect.height, x:rect.left,y:rect.top, hitElement:document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)?.outerHTML.slice(0,180), hit:button.contains(document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)) };
+						const panel = button.closest<HTMLElement>(".knomo-mobile-composer-content")!;
+						return { width:rect.width, height:rect.height, x:rect.left,y:rect.top,
+							panel: panel.getBoundingClientRect().toJSON(), clip: getComputedStyle(panel).clipPath,
+							animations: panel.getAnimations().map(animation => ({ state: animation.playState, time: animation.currentTime, end: animation.effect?.getComputedTiming().endTime })),
+							hitElement:document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)?.outerHTML.slice(0,180), hit:button.contains(document.elementFromPoint(rect.left + rect.width/2, rect.top + rect.height/2)) };
 					});
 					assert.ok(target.width >= 44 && target.height >= 44 && target.hit, JSON.stringify({ theme, size, width, height, mode, selector, target }));
 				}
@@ -373,6 +377,47 @@ test("Composer coordinates keyboard dismissal, visual exit and reentry in a real
 		assert.deepEqual(reducedEntry, { opacity: "1", clipPath: "none" }, "减少动态效果时应直接显示已停靠的面板");
 		await page.evaluate(() => (window as unknown as { composerController: { closeKeepingDraft: () => void } }).composerController.closeKeepingDraft());
 		assert.equal(await page.evaluate(() => (window as unknown as { closedCalls: number }).closedCalls), 6);
+		await page.emulateMedia({ reducedMotion: "no-preference" });
+		await page.evaluate(() => {
+			// 仅让裁剪能力查询失败，保留原始动画声明，验证旧 WebView 的实际降级行为。
+			for (const sheet of Array.from(document.styleSheets)) {
+				for (let index = 0; index < sheet.cssRules.length; index++) {
+					const rule = sheet.cssRules[index];
+					if (!(rule instanceof CSSSupportsRule) || !rule.conditionText.includes("clip-path")) continue;
+					const contents = Array.from(rule.cssRules, child => child.cssText).join("\n");
+					sheet.deleteRule(index);
+					sheet.insertRule(`@supports (clip-path: knomo-unsupported-shape) { ${contents} }`, index);
+				}
+			}
+		});
+		for (const [index, theme] of ["theme-light", "theme-dark"].entries()) {
+			const fallback = await page.evaluate(async (theme: string) => {
+				document.body.classList.remove("theme-light", "theme-dark");
+				document.body.classList.add(theme);
+				const content = document.querySelector<HTMLElement>(".knomo-mobile-composer-content")!;
+				const input = content.querySelector<HTMLElement>(".cm-content")!;
+				(window as unknown as { composerController: { open: () => void } }).composerController.open();
+				const focused = document.activeElement === input;
+				await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+				const fade = content.getAnimations().find(animation => animation instanceof CSSTransition && animation.transitionProperty === "opacity");
+				if (!fade) throw new Error("裁剪不可用时仍须保留淡入过渡");
+				fade.pause();
+				fade.currentTime = 120;
+				const style = getComputedStyle(content);
+				const buttons = Array.from(content.querySelectorAll(".knomo-tool-button, .knomo-send-button"));
+				const sample = { focused, opacity: Number(style.opacity), clipPath: style.clipPath,
+					toolbarBottom: Math.max(...buttons.map(button => button.getBoundingClientRect().bottom)) };
+				fade.play();
+				return sample;
+			}, theme);
+			assert.equal(fallback.clipPath, "none", "不支持裁剪时应只使用淡入过渡");
+			assert.ok(fallback.opacity > 0 && fallback.opacity < 1, "降级入场须连续淡入");
+			assert.equal(fallback.focused, true, "降级不能影响输入框同步聚焦");
+			assert.ok(fallback.toolbarBottom <= 417, "降级后工具栏仍须停靠在键盘上沿");
+			await page.evaluate(() => (window as unknown as { composerController: { closeKeepingDraft: () => void } }).composerController.closeKeepingDraft());
+			await page.waitForFunction((expected: number) => (window as unknown as { closedCalls: number }).closedCalls === expected, index + 7);
+			assert.equal(await page.locator(".knomo-mobile-composer-layer").evaluate((el: HTMLElement) => el.inert && !el.classList.contains("is-active")), true);
+		}
 		assert.deepEqual(errors, []);
 	} finally { await browser.close(); }
 });

@@ -1,6 +1,7 @@
 import type { MemoRelationNode } from "../types/memoRelations";
 import { observationHandleKey } from "../services/DailyMemoPresentationChange";
 import type { DailyMemoPresentationChange } from "../services/DailyMemoPresentationChange";
+import { ReadyCardImageHandoff } from "./KnomoCardImages";
 
 // 高度只保留数字；正文、DOM 与渲染任务仅保留当前窗口及正在操作的一行。
 export class RelationRowHeights {
@@ -34,7 +35,7 @@ export class MemoRelationWindow {
 	private complete = true;
 
 	constructor(readonly el: HTMLElement, private readonly scroll: HTMLElement, private readonly estimate: number,
-		private readonly render: (row: HTMLElement, node: MemoRelationNode, index: number) => Promise<void>,
+		private readonly render: (row: HTMLElement, node: MemoRelationNode, index: number, handoff?: ReadyCardImageHandoff) => Promise<void>,
 		private readonly release: (row: HTMLElement) => void,
 		private readonly isPaused: () => boolean = () => false) {
 		el.classList.add("knomo-relation-window");
@@ -50,6 +51,9 @@ export class MemoRelationWindow {
 		const anchor = this.captureAnchor();
 		const previous = this.nodes;
 		const focused = [...this.rows].find(([, row]) => row.contains(this.el.doc.activeElement));
+		const keys = new Set(nodes.map(node => observationHandleKey(node.handle)));
+		// 只接续本轮离场窗口行；滚动离场不扩展成历史图片缓存。
+		const handoff = new ReadyCardImageHandoff([...this.rows].filter(([key]) => !keys.has(key)).map(([, row]) => row), this.scroll);
 		this.nodes = nodes;
 		this.indices = new Map(nodes.map((node, index) => [observationHandleKey(node.handle), index]));
 		this.heights = new RelationRowHeights(nodes.map(node => this.measured.get(observationHandleKey(node.handle)) ?? this.estimate));
@@ -61,7 +65,7 @@ export class MemoRelationWindow {
 		const neighbor = oldIndex < 0 ? undefined : previous.slice(oldIndex + 1).find(node => this.indices.has(observationHandleKey(node.handle)))
 			?? previous.slice(0, oldIndex).reverse().find(node => this.indices.has(observationHandleKey(node.handle)));
 		this.restoreAnchor(anchor && !this.indices.has(anchor.key) && neighbor ? { key: observationHandleKey(neighbor.handle), offset: anchor.offset } : anchor);
-		this.update();
+		this.update(handoff);
 		if (focused && !this.indices.has(focused[0])) {
 			const focusAfterRemoval = this.el.doc.activeElement;
 			const index = Math.min(Math.max(0, previous.findIndex(node => observationHandleKey(node.handle) === focused[0])), nodes.length - 1);
@@ -115,17 +119,17 @@ export class MemoRelationWindow {
 		this.queued = true;
 		this.el.win.requestAnimationFrame(() => { this.queued = false; if (!this.disposed) this.update(); });
 	};
-	private update(): void {
+	private update(handoff?: ReadyCardImageHandoff): void {
 		if (this.disposed || this.isPaused()) return;
 		const top = this.scroll.scrollTop - this.offset();
 		const start = this.heights.indexAt(Math.max(0, top - 600));
 		const end = Math.min(this.nodes.length, start + 24, this.heights.indexAt(Math.max(0, top + this.scroll.clientHeight + 600)) + 2);
 		const wanted = new Set(this.nodes.slice(start, end).map(node => observationHandleKey(node.handle)));
 		for (const [key, row] of this.rows) if (!wanted.has(key) && !row.contains(this.el.doc.activeElement)) this.remove(key, row);
-		for (let index = start; index < end; index++) this.ensureRow(index);
+		for (let index = start; index < end; index++) this.ensureRow(index, handoff);
 		this.layout();
 	}
-	private ensureRow(index: number): HTMLElement | undefined {
+	private ensureRow(index: number, handoff?: ReadyCardImageHandoff): HTMLElement | undefined {
 		const node = this.nodes[index];
 		if (!node) return;
 		const key = observationHandleKey(node.handle);
@@ -138,7 +142,7 @@ export class MemoRelationWindow {
 		if (!row.firstElementChild && row.dataset.loading !== "true") {
 			const currentRow = row;
 			row.dataset.loading = "true";
-			const ready = this.render(row, node, index).finally(() => {
+			const ready = this.render(row, node, index, handoff).finally(() => {
 				if (this.ready.get(currentRow) !== ready) return;
 				currentRow.dataset.loading = "false";
 				this.ready.delete(currentRow);

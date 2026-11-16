@@ -85,7 +85,7 @@ test("presents regular empty state and filtered empty copy", async () => {
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
 		regularFilterCopy: {
-			summary: "Tagged memos",
+			summary: { template: "filterSummary.tag", params: { tag: "#tag" }, count: 0, pending: false },
 			emptyTitle: "No tagged memos",
 		},
 	}), {
@@ -104,14 +104,14 @@ test("presents memo list with regular filter summary", async () => {
 		...baseOptions(),
 		memos,
 		regularFilterCopy: {
-			summary: "2 filtered memos",
+			summary: { template: "filterSummary.tag", params: { tag: "#tag" }, count: 2, pending: false },
 			emptyTitle: "No filtered memos",
 		},
 	}), {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "summary", text: "2 filtered memos" }],
+		headers: [{ type: "result-summary", summary: { template: "filterSummary.tag", params: { tag: "#tag" }, count: 2, pending: false } }],
 	});
 });
 
@@ -129,7 +129,7 @@ test("presents review and random list headers", async () => {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "summary", text: "90 memos were written on this day" }],
+		headers: [{ type: "result-summary", summary: { template: "list.reviewSummary", params: {}, count: 90, pending: false } }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -140,7 +140,7 @@ test("presents review and random list headers", async () => {
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "random-toolbar", count: 3 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 3, pending: false } }],
 	});
 });
 
@@ -158,7 +158,7 @@ test("keeps the current random list visible while the next group loads", async (
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "random-toolbar", count: 2 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 2, pending: false } }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -169,7 +169,7 @@ test("keeps the current random list visible while the next group loads", async (
 		type: "items",
 		memos,
 		mode: "memo",
-		headers: [{ type: "random-toolbar", count: 2 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 2, pending: false } }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -180,7 +180,7 @@ test("keeps the current random list visible while the next group loads", async (
 		type: "empty",
 		title: "Looking for memos to revisit",
 		description: "",
-		headers: [{ type: "random-toolbar", count: 0 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: null, pending: true } }],
 	});
 });
 
@@ -196,7 +196,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Looking for memos to revisit",
 		description: "",
-		headers: [{ type: "random-toolbar", count: 0 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: null, pending: true } }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -207,7 +207,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Random revisit failed to load",
 		description: "Candidate query failed",
-		headers: [{ type: "random-toolbar", count: 0 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: null, pending: false } }],
 	});
 	assert.deepEqual(getCardFlowPresentation({
 		...baseOptions(),
@@ -217,7 +217,7 @@ test("presents random loading, failure and true empty states distinctly", async 
 		type: "empty",
 		title: "Not enough memos to revisit yet",
 		description: "",
-		headers: [{ type: "random-toolbar", count: 0 }],
+		headers: [{ type: "random-toolbar", summary: { template: "list.randomSummary", params: {}, count: 0, pending: false } }],
 	});
 });
 

@@ -55,7 +55,8 @@ export function replaceTagQueryWithSuggestion(value: string, range: TagQueryRang
 	const before = value.slice(0, range.from);
 	const after = value.slice(range.to);
 	const nextChar = after.charAt(0);
-	const hasTrailingWhitespace = nextChar.length > 0 && /\s/.test(nextChar);
+	// 仅复用同行空白；遇到换行先补一个空格，光标留在换行前。
+	const hasTrailingWhitespace = nextChar.length > 0 && /[^\S\r\n]/.test(nextChar);
 	if (hasTrailingWhitespace) {
 		return {
 			value: `${before}${replacement}${after}`,

@@ -527,6 +527,8 @@ interface CreateElementOptions {
 }
 
 class TestElement {
+	scrollTop = 0;
+	getBoundingClientRect(): DOMRect { return { top: 0, bottom: 0 } as DOMRect; }
 	private parent: TestElement | null = null;
 	get firstElementChild(): TestElement | null { return this.children[0] ?? null; }
 	get nextElementSibling(): TestElement | null {
@@ -546,6 +548,7 @@ class TestElement {
 	private readonly children: TestElement[] = [];
 	private readonly classes = new Set<string>();
 	private readonly attrs = new Map<string, string>();
+	hasAttribute(name: string): boolean { return this.attrs.has(name); }
 	private text = "";
 
 	constructor(private readonly tagName: string) {}

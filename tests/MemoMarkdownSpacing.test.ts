@@ -3,6 +3,7 @@ import test from "node:test";
 import { MarkdownBlockService } from "../src/services/MarkdownBlockService";
 import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
 import { parseMemoMarkdown } from "../src/utils/markdown";
+import { expectedLegacyDailyMemo } from "./fixtures/memoMarkdownConsistency";
 
 const blocks = new MarkdownBlockService();
 const parser = new DiaryMemoParser();
@@ -11,9 +12,9 @@ function read(raw: string) {
 }
 
 test("四列容器的空格和混合缩进保留正文、分隔空行、引用与任务偏移", async () => {
-	for (const content of ["  # title", "    code\n\tmore", "\n  # title\n\n", "| A | B |\n| --- | --- |\n| C | D |", "intro\n\n- [ ] task\n  - [x] nested"]) {
+	for (const [content, layout] of [["  # title", "block"], ["    code\n\tmore", "separated"], ["\n  # title\n\n", "separated"], ["| A | B |\n| --- | --- |\n| C | D |", "separated"], ["intro\n\n- [ ] task\n  - [x] nested", "inline"]] as const) {
 		for (const blockId of [null, "anchor"]) {
-			const canonical = blocks.buildMemoBlockWithBlockId(content, "12:34", blockId);
+			const canonical = expectedLegacyDailyMemo({ name: "legacy", content, layout, wide: true }, "12:34", blockId);
 			const expected = read(canonical);
 			for (const indent of ["    ", " \t", "  \t", "   \t"]) for (const eol of ["\n", "\r\n"]) {
 				const raw = canonical.replace(/^\t/gmu, indent).replace(/\n/gu, eol);
@@ -44,7 +45,8 @@ test("可直接开启子块的语法紧接时间行，不机械添加空行", ()
 	for (const content of ["> quote\n> continued", "# Heading", "```js\nx\n```", "- first\n- second", "- [ ] task", "1. first\n2. second", "***"]) {
 		for (const blockId of [null, "anchor"]) {
 			const raw = blocks.buildMemoBlockWithBlockId(content, "12:34", blockId);
-			assert.equal(raw, `-   12:34${blockId === null ? "" : " ^anchor"}\n${content.split("\n").map(line => `\t${line}`).join("\n")}`);
+			const prefix = blockId === null ? "- 12:34\n" : "- 12:34 ^anchor\n";
+			assert.equal(raw, prefix + content.split("\n").map(line => `  ${line}`).join("\n"));
 			assert.equal(read(raw).content, content);
 			assert.equal(read(raw).existingBlockId, blockId);
 		}
@@ -52,18 +54,18 @@ test("可直接开启子块的语法紧接时间行，不机械添加空行", ()
 });
 
 test("后续块和 Tab 不迫使安全的首段另起一行，有引用的普通多行也保持紧凑", () => {
-	for (const content of ["intro\n\n> quote", "intro\n\n- first\n  - nested", "intro\n\n```md\nliteral ^code", "first\n\tcontinued"]) {
+	for (const [content, prefix] of [["intro\n\n> quote", "- "], ["intro\n\n- first\n  - nested", "- "], ["intro\n\n```md\nliteral ^code", "- "], ["first\n\tcontinued", "- "]]) {
 		const raw = blocks.buildMemoBlock(content, "12:34");
-		assert.ok(raw.startsWith("-   12:34 " + content.split("\n")[0] + "\n"), raw);
+		assert.ok(raw.startsWith(prefix + "12:34 " + content.split("\n")[0] + "\n"), raw);
 		assert.equal(read(raw).content, content);
 	}
-	assert.equal(blocks.buildMemoBlockWithBlockId("first\nsecond", "12:34", "anchor"), "-   12:34 first\n\tsecond ^anchor");
+	assert.equal(blocks.buildMemoBlockWithBlockId("first\nsecond", "12:34", "anchor"), "- 12:34 first\n  second ^anchor");
 });
 
 test("有引用的硬换行保留在正文中，ID 放在首段结束处且不额外空一行", () => {
 	const content = "first  \nsecond\\\nthird";
 	const raw = blocks.buildMemoBlockWithBlockId(content, "12:34", "anchor");
-	assert.equal(raw, "-   12:34 first  \n\tsecond\\\n\tthird ^anchor");
+	assert.equal(raw, "- 12:34 first  \n  second\\\n  third ^anchor");
 	assert.equal(read(raw).content, content);
 	assert.equal(read(raw).existingBlockId, "anchor");
 });
@@ -71,7 +73,7 @@ test("有引用的硬换行保留在正文中，ID 放在首段结束处且不�
 test("段落结束处的尾随空白仍完整保留，后续围栏中的 caret 不被识别为 Memo ID", () => {
 	const content = "first\nsecond \t\n\n```md\nliteral ^code";
 	const raw = blocks.buildMemoBlockWithBlockId(content, "12:34", "anchor");
-	assert.ok(raw.startsWith("-   12:34 first\n\tsecond \t ^anchor\n"), raw);
+	assert.ok(raw.startsWith("- 12:34 first\n  second \t ^anchor\n"), raw);
 	assert.equal(read(raw).content, content);
 	assert.equal(read(raw).existingBlockId, "anchor");
 });

@@ -19,6 +19,7 @@ export type RandomReunionStatus =
 	| "failed";
 
 export interface RandomReunionSnapshot<TMemo extends MemoRecord = MemoRecord> {
+	batchId: number;
 	memos: TMemo[] | null;
 	status: RandomReunionStatus;
 	error: string | null;
@@ -38,6 +39,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	private status: RandomReunionStatus = "idle";
 	private error: string | null = null;
 	private runId = 0;
+	private batchId = 0;
 	private request: AbortController | null = null;
 	private shownBatches: string[][] = [];
 	private readonly openingMemoIds = new Set<string>();
@@ -46,6 +48,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 
 	getSnapshot(): RandomReunionSnapshot<TMemo> {
 		return {
+			batchId: this.batchId,
 			memos: this.memos,
 			status: this.status,
 			error: this.error,
@@ -53,17 +56,21 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 	}
 
 	clearMemos(): void {
-		this.cancelPending();
+		this.batchId++;
+		this.cancelPending(false);
 		this.memos = null;
 		this.status = "idle";
 		this.error = null;
 	}
 
-	cancelPending(): void {
+	cancelPending(render = true): void {
 		this.runId += 1;
 		this.request?.abort();
 		this.request = null;
-		if (this.status === "loading-candidates") this.status = this.memos === null ? "idle" : this.memos.length > 0 ? "ready" : "empty";
+		if (this.status === "loading-candidates") {
+			this.status = this.memos === null ? "idle" : this.memos.length > 0 ? "ready" : "empty";
+			if (render && !this.memos?.length) this.renderIfActive();
+		}
 	}
 
 	dispose(): void {
@@ -71,17 +78,18 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		this.shownBatches = [];
 	}
 
-	async refresh(): Promise<void> {
+	async refresh(renderLoading = true): Promise<void> {
 		if (this.status === "loading-candidates") {
 			return;
 		}
 		const runId = ++this.runId;
+		this.batchId++;
 		const request = new AbortController();
 		this.request = request;
 		const previousMemos = this.memos;
 		this.status = "loading-candidates";
 		this.error = null;
-		if (this.options.isRandomActive()) {
+		if (renderLoading && this.options.isRandomActive()) {
 			this.options.requestRender();
 		}
 		try {
@@ -120,7 +128,7 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 
 	applyMemoChanges(changes: ReadonlyMap<string, TMemo | null>, render = true): boolean {
 		if (this.memos === null || !this.memos.some(memo => changes.has(memo.id))) return false;
-		this.cancelPending();
+		this.cancelPending(false);
 		this.memos = this.memos.flatMap(memo => {
 			if (!changes.has(memo.id)) return [memo];
 			const current = changes.get(memo.id);
@@ -141,11 +149,11 @@ export class RandomReunionController<TMemo extends MemoRecord = MemoRecord> {
 		const changed = memos.length !== expected.length
 			|| memos.some((memo, index) => getMemoRenderRevision(memo) !== getMemoRenderRevision(expected[index]));
 		if (!changed) {
-			if (this.error === t("feedback.refreshFailed")) { this.error = null; this.renderIfActive(); }
+			if (this.error !== null) { this.error = null; this.renderIfActive(); }
 			return false;
 		}
 		const removed = memos.length < expected.length;
-		this.cancelPending();
+		this.cancelPending(false);
 		this.memos = memos;
 		this.status = memos.length > 0 ? "ready" : "empty";
 		this.error = removed ? t("random.sourceChanged") : null;

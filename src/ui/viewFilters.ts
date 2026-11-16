@@ -4,6 +4,7 @@ import { parseMemoCalendarDate } from "../utils/date";
 import type { TagSummary } from "../utils/tagTree";
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import type { SidebarNav } from "./viewNavigation";
+import type { ResultCountSummary } from "./ResultCountSummary";
 
 export type ScopeFilter =
 	| "all"
@@ -42,7 +43,7 @@ export interface RegularFilterState {
 }
 
 export interface RegularFilterCopy {
-	summary: string;
+	summary: ResultCountSummary;
 	emptyTitle: string;
 }
 
@@ -78,24 +79,38 @@ function collectTagKeys(
 }
 
 export function formatRegularFilterSummary(conditions: RegularFilterCondition[], count: number): string {
+	const { template, params } = getRegularFilterSummaryTemplate(conditions);
+	return t(template, { ...params, count });
+}
+
+function getRegularFilterSummaryTemplate(conditions: RegularFilterCondition[]): Pick<ResultCountSummary, "template" | "params"> {
 	if (conditions.length === 1) {
 		const condition = conditions[0];
 		if (condition.type === "tag") {
-			return t("filterSummary.tag", { tag: condition.text, count });
+			return { template: "filterSummary.tag", params: { tag: condition.text } };
 		}
 		if (condition.type === "search") {
-			return t("filterSummary.search", { query: condition.query, count });
+			return { template: "filterSummary.search", params: { query: condition.query } };
 		}
 		if (condition.type === "record-stats") {
-			return t("filterSummary.recordStats", { label: condition.text, count });
+			return { template: "filterSummary.recordStats", params: { label: condition.text } };
 		}
-		return t("filterSummary.label", { label: condition.text, count });
+		return { template: "filterSummary.label", params: { label: condition.text } };
 	}
 	const conditionText = conditions.map((condition) => condition.text).join(t("filterSummary.separator"));
 	const key = conditions.some((condition) => condition.type === "search")
 		? "filterSummary.comboSearch"
 		: "filterSummary.combo";
-	return t(key, { conditions: conditionText, count });
+	return { template: key, params: { conditions: conditionText } };
+}
+
+export function getRegularFilterCopy(state: RegularFilterState, count: number | null, pending = false): RegularFilterCopy | null {
+	const conditions = getRegularFilterConditions(state);
+	if (conditions.length === 0) return null;
+	return {
+		summary: { ...getRegularFilterSummaryTemplate(conditions), count, pending: count === null && pending },
+		emptyTitle: formatRegularFilterEmptyTitle(conditions, formatRegularFilterSummary(conditions, count ?? 0)),
+	};
 }
 
 export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition[], summary: string): string {
@@ -117,18 +132,6 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 		return t("recordStats.filter.empty", { label: condition.text });
 	}
 	return getScopeEmptyTitle(condition.filter);
-}
-
-export function getRegularFilterCopy(state: RegularFilterState, count: number): RegularFilterCopy | null {
-	const conditions = getRegularFilterConditions(state);
-	if (conditions.length === 0) {
-		return null;
-	}
-	const summary = formatRegularFilterSummary(conditions, count);
-	return {
-		summary,
-		emptyTitle: formatRegularFilterEmptyTitle(conditions, summary),
-	};
 }
 
 export function getRegularFilterConditions(state: RegularFilterState): RegularFilterCondition[] {
@@ -169,12 +172,14 @@ export function getRegularFilterConditions(state: RegularFilterState): RegularFi
 	return conditions;
 }
 
-export function formatMobileSearchSummary(
+export function getMobileSearchResultSummary(
 	query: string,
 	dateFilter: SearchDateFilter | null,
-	count: number,
+	count: number | null,
+	pending: boolean,
 	recordStatsFilter: RecordStatsSearchFilter | null = null,
-): string | null {
+): ResultCountSummary | null {
+	pending = count === null && pending;
 	const hasQuery = query.length > 0;
 	if (!hasQuery && dateFilter === null && recordStatsFilter === null) {
 		return null;
@@ -185,21 +190,15 @@ export function formatMobileSearchSummary(
 		recordStatsFilter === null ? null : getRecordStatsSearchFilterLabel(recordStatsFilter),
 	].filter((condition): condition is string => condition !== null);
 	if (conditions.length > 1) {
-		return t("mobileSearchSummary.combo", {
-			conditions: conditions.join(t("mobileSearchSummary.separator")),
-			count,
-		});
+		return { template: "mobileSearchSummary.combo", params: { conditions: conditions.join(t("mobileSearchSummary.separator")) }, count, pending };
 	}
 	if (hasQuery) {
-		return t("mobileSearchSummary.search", { query, count });
+		return { template: "mobileSearchSummary.search", params: { query }, count, pending };
 	}
 	if (dateFilter !== null) {
-		return t("mobileSearchSummary.date", { label: getSearchDateLabel(dateFilter), count });
+		return { template: "mobileSearchSummary.date", params: { label: getSearchDateLabel(dateFilter) }, count, pending };
 	}
-	return recordStatsFilter === null ? null : t("mobileSearchSummary.recordStats", {
-		label: getRecordStatsSearchFilterLabel(recordStatsFilter),
-		count,
-	});
+	return recordStatsFilter === null ? null : { template: "mobileSearchSummary.recordStats", params: { label: getRecordStatsSearchFilterLabel(recordStatsFilter) }, count, pending };
 }
 
 export function formatMobileSearchEmptyTitle(

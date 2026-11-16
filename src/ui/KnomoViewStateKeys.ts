@@ -74,7 +74,8 @@ export function getCardFlowStateKey(options: CardFlowStateKeyOptions): string {
 		]);
 	}
 	if (options.presentation.type === "empty") {
-		return getStateKey(["empty", options.presentation.title, options.presentation.description]);
+		return getStateKey(["empty", options.presentation.title, options.presentation.description,
+			getCardFlowHeadersStateKey(options.presentation.headers ?? [])]);
 	}
 	return getStateKey([
 		"items",
@@ -93,11 +94,12 @@ function getChangeIntent(previousViewStateKey: string, currentViewStateKey: stri
 
 function getCardFlowHeadersStateKey(headers: readonly CardFlowHeader[]): string {
 	return headers.map((header) => {
+		if (header.type === "result-summary") return getStateKey([header.type, JSON.stringify(header.summary)]);
 		if (header.type === "summary") {
 			return getStateKey([header.type, header.text, header.action?.label ?? "", header.action?.action ?? ""]);
 		}
 		if (header.type === "random-toolbar") {
-			return getStateKey([header.type, header.count]);
+			return getStateKey([header.type, JSON.stringify(header.summary)]);
 		}
 		if (header.type === "trash-toolbar") return getStateKey([header.type, header.count, String(header.busy)]);
 		if (header.type === "random-day") return getStateKey([header.type, header.selectedDate, JSON.stringify(header.stats)]);

@@ -1,3 +1,5 @@
+import { normalizeImagePath } from "../utils/imagePath";
+
 export interface CardImageLoadItem {
 	imageEl: HTMLImageElement;
 	src: string;
@@ -279,7 +281,7 @@ export class CardImageLoadQueue {
 	}
 
 	invalidateResourcePaths(paths: readonly string[]): void {
-		const normalizedPaths = new Set(paths.map(normalizeResourcePath));
+		const normalizedPaths = new Set(paths.map(normalizeImagePath));
 		for (const task of this.failedTasks) {
 			if (matchesResourcePath(task.item, normalizedPaths)) this.failedTasks.delete(task);
 		}
@@ -683,9 +685,5 @@ function getPriorityRank(priority: CardImageLoadPriority): number {
 }
 
 function matchesResourcePath(item: CardImageLoadItem, paths: ReadonlySet<string>): boolean {
-	return item.resourcePath !== undefined && paths.has(normalizeResourcePath(item.resourcePath));
-}
-
-function normalizeResourcePath(path: string): string {
-	return path.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+	return item.resourcePath !== undefined && paths.has(normalizeImagePath(item.resourcePath));
 }

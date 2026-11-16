@@ -9,6 +9,14 @@ interface KnomoErrorDefinition {
 }
 
 export const KNOMO_ERROR_DEFINITIONS = {
+	memo_anchor_preservation_failed: {
+		messageKey: "service.memoAnchorPreservationFailed",
+		fallbackMessage: "Cannot save while preserving the existing block reference. Keep the first paragraph and its reference unchanged, then try again. Daily was not modified.",
+	},
+	memo_reference_ambiguous: {
+		messageKey: "service.memoReferenceAmbiguous",
+		fallbackMessage: "This block reference appears more than once in the Daily note. Make the block identifiers unique before creating a reference. Daily was not modified.",
+	},
 	daily_insert_unsafe: {
 		messageKey: "service.dailyInsertUnsafe",
 		fallbackMessage: "Cannot save: the current Daily Markdown structure does not provide a safe insertion position. Daily was not modified; your input has been preserved.",

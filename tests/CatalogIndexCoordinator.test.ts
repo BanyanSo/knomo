@@ -7,6 +7,45 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("阅读连续性计量：同字节重复保存与真实正文变化分别记录解析、发布及查询", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Journal/2026-08-09.md", body = "## Memos\n- 09:00 before";
+	const fixture = await createCoordinatorFixture([{ path, content: body, mtime: 10 }]);
+	const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store), parser = new DiaryMemoParser(async bytes => sha256(bytes));
+	const read = new CatalogReadService({ catalog });
+	let parses = 0, publications = 0, queries = 0;
+	const parse = parser.parse.bind(parser), replace = catalog.replaceFile.bind(catalog);
+	parser.parse = (...args) => { parses++; return parse(...args); };
+	catalog.replaceFile = (...args) => { publications++; return replace(...args); };
+	const pending: Promise<unknown>[] = [];
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, parser, async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), {
+		onCatalogSettled: () => { queries++; pending.push(read.query({ limit: 50 })); },
+	});
+	const sample = async (input: string) => ({ input, reads: fixture.readCount(), parses, publications, queries,
+		catalogRevision: await store.getCatalogRevision(), sourceRevision: (await store.getFile(path))?.sourceRevision });
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle(); await Promise.all(pending);
+		const trace = [await sample("initial")];
+		for (const mtime of [20, 30, 40]) {
+			fixture.setFile(path, body, mtime); fixture.emitVaultEvent("modify", fixture.file(path));
+			const reads = fixture.readCount(); await waitUntil(async () => fixture.readCount() > reads);
+			await coordinator.waitForIdle(); await Promise.all(pending); trace.push(await sample("same-bytes"));
+		}
+		assert.equal(trace.at(-1)!.sourceRevision, trace[0]!.sourceRevision);
+		fixture.setFile(path, body.replace("before", "after"), 50); fixture.emitVaultEvent("modify", fixture.file(path));
+		await waitUntil(async () => (await store.query({ limit: 10 })).items[0]?.content === "after");
+		await coordinator.waitForIdle(); await Promise.all(pending); trace.push(await sample("changed-bytes"));
+		assert.notEqual(trace.at(-1)!.sourceRevision, trace[0]!.sourceRevision);
+		assert.equal((await read.query({ limit: 10 })).items[0]!.content, "after");
+		t.diagnostic(JSON.stringify(trace));
+	} finally { fixture.unload(); }
+});
+
 test("热启动和显式刷新仅核对文件头，未变化 Daily 不重读正文", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -1539,7 +1578,7 @@ test("移动端 Catalog 数据库名称使用实际自定义配置目录", async
 	assert.notEqual(createCatalogDatabaseName(makeApp("custom-config")), createCatalogDatabaseName(makeApp(".obsidian")));
 });
 
-test("Things 旧解析版本重建未编辑 Daily，后续 warm start 不重解析", async () => {
+test("旧解析版本重建任务与前缀锚点，未编辑 Daily 的后续 warm start 不重解析", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1548,6 +1587,7 @@ test("Things 旧解析版本重建未编辑 Daily，后续 warm start 不重解�
 	const store = new InMemoryMemoCatalogStore();
 	const files = [
 		{ path: "Journal/2026-08-09.md", content: "## Memos\n- 09:00 unchanged\n  - [x] task", mtime: 10 },
+		{ path: "Journal/2026-08-10.md", content: "- 09:00 ^main\n  > quote\n- 10:00 intro\n  \n  - child ^child", mtime: 10 },
 	];
 	const first = await createCoordinatorFixture(files);
 	const firstCoordinator = new CatalogIndexCoordinator(
@@ -1558,17 +1598,20 @@ test("Things 旧解析版本重建未编辑 Daily，后续 warm start 不重解�
 		{ now: () => 1_000, fullAuditIntervalMs: 10_000 },
 	);
 	firstCoordinator.start(first.owner);
-	await firstCoordinator.initialize();
-	await firstCoordinator.waitForIdle();
-	assert.equal(first.readCount(), 1);
-	first.unload();
+	try {
+		await firstCoordinator.initialize();
+		await firstCoordinator.waitForIdle();
+		assert.equal(first.readCount(), files.length);
+	} finally { first.unload(); }
 	const { buildCatalogPartition } = await import("../src/services/MemoCatalogService");
 	const { CATALOG_PARSER_VERSION } = await import("../src/services/DiaryMemoParser");
-	const batch = await store.getFileRevisionBatch(files[0].path);
-	assert.ok(batch);
-	await store.replaceFilePartition(buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
-		observations: batch.observations.map(item => ({ ...item, tasks: [] })), parserVersion: CATALOG_PARSER_VERSION - 1,
-		settingsFingerprint: batch.file.settingsFingerprint, auditedAt: batch.file.auditedAt }));
+	for (const file of files) {
+		const batch = await store.getFileRevisionBatch(file.path);
+		assert.ok(batch);
+		await store.replaceFilePartition(buildCatalogPartition({ inventory: batch.file, sourceRevision: batch.file.sourceRevision,
+			observations: batch.observations.map(item => ({ ...item, tasks: [], existingBlockId: null, blockAnchor: undefined })),
+			parserVersion: CATALOG_PARSER_VERSION - 1, settingsFingerprint: batch.file.settingsFingerprint, auditedAt: batch.file.auditedAt }));
+	}
 
 	const second = await createCoordinatorFixture(files);
 	const secondCoordinator = new CatalogIndexCoordinator(
@@ -1579,11 +1622,22 @@ test("Things 旧解析版本重建未编辑 Daily，后续 warm start 不重解�
 		{ now: () => 2_000, fullAuditIntervalMs: 10_000 },
 	);
 	secondCoordinator.start(second.owner);
-	await secondCoordinator.initialize();
-	await secondCoordinator.waitForIdle();
-
-	assert.equal(second.readCount(), 1);
-	assert.equal((await store.query({ hasTask: true, limit: 50 })).items.length, 1);
-	assert.equal((await store.query({ limit: 50 })).items[0]?.content, "unchanged\n- [x] task");
-	second.unload();
+	try {
+		await secondCoordinator.initialize();
+		await secondCoordinator.waitForIdle();
+		assert.equal(second.readCount(), files.length);
+		assert.equal((await store.query({ hasTask: true, limit: 50 })).items.length, 1);
+		assert.equal((await store.getFileRevisionBatch(files[0].path))!.observations[0].content, "unchanged\n- [x] task");
+		assert.deepEqual((await store.getFileRevisionBatch(files[1].path))!.observations.map(item => [item.content, item.existingBlockId, item.blockAnchor?.kind]),
+			[["> quote", "main", "header"], ["intro\n\n- child ^child", "child", "body"]]);
+	} finally { second.unload(); }
+	const third = await createCoordinatorFixture(files);
+	const thirdCoordinator = new CatalogIndexCoordinator(third.app, new MemoCatalogService(store), new DiaryMemoParser(),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { now: () => 3_000, fullAuditIntervalMs: 10_000 });
+	thirdCoordinator.start(third.owner);
+	try {
+		await thirdCoordinator.initialize();
+		await thirdCoordinator.waitForIdle();
+		assert.equal(third.readCount(), 0);
+	} finally { third.unload(); }
 });

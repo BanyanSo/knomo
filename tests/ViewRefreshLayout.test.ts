@@ -159,10 +159,11 @@ test("独立移动搜索按阅读卡偏移接续内部提交及外部全换键�
 	const traces: unknown[] = [];
 	try {
 		for (const entry of ["internal", "external", "cross-file"] as const) for (const edit of ["grow", "shrink", "below", "same"] as const) {
-			const options = { entry, edit, chunked: entry !== "internal" };
+			const options = { entry, edit, chunked: entry !== "internal", forceChunkAfterEdited: entry === "external" && edit === "below" };
 			const result = await h.page.evaluate(options => window.refreshFixture.mobileRevisionGeometry(options), options);
 			const evidence = JSON.stringify({ options, result });
 			traces.push({ options, result });
+			if (options.forceChunkAfterEdited) assert.equal(result.forcedChunk, true, evidence);
 			for (const sample of result.samples) assert.ok(Math.abs(sample.offset! - result.samples[0]!.offset!) <= 1, evidence);
 			const last = result.samples.at(-1)!;
 			assert.equal(last.count, 30, evidence);

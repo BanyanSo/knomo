@@ -1,4 +1,4 @@
-import { Platform } from "obsidian";
+import { Platform, addIcon } from "obsidian";
 import { KnomoView } from "../../src/ui/KnomoView";
 import { MemoCardImageCache } from "../../src/ui/KnomoCardImages";
 import { RecentTimeFlowDecorations } from "../../src/ui/RecentTimeFlowPresentation";
@@ -22,6 +22,8 @@ import { DiaryMemoParser } from "../../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../../src/services/MemoCatalogStore";
 import { CatalogReadService } from "../../src/services/CatalogReadService";
+import type { BeaconSnapshot } from "../../src/types/beacon";
+import { registerKnomoIcons } from "../../src/icons";
 
 export function installDomHelpers(): void {
 	Object.assign(HTMLElement.prototype, {
@@ -52,6 +54,151 @@ export function installDomHelpers(): void {
 		doc: { configurable: true, get(this: HTMLElement) { return this.ownerDocument; } },
 		win: { configurable: true, get(this: HTMLElement) { return this.ownerDocument.defaultView; } },
 	});
+	const createSvg = function(this: Element, tag: string, options: { cls?: string; attr?: Record<string, string> } = {}) {
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", tag);
+		if (options.cls) svg.setAttribute("class", options.cls);
+		for (const [key, value] of Object.entries(options.attr ?? {})) svg.setAttribute(key, value);
+		this.append(svg); return svg;
+	};
+	Object.assign(HTMLElement.prototype, { createSvg }); Object.assign(SVGElement.prototype, { createSvg });
+}
+
+function prepareBeaconSurface(flow: HTMLElement, options: { mobile: boolean; dark: boolean; reduce: boolean }) {
+	registerKnomoIcons();
+	document.body.className = options.dark ? "theme-dark" : "theme-light";
+	const host = flow.parentElement!;
+	host.className = `knomo-plugin ${options.mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}${options.reduce ? " knomo-reduce-glass" : ""}`;
+	host.style.width = flow.style.width = options.mobile ? "360px" : "700px";
+	document.body.style.setProperty("--background-primary", options.dark ? "#242424" : "#fff");
+	document.body.style.setProperty("--background-secondary", options.dark ? "#303030" : "#eee");
+	document.body.style.setProperty("--text-normal", options.dark ? "#eee" : "#222");
+	document.body.style.setProperty("--text-muted", options.dark ? "#bbb" : "#666");
+	document.body.style.setProperty("--interactive-accent", "#8468dc");
+}
+
+function hydrateKnomoIcons(flow: HTMLElement) {
+	for (const icon of Array.from(flow.querySelectorAll<HTMLElement>("[data-icon]"))) {
+		const paths = (addIcon as unknown as { icons: Record<string, string> }).icons[icon.getAttribute("data-icon")!];
+		if (paths && !icon.querySelector("svg")) { const svg = icon.createSvg("svg", { attr: { viewBox: "0 0 100 100", "aria-hidden": "true" } }); svg.innerHTML = paths; }
+	}
+}
+
+export async function beaconGeometry(options: { mobile: boolean; dark: boolean; today: boolean; loaded: boolean; reduce: boolean }) {
+	const h = fixture(options.mobile), { view, flow } = h;
+	prepareBeaconSurface(flow, options);
+	const now = new Date(), date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+	const memos = Array.from({ length: 35 }, (_, i) => h.makeMemo(i, 0, false, date));
+	const selected = options.loaded ? memos[8]! : h.makeMemo(80, 0, false, "2025-01-01");
+	let today = options.today;
+	let snapshot: BeaconSnapshot = { state: "unset", selection: 0 };
+	Object.assign(view, {
+		beaconService: { getSnapshot: () => snapshot }, getPageFeedbackContext: () => "beacon",
+		memos, getCardFlowViewStateKey: () => "default",
+		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => memo.id === selected.id ? { status: today ? "today" : "past", label: "Time buoy" } : undefined,
+	});
+	// 使用生产分组和头部接线，卡片仍走真实 KnomoCard。
+	delete view.prepareRecentTimeFlow;
+	Object.assign(view, { settingsService: { getSettings: () => ({ recentTimeFlowEnabled: true }) }, getTodayTimeBuoyItems: () => [] });
+	delete view.renderCardFlowHeaders;
+	const render = (items = memos) => {
+		view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: items }, null);
+		hydrateKnomoIcons(flow);
+	};
+	const sample = () => {
+		const cards = Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card"));
+		const rect = flow.getBoundingClientRect();
+		const anchor = cards.find(card => !card.hasAttribute("data-beacon-top") && card.getBoundingClientRect().bottom > rect.top)!;
+		const top = flow.querySelector<HTMLElement>("[data-beacon-top]");
+		const beacon = top?.querySelector<HTMLElement>(".knomo-card-beacon");
+		const buoy = top?.querySelector<HTMLElement>(".knomo-card-time-buoy");
+		return { anchor: anchor?.getAttribute("data-memo-id"), offset: anchor ? anchor.getBoundingClientRect().top - rect.top : 0,
+			scroll: flow.scrollTop, count: cards.length, topCount: flow.querySelectorAll("[data-beacon-top]").length,
+			selectedCount: cards.filter(card => card.getAttribute("data-memo-id") === selected.id).length,
+			wave: top?.querySelectorAll(".knomo-card-time-buoy-wave").length ?? 0,
+			light: top?.querySelectorAll(".knomo-card-beacon-light").length ?? 0,
+			time: top?.querySelector(".knomo-card-time")?.textContent,
+			doubleGap: beacon && buoy ? buoy.getBoundingClientRect().left - beacon.getBoundingClientRect().right : null,
+			decorations: Array.from(flow.querySelectorAll(".knomo-recent-flow-decoration")).map(item => item.textContent),
+			lightHeight: top?.querySelector(".knomo-card-beacon-light")?.getBoundingClientRect().height,
+			position: top ? getComputedStyle(top).position : null,
+		};
+	};
+	render(); await frames(); flow.scrollTop = 1400; const before = sample();
+	snapshot = { state: "ready", selection: 1, memo: selected }; render(); await frames(); const pinned = sample();
+	flow.scrollTop = 0; await frames();
+	const visual = sample();
+	today = !today; render(); const dateFlip = sample();
+	today = options.today; render();
+	const oldTop = flow.querySelector<HTMLElement>("[data-beacon-top]")!, oldHeight = oldTop.getBoundingClientRect().height;
+	const input = document.createElement("input"); document.body.append(input); input.focus();
+	view.renderCardFlow = () => {};
+	snapshot = { state: "locating", selection: 1 }; view.handleBeaconChanged();
+	const deferred = { hidden: getComputedStyle(oldTop.querySelector<HTMLElement>(".knomo-card-body")!).visibility === "hidden",
+		inert: oldTop.hasAttribute("inert"), heightChange: oldTop.getBoundingClientRect().height - oldHeight, focused: document.activeElement === input };
+	snapshot = { state: "ready", selection: 1, memo: selected }; render(); input.remove();
+	snapshot = { state: "unset", selection: 2 }; render(); await frames(); const removed = sample();
+	// 相关旧源普通卡/浮标卡未跟上时，新旧正文不能双显。
+	const changed = { ...selected, id: selected.id + "-new", contentSnapshot: "New confirmed Beacon", catalog: {
+		...selected.catalog!, renderKey: selected.id + "-new", key: selected.id + "-new", observationHandle: {
+			...selected.catalog!.observationHandle, sourceRevision: "next-revision" },
+	} };
+	snapshot = { state: "ready", selection: 3, memo: changed }; render(options.loaded ? memos : [selected, ...memos]);
+	const delayed = { top: flow.querySelectorAll("[data-beacon-top]").length, status: flow.querySelector(".knomo-beacon-status")?.textContent,
+		old: flow.querySelectorAll(`[data-memo-id='${CSS.escape(selected.id)}']`).length,
+		new: Array.from(flow.querySelectorAll(".knomo-card-content")).filter(item => item.textContent === changed.contentSnapshot).length };
+	// 恢复纯视觉状态用于截图；不增加功能标题或扩大普通分页窗口。
+	snapshot = { state: "ready", selection: 4, memo: selected }; render(); flow.scrollTop = 0; await frames();
+	return { before, pinned, visual, dateFlip, removed, delayed, deferred, ordinaryCount: memos.length };
+}
+
+export async function beaconStylePreview(options: { mobile: boolean; dark: boolean; today: boolean }) {
+	const h = fixture(options.mobile), { view, flow } = h;
+	prepareBeaconSurface(flow, { ...options, reduce: options.mobile });
+	for (const name of ["--font-text", "--font-interface", "--font-text-theme", "--font-interface-theme"]) {
+		document.body.style.setProperty(name, 'Arial, "Microsoft YaHei", sans-serif');
+	}
+	document.body.style.setProperty("--text-faint", options.dark ? "#8e99ab" : "#727780");
+	document.body.style.setProperty("--background-modifier-hover", "rgba(128, 128, 128, 0.12)");
+	document.body.style.setProperty("--interactive-accent", options.dark ? "#448aff" : "#8468dc");
+	flow.style.padding = "12px";
+	const now = new Date(), date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+	const beacon = h.makeMemo(50, 0, false, "2026-11-12"), buoy = h.makeMemo(51, 0, false, "2026-11-10"), ordinary = h.makeMemo(52, 0, false, date);
+	beacon.contentSnapshot = "每天留一点时间，做真正重要的事。\n先完成，再完善。保持记录，也保持行动。 #长期主义 #专注";
+	buoy.contentSnapshot = "今天，重新看见之前留给自己的提醒。\n保持记录，也保持行动。 #提醒";
+	ordinary.contentSnapshot = "读完一章书，记下一个值得实践的想法。 #阅读";
+	beacon.catalog!.observation.time = "08:30"; buoy.catalog!.observation.time = "20:15"; ordinary.catalog!.observation.time = "09:18";
+	const snapshot: BeaconSnapshot = { state: "ready", selection: 1, memo: beacon };
+	Object.assign(view, {
+		beaconService: { getSnapshot: () => snapshot }, getPageFeedbackContext: () => "beacon-style", memos: [ordinary],
+		settingsService: { getSettings: () => ({ recentTimeFlowEnabled: true }) },
+		getTodayTimeBuoyItems: () => [{ memo: buoy }],
+		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => memo === buoy || (memo === beacon && options.today) ? { status: "today", label: "今日时光浮标" } : undefined,
+	});
+	delete view.prepareRecentTimeFlow;
+	view.memoMarkdownRenderer.queueMemoMarkdown = (memo: MemoViewItem, container: HTMLElement) => {
+		container.replaceChildren();
+		for (const line of memo.contentSnapshot.split("\n")) {
+			const p = container.createEl("p");
+			for (const text of line.split(/(#[^\s#]+)/u)) {
+				if (text.startsWith("#")) p.createSpan({ cls: "tag", text }); else p.append(text);
+			}
+		}
+	};
+	view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: [buoy, ordinary] }, null);
+	hydrateKnomoIcons(flow); await frames();
+	for (const menu of Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card-menu"))) menu.setText("···");
+	const card = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
+	const light = card.querySelector<SVGSVGElement>(".knomo-card-beacon-light");
+	const paths = Array.from(light?.querySelectorAll("path") ?? []).map(path => {
+		const style = getComputedStyle(path);
+		return { opacity: Number(style.opacity), stroke: style.stroke, fill: style.fill };
+	});
+	return { paths, height: light?.getBoundingClientRect().height ?? 0,
+		clearance: (light ?? card.querySelector(".knomo-card-time-buoy-wave")!).getBoundingClientRect().top - card.querySelector(".knomo-card-body")!.getBoundingClientRect().bottom,
+		pointerEvents: getComputedStyle(light ?? card.querySelector(".knomo-card-time-buoy-wave")!).pointerEvents,
+		beaconCount: card.querySelectorAll(".knomo-card-beacon").length, waveCount: card.querySelectorAll(".knomo-card-time-buoy-wave").length,
+		cardCount: flow.querySelectorAll(".knomo-card").length, time: card.querySelector(".knomo-card-time")!.textContent,
+		accent: getComputedStyle(card.querySelector(".knomo-card-beacon")!).color };
 }
 
 const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));

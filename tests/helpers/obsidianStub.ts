@@ -138,7 +138,7 @@ function buildObsidianStub(): string {
 		"  return momentDate(date);",
 		"};",
 		"function setIcon(el, icon) { if (el && typeof el.setAttr === 'function') el.setAttr('data-icon', icon); return el; }",
-		"function addIcon() {}",
+		"function addIcon(id, svg) { addIcon.icons[id] = svg; } addIcon.icons = {};",
 		"class Notice { constructor(message) { this.message = message; Notice.messages.push(message); } }",
 		"Notice.messages = [];",
 		"const Platform = { isMobile: false, isDesktop: true };",

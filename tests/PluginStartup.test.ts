@@ -38,6 +38,49 @@ function deferred() {
 // 只推进一个事件循环边界，不依赖任意毫秒延迟。
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
+test("生产启动与外部配置入口加载灯标，损坏引用和读取失败只降级灯标", async t => {
+	const h = harness(t);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	const beacon = (h.plugin as unknown as { beaconService: import("../src/services/BeaconService").BeaconService }).beaconService;
+	assert.equal(beacon.getSnapshot().state, "unset");
+	const saved = h.saved() as Record<string, unknown>;
+	const withBeacon = { ...saved, beacon: { invalid: true }, unknownField: "preserve" };
+	await h.plugin.saveData(withBeacon);
+	await h.plugin.onExternalSettingsChange();
+	assert.equal(beacon.getSnapshot().state, "unavailable");
+	assert.equal(beacon.getSnapshot().logicalDate, undefined);
+	assert.deepEqual((h.saved() as Record<string, unknown>).beacon, withBeacon.beacon);
+	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
+	const read = h.plugin.loadData;
+	h.plugin.loadData = async () => { throw new Error("unavailable"); };
+	await h.plugin.onExternalSettingsChange();
+	assert.equal(beacon.getSnapshot().reason, "unreadable");
+	await assert.rejects(beacon.remove(beacon.getSnapshot().selection));
+	assert.deepEqual((h.saved() as Record<string, unknown>).beacon, withBeacon.beacon);
+	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
+	h.plugin.loadData = read;
+	await h.plugin.onExternalSettingsChange();
+	await beacon.remove(beacon.getSnapshot().selection);
+	assert.equal(beacon.getSnapshot().state, "unset");
+	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
+	h.plugin.unload();
+});
+
+test("等待灯标配置读取时卸载，不继续注册视图、事件或运行时", async t => {
+	const h = harness(t), entered = deferred(), release = deferred();
+	let reads = 0;
+	h.plugin.loadData = async () => {
+		if (++reads === 2) { entered.resolve(); await release.promise; }
+		return h.saved();
+	};
+	t.after(() => release.resolve());
+	const loading = h.plugin.onload(); h.release(); await entered.promise;
+	h.plugin.unload(); release.resolve(); await loading;
+	assert.equal(h.calls.includes("view"), false);
+	assert.equal(h.layouts.length, 0);
+	assert.equal(h.getPrimary().getLifecycle().writable, false);
+});
+
 for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {
 	test(`生产装配的 Monthly 事件在 ${mode} 时保留待协调状态，卸载后不再发布`, async t => {
 		const h = harness(t, mode === "disabled" ? "disabled" : "ready", true);

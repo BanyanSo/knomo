@@ -409,6 +409,55 @@ test("renders Time buoy card states with the project icon and a today wave witho
 	assert.equal(past.find(".knomo-card-time-buoy-wave"), null);
 });
 
+test("灯标复用完整卡片与时间精度，今日浮标只显示一层波纹和双图标", async () => {
+	await ensureObsidianStub();
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	for (const status of [undefined, "today", "upcoming", "past"] as const) for (const time of ["08:30", "08:30:45"]) {
+		const root = new TestElement("div"), memo = createReferenceMemo();
+		memo.catalog!.observation.time = time;
+		renderKnomoMemoCard(root.asHtml(), memo, {
+			generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+			beacon: { selection: 7, top: true }, timePresentation: { mode: "full" },
+			timeBuoy: status ? { status, label: "Time buoy " + status } : undefined,
+			formatDisplayTime: value => value, getMarkdownPriority: () => "normal",
+			getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }), queueMemoMarkdown: () => {},
+			renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+		});
+		assert.equal(root.find("article")?.hasClass("has-beacon"), true);
+		assert.equal(root.find(".knomo-card-beacon-light") !== null, status !== "today");
+		assert.equal(root.find(".knomo-card-time-buoy-wave") !== null, status === "today");
+		assert.equal(root.find(".knomo-card-time-buoy") !== null, status !== undefined);
+		assert.equal(root.find(".knomo-card-beacon")?.getAttr("aria-label"), "Beacon");
+		assert.equal(root.find(".knomo-card-beacon")?.getAttr("tabindex"), null);
+		assert.equal(root.find("[data-memo-action='set-beacon']"), null);
+		assert.equal(root.find("[data-memo-action='remove-beacon']")?.getAttr("data-beacon-selection"), "7");
+		assert.match(root.find(".knomo-card-time")?.getText() ?? "", new RegExp(time + "$"));
+		assert.ok(root.find("[data-memo-action='edit']"));
+		assert.ok(root.find(".knomo-card-body"));
+	}
+});
+
+test("灯标菜单仅接纳有效 Catalog Memo，筛选卡片只改变操作文案", async () => {
+	await ensureObsidianStub();
+	const { getMemoCardActions } = await import("../src/ui/KnomoCardMetadata");
+	const memo = createReferenceMemo();
+	assert.ok(getMemoCardActions(memo).some(item => item.action === "set-beacon"));
+	assert.ok(getMemoCardActions(memo, false, false, true).some(item => item.action === "remove-beacon"));
+	assert.equal(getMemoCardActions({ ...memo, status: "deleted" }).some(item => item.action.endsWith("beacon")), false);
+	assert.equal(getMemoCardActions({ ...memo, catalog: undefined }).some(item => item.action.endsWith("beacon")), false);
+	const root = new TestElement("div");
+	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
+	const card = renderKnomoMemoCard(root.asHtml(), memo, {
+		generation: 1, renderIndex: 0, includeActions: true, randomCard: false, activeMenuMemoId: null,
+		beacon: { selection: 2, top: false }, formatDisplayTime: value => value, getMarkdownPriority: () => "normal",
+		getMemoCardPreview: item => ({ text: item.contentSnapshot, images: [] }), queueMemoMarkdown: () => {},
+		renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
+	});
+	assert.equal(root.find("article")?.hasClass("has-beacon"), false);
+	assert.equal(root.find(".knomo-card-beacon"), null);
+	assert.equal(card.getAttr("data-beacon-top"), null);
+});
+
 test("trash memo cards expose restore and single-item permanent purge actions", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoTrashMemoCard } = await import("../src/ui/KnomoCard");

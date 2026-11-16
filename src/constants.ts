@@ -1,6 +1,9 @@
 export const KNOMO_VIEW_TYPE = "knomo-view";
 export const KNOMO_VIEW_DISPLAY_TEXT = "Knomo";
 
+// 纯元数据和分享构建复用名称，不引入 Obsidian 图标注册依赖。
+export const KNOMO_BEACON_ICON = "knomo-beacon";
+
 export const SETTINGS_VERSION = 4;
 export const DEFAULT_DAILY_HEADING = "## Memos";
 export const DEFAULT_MEMO_TIME_FORMAT = "HH:mm:ss";

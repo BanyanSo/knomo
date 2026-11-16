@@ -28,7 +28,7 @@ export class ConfirmedMemoPresentation {
 	remove(path: string): void { this.files.delete(path); }
 	getMemos(): MemoViewItem[] { return [...this.files.values()].flatMap(file => [...file.memos.values()]); }
 
-	apply(input: ConfirmedDailyMemoPresentation, cached: readonly MemoViewItem[], capabilities: CatalogCapabilities) {
+	apply(input: ConfirmedDailyMemoPresentation, cached: readonly MemoViewItem[], capabilities: CatalogCapabilities, includeChanged = true) {
 		const { change, observations } = input;
 		const previous = this.files.get(change.sourcePath);
 		const replacements = new Map(change.replacements.map(item => [observationHandleKey(item.before), item.after]));
@@ -46,9 +46,9 @@ export class ConfirmedMemoPresentation {
 			const current = handle ? memos.get(observationHandleKey(handle)) ?? makeMemo(handle)
 				: memo.catalog?.observationHandle.sourceRevision === change.sourceRevision ? memo : null;
 			changes.set(memo.id, current);
-			if (current) memos.set(current.id, current);
+			if (current && (includeChanged || change.changed === null || current.id !== observationHandleKey(change.changed))) memos.set(current.id, current);
 		}
-		const changed = change.changed === null ? [] : [makeMemo(change.changed)];
+		const changed = change.changed === null || !includeChanged ? [] : [makeMemo(change.changed)];
 		for (const memo of changed) memos.set(memo.id, memo);
 		// 连续保存只组合已确认提交给出的对应关系，绝不按正文或旧行号猜测 occurrence。
 		const translations = new Map<string, ObservationHandle | null>();

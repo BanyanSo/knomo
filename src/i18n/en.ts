@@ -1,6 +1,15 @@
 import { zhCN, type TranslationKey } from "./zh-CN";
 
 export const en: Record<TranslationKey, string> = {
+	"beacon.name": "Beacon",
+	"beacon.set": "Set as Beacon",
+	"beacon.remove": "Remove from Beacon",
+	"beacon.locating": "Locating Beacon…",
+	"beacon.unavailable": "Beacon temporarily unavailable",
+	"beacon.unlocated": "Unable to locate Beacon",
+	"beacon.unlocatedDate": "Unable to locate the Beacon for {{date}}",
+	"beacon.recovery": "You can set a new Beacon from any available memo’s menu or remove the current Beacon.",
+	"beacon.saveFailed": "Unable to save Beacon. Refresh and try again.",
 	"share.title": "Share image",
 	"share.paper": "Paper",
 	"share.reflection": "Reflection",

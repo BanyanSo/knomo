@@ -52,9 +52,71 @@ body {
 	margin-block-end: var(--size-4-4);
 }
 
-.knomo-plugin .knomo-card.has-time-buoy {
+.knomo-plugin .knomo-card.has-time-buoy,
+.knomo-plugin .knomo-card.has-beacon {
 	padding-block-end: 18px;
 }
+
+/* 灯标沿用普通卡片与浮标的底部装饰尺寸，不影响正文和命中区域。 */
+.knomo-plugin .knomo-card-beacon {
+	position: absolute;
+	right: 12px;
+	bottom: 0;
+	z-index: 2;
+	display: block;
+	width: 18px;
+	height: 18px;
+	color: var(--knomo-accent, var(--interactive-accent));
+	pointer-events: none;
+}
+
+.knomo-plugin .knomo-card.has-time-buoy .knomo-card-beacon { right: 36px; }
+.knomo-plugin .knomo-card-beacon > svg { display: block; width: 100%; height: 100%; }
+
+.knomo-plugin .knomo-card-beacon-light {
+	position: absolute;
+	right: 21px;
+	bottom: 0;
+	left: 0;
+	z-index: 1;
+	display: block;
+	width: calc(100% - 21px);
+	height: 12px;
+	overflow: hidden;
+	border-radius: 0 0 8px 8px;
+	color: var(--knomo-accent, var(--interactive-accent));
+	pointer-events: none;
+}
+
+.knomo-plugin .knomo-card.has-time-buoy .knomo-card-beacon-light { right: 45px; width: calc(100% - 45px); }
+
+.knomo-plugin .knomo-card[data-beacon-status] * { visibility: hidden; }
+.knomo-plugin .knomo-card[data-beacon-status]::after {
+	content: attr(data-beacon-status);
+	position: absolute;
+	top: 12px;
+	left: 12px;
+	color: var(--text-muted);
+	font-size: var(--knomo-text-ui-base);
+	pointer-events: none;
+}
+
+.knomo-plugin .knomo-card-beacon-fill,
+.knomo-plugin .knomo-card-beacon-ray {
+	fill: currentColor;
+	stroke: none;
+	opacity: 0.04;
+}
+
+.knomo-plugin .knomo-card-beacon-ray { opacity: 0.08; }
+
+.knomo-plugin .knomo-beacon-status {
+	margin-block: var(--size-4-3);
+	color: var(--text-muted);
+	font-size: var(--knomo-text-ui-base);
+}
+
+.knomo-plugin .knomo-beacon-status button { min-height: 44px; margin-block-start: var(--size-4-2); }
 
 .knomo-plugin .knomo-card-time-buoy {
 	position: absolute;
@@ -3352,7 +3414,8 @@ body .knomo-mobile-create-fab.is-hidden {
 		padding: var(--size-4-2) var(--size-4-3);
 	}
 
-	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-time-buoy {
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-time-buoy,
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-beacon {
 		padding-block-end: 18px;
 	}
 

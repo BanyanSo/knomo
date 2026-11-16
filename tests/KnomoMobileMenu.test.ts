@@ -19,7 +19,7 @@ test("原生菜单有无自身锚点均显示固定的引用和复制链接", as
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
 			assert.equal(menu.items[0].title, "Reference");
-			assert.equal(menu.items[5].title, "Copy link");
+			assert.equal(menu.items.find(item => item.icon === "link")?.title, "Copy link");
 			h.controller.close();
 		}
 	} finally { h.close(); }
@@ -37,12 +37,12 @@ test("移动端卡片菜单使用原生分区，删除独立成组且不插入�
 			syncMemoCardRelationsAction(h.f.card, h.originalMemo, hasReferrers);
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
-			assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy",
+			assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy", "knomo-beacon",
 				...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : []), "trash-2", "text"]);
 			const sections = new Map<string, string[]>();
 			for (const item of menu.items) sections.set(item.section, [...(sections.get(item.section) ?? []), item.icon]);
 			assert.deepEqual([...sections], [
-				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy"]],
+				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy", "knomo-beacon"]],
 				["knomo-card-navigation", [...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : [])]],
 				["knomo-card-danger", ["trash-2"]],
 				["knomo-card-info", ["text"]],

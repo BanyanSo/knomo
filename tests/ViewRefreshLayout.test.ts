@@ -35,6 +35,59 @@ async function browserFixture(locale = "en") {
 	return { page, close: () => browser.close() };
 }
 
+test("灯标置顶和移出保留相邻阅读位置，明暗移动布局复用一层装饰与双图标", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) for (const today of [false, true]) for (const loaded of [false, true]) {
+			await h.page.setViewportSize({ width: mobile ? 390 : 1100, height: 800 });
+			const options = { mobile, today, loaded, dark: mobile, reduce: mobile };
+			const result = await h.page.evaluate(options => window.refreshFixture.beaconGeometry(options), options);
+			const evidence = JSON.stringify({ options, result });
+			assert.equal(result.pinned.topCount, 1, evidence); assert.equal(result.pinned.selectedCount, 1, evidence);
+			assert.equal(result.pinned.count, result.ordinaryCount + (loaded ? 0 : 1), evidence);
+			assert.equal(result.pinned.anchor, result.before.anchor, evidence);
+			assert.ok(Math.abs(result.pinned.offset - result.before.offset) <= 1, evidence);
+			assert.equal(result.visual.wave, today ? 1 : 0, evidence); assert.equal(result.visual.light, today ? 0 : 1, evidence);
+			assert.equal(result.dateFlip.wave, today ? 0 : 1, evidence); assert.equal(result.dateFlip.light, today ? 1 : 0, evidence);
+			if (!today) assert.equal(result.visual.lightHeight, 12, evidence);
+			if (today) assert.ok((result.visual.doubleGap ?? -1) >= 5, evidence);
+			assert.equal(result.visual.position, "relative", evidence);
+			assert.equal(result.deferred.hidden, true, evidence); assert.equal(result.deferred.inert, true, evidence);
+			assert.equal(result.deferred.focused, true, evidence); assert.equal(result.deferred.heightChange, 0, evidence);
+			assert.equal(result.removed.topCount, 0, evidence);
+			assert.equal(result.removed.selectedCount, loaded ? 1 : 0, evidence);
+			assert.equal(result.delayed.top, 0, evidence); assert.equal(result.delayed.new, 0, evidence);
+			assert.match(result.delayed.status ?? "", /Locating Beacon/u, evidence);
+			await h.page.screenshot({ path: `.tmp/beacon-${mobile ? "mobile-dark" : "desktop-light"}-${today ? "today" : "light"}-${loaded ? "loaded" : "outside"}.png` });
+		}
+	} finally { await h.close(); }
+});
+
+test("灯标光束以浅色填充汇聚，不形成实色底边，并避开正文与触摸区域", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture("zh-CN");
+	try {
+		for (const mobile of [false, true]) for (const dark of [false, true]) for (const today of [false, true]) {
+			await h.page.setViewportSize({ width: mobile ? 390 : 1100, height: 800 });
+			const options = { mobile, dark, today };
+			const result = await h.page.evaluate(options => window.refreshFixture.beaconStylePreview(options), options);
+			const evidence = JSON.stringify({ options, result });
+			assert.equal(result.cardCount, 3, evidence); assert.equal(result.beaconCount, 1, evidence);
+			assert.equal(result.waveCount, today ? 1 : 0, evidence);
+			assert.match(result.time ?? "", /2026-11-12 08:30$/u, evidence);
+			assert.equal(result.pointerEvents, "none", evidence); assert.ok(result.clearance >= 0, evidence);
+			if (!today) {
+				assert.equal(result.height, 12, evidence); assert.ok(result.paths.length > 0, evidence);
+				for (const path of result.paths) {
+					assert.equal(path.stroke, "none", evidence);
+					assert.ok(path.opacity > 0 && path.opacity <= 0.08, evidence);
+					assert.equal(path.fill, result.accent, evidence);
+				}
+			}
+			await h.page.locator("main").screenshot({ path: `.tmp/beacon-refined-${mobile ? "mobile" : "desktop"}-${dark ? "dark" : "light"}-${today ? "combined" : "beam"}.png` });
+		}
+	} finally { await h.close(); }
+});
+
 test("普通列表与移动搜索的摘要保持中英文自然数字间距与换行，过渡只产生原句布局变化", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const traces: unknown[] = [];
 	for (const locale of ["en", "zh-CN"]) {

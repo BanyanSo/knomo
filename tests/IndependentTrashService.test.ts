@@ -7,6 +7,38 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 const PATH = "Daily/2026-09-08.md";
 const BODY = "## Memos\n- 10:30 same memo\n- 10:30 same memo\n";
 
+test("灯标删除通知只来自已确认落盘的原目标，Catalog 失败也不丢失确认", async () => {
+	for (const fail of ["none", "before", "readback", "catalog"] as const) {
+		const f = await fixture();
+		const confirmed: Array<{ change: import("../src/services/DailyMemoPresentationChange").ConfirmedDailyMemoPresentation; target?: import("../src/types/catalog").ObservationHandle }> = [];
+		f.options.onDailyConfirmed = (change, target) => { confirmed.push({ change, target }); };
+		const original = f.initial[1]!;
+		if (fail === "before") f.vault.app.vault.process = async () => { throw new Error("write failed"); };
+		if (fail === "readback") {
+			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+			f.vault.app.vault.process = async (file, update) => {
+				const result = await process(file, update);
+				if (file.path === PATH) {
+					const read = f.vault.app.vault.read.bind(f.vault.app.vault);
+					f.vault.app.vault.read = async file => { if (file.path === PATH) throw new Error("unconfirmed"); return read(file); };
+				}
+				return result;
+			};
+		}
+		if (fail === "catalog") f.options.updateCatalogPartition = async () => { throw new Error("Catalog failed"); };
+		if (fail === "before" || fail === "readback") {
+			await assert.rejects(f.service.delete(original)); assert.equal(confirmed.length, 0);
+		} else {
+			const result = await f.service.delete(original);
+			assert.equal(result.state, "deleted"); assert.equal(confirmed.length, 1);
+			assert.deepEqual(confirmed[0]!.target, original);
+			assert.equal(confirmed[0]!.change.change.beforeSourceRevision, original.sourceRevision);
+			assert.equal(confirmed[0]!.change.observations.length, 1);
+			assert.equal(f.vault.read(PATH), "## Memos\n- 10:30 same memo\n");
+		}
+	}
+});
+
 test("snapshot-first 删除不越过历史裸空行范围，子块 ID 展示与 raw 恢复保持一致", async () => {
 	for (const rawBlock of ["- 10:30 body", "- 10:30 intro\n  \n  - child ^child \t", "- 10:30 ^main\n  > quote"]) {
 		const suffix = "\n\n  outside\n- 11:00 neighbor\n";

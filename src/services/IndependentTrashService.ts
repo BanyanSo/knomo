@@ -7,10 +7,11 @@ import { DailyMemoWriteGateway, type PreparedDailyWrite } from "./DailyMemoWrite
 import { findObservation, findAppendedObservation, getRawBlock, replaceObservation, insertRawBlock, hasBlockId,
 	type MarkdownCatalogCommitInput } from "./MarkdownMutationService";
 import { TrashSnapshotStore, assertVaultPath, type TrashOperationStore } from "./TrashSnapshotStore";
-import { buildDailyMemoPresentationChange } from "./DailyMemoPresentationChange";
+import { buildDailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 export interface IndependentTrashOptions {
+	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation, deletedTarget?: ObservationHandle) => void;
 	assertActive?: () => void;
 	getLogicalDateForPath: (path: string) => Promise<string>;
 	// 返回 null 表示原路径已不适用；配置不可读必须抛错，不能猜测。
@@ -158,11 +159,14 @@ export class IndependentTrashService {
 	}
 
 	private async updateCatalog(prepared: PreparedDailyWrite, observation?: MemoObservation, deleted?: MemoObservation): Promise<boolean> {
+		const presentationChange = buildDailyMemoPresentationChange(prepared, deleted ?? null, observation ?? null);
+		try { this.options.onDailyConfirmed?.({ change: presentationChange, observations: prepared.after.observations }, deleted); }
+		catch (error) { logContinuationFailure("trash", "confirmed-render", error); }
 		try {
 			this.options.assertActive?.();
 			await this.options.updateCatalogPartition({ file: prepared.file, logicalDate: prepared.logicalDate,
 				content: prepared.afterContent, parsed: prepared.after, insertedObservation: observation,
-				presentationChange: buildDailyMemoPresentationChange(prepared, deleted ?? null, observation ?? null) });
+				presentationChange });
 			return false;
 		} catch (error) {
 			logContinuationFailure("trash", "publication", error);

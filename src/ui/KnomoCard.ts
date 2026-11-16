@@ -1,6 +1,6 @@
 import { setIcon } from "obsidian";
 
-import { KNOMO_TIME_BUOY_ICON } from "../icons";
+import { KNOMO_TIME_BUOY_ICON, KNOMO_BEACON_ICON } from "../icons";
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { TimeBuoyDateStatus } from "../types/timeBuoy";
@@ -35,6 +35,7 @@ export interface RenderMemoCardOptions<TMemo extends MemoRecord = MemoRecord> {
 	includeActions: boolean;
 	randomCard: boolean;
 	timeBuoy?: MemoCardTimeBuoy;
+	beacon?: { selection: number; top: boolean };
 	timePresentation?: MemoTimePresentation;
 	activeMenuMemoId: string | null;
 	formatDisplayTime: (value: string) => string;
@@ -78,6 +79,10 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 			: `${shell.className}${timeBuoyClass}`,
 		attr: shell.attrs,
 	});
+	if (options.beacon?.top) {
+		card.addClass("has-beacon"); card.setAttr("data-beacon-top", "true");
+		card.setAttr("data-beacon-buoy", options.timeBuoy?.status ?? "none");
+	}
 	const head = card.createDiv({ cls: "knomo-card-head" });
 	card.setAttr("data-time-presentation", JSON.stringify(options.timePresentation ?? { mode: "full" }));
 	renderMemoCardTime(head, memo, options);
@@ -103,19 +108,20 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				attr: { role: "menu" },
 			});
 			let previousSection: string | null = null;
-			for (const action of getMemoCardActions(memo, options.randomCard)) {
+			for (const action of getMemoCardActions(memo, options.randomCard, false, options.beacon !== undefined)) {
 				const section = getMemoCardActionSection(action.action);
 				if (previousSection !== null && previousSection !== section) {
 					renderCardMenuSeparator(actions, section);
 				}
 				previousSection = section;
-				renderCardAction(
+				const button = renderCardAction(
 					actions,
 					memo.id,
 					action.action,
 					getMemoActionLabel(action.action),
 					action.className,
 				);
+				if (action.action === "remove-beacon") button.setAttr("data-beacon-selection", String(options.beacon!.selection));
 			}
 			renderCardMenuSeparator(actions, "knomo-card-info");
 			const wordCount = actions.createDiv({ cls: "knomo-card-word-count" });
@@ -138,7 +144,37 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 	}
 	renderCardMeta(card, memo, options);
 	renderMemoCardTimeBuoy(card, options.timeBuoy);
+	if (options.beacon?.top) renderMemoCardBeacon(card, options.timeBuoy?.status === "today");
 	return card;
+}
+
+function renderMemoCardBeacon(card: HTMLElement, today: boolean): void {
+	if (!today) {
+		const light = card.createSvg("svg", { cls: "knomo-card-beacon-light", attr: {
+			viewBox: "0 0 100 12", preserveAspectRatio: "none", "aria-hidden": "true", focusable: "false",
+		} });
+		// 两束低透明度的浅光收拢到灯室，避免实色描边挤成卡片底边。
+		light.createSvg("path", { cls: "knomo-card-beacon-fill", attr: { d: "M0 0 L100 2 L0 8 Z" } });
+		light.createSvg("path", { cls: "knomo-card-beacon-ray", attr: { d: "M0 8 L100 2 L0 12 Z" } });
+	}
+	const indicator = card.createSpan({ cls: "knomo-card-beacon", attr: { role: "img", "aria-label": t("beacon.name") } });
+	setIcon(indicator, KNOMO_BEACON_ICON);
+}
+
+export function syncMemoCardBeaconAction(card: HTMLElement, memo: MemoRecord, selection?: number): void {
+	const menu = card.querySelector<HTMLElement>(".knomo-card-actions");
+	if (!menu || !memo.catalog || memo.status !== "active" || card.hasAttribute("data-knomo-readonly-transition")) return;
+	const action = selection === undefined ? "set-beacon" : "remove-beacon";
+	let button = menu.querySelector<HTMLButtonElement>("[data-memo-action='set-beacon'], [data-memo-action='remove-beacon']");
+	if (!button) {
+		button = renderCardAction(menu, memo.id, action, getMemoActionLabel(action), "knomo-card-action");
+		menu.insertBefore(button, menu.querySelector(".knomo-card-menu-separator"));
+	}
+	button.setAttr("data-memo-action", action);
+	button.setAttr("data-memo-id", memo.id);
+	button.querySelector(".knomo-menu-label")?.setText(getMemoActionLabel(action));
+	if (selection === undefined) button.removeAttribute("data-beacon-selection");
+	else button.setAttr("data-beacon-selection", String(selection));
 }
 
 function renderMemoCardTime<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): void {
@@ -341,6 +377,8 @@ function renderTrashAction(
 }
 
 export function getMemoActionLabel(action: MemoAction): string {
+	if (action === "set-beacon") return t("beacon.set");
+	if (action === "remove-beacon") return t("beacon.remove");
 	if (action === "share-image") return t("share.share");
 	if (action === "relations") return t("relations.title");
 	if (action === "edit") return t("card.edit");

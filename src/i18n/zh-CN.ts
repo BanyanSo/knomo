@@ -1,4 +1,13 @@
 export const zhCN = {
+	"beacon.name": "灯标",
+	"beacon.set": "设为灯标",
+	"beacon.remove": "移出灯标",
+	"beacon.locating": "正在定位灯标…",
+	"beacon.unavailable": "灯标暂不可用",
+	"beacon.unlocated": "无法定位灯标",
+	"beacon.unlocatedDate": "无法定位 {{date}} 的灯标",
+	"beacon.recovery": "可在任一有效 Memo 的菜单中重新设置灯标，或移出当前灯标。",
+	"beacon.saveFailed": "灯标保存失败，请刷新后重试。",
 	"share.title": "分享图片",
 	"share.paper": "素页",
 	"share.reflection": "观照",

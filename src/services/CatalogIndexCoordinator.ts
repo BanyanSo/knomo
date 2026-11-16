@@ -46,6 +46,7 @@ interface CatalogPathRevision {
 }
 
 export interface CatalogIndexCoordinatorOptions {
+	onSourceEvent?: (path: string, kind: "change" | "delete" | "rename", newPath?: string) => void;
 	enabled?: boolean;
 	fullAuditIntervalMs?: number;
 	sliceBudgetMs?: number;
@@ -72,6 +73,7 @@ export class CatalogIndexCoordinator {
 	private readonly progressIntervalMs: number;
 	private readonly now: () => number;
 	private readonly onProgress: ((coverage: CatalogCoverage, scan: CatalogScanSnapshot) => void | Promise<void>) | null;
+	private readonly onSourceEvent: CatalogIndexCoordinatorOptions["onSourceEvent"];
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
 	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
 	private readonly preserveMetaKeysOnRebuild: readonly string[];
@@ -130,6 +132,7 @@ export class CatalogIndexCoordinator {
 		this.progressIntervalMs = Math.max(0, options.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS);
 		this.now = options.now ?? Date.now;
 		this.onProgress = options.onProgress ?? null;
+		this.onSourceEvent = options.onSourceEvent;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
 		this.onDailyPeriodsChanged = options.onDailyPeriodsChanged ?? null;
 		this.preserveMetaKeysOnRebuild = [...new Set(options.preserveMetaKeysOnRebuild ?? [])];
@@ -291,6 +294,7 @@ export class CatalogIndexCoordinator {
 		if (!(file instanceof TFile) || file.extension !== "md") {
 			return;
 		}
+		this.onSourceEvent?.(file.path, "change");
 		const entry = this.toInventoryEntry(file);
 		if (entry === null) return;
 		if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
@@ -302,6 +306,7 @@ export class CatalogIndexCoordinator {
 	}
 
 	private handleFileRenamed(file: unknown, oldPath: string): void {
+		if (file instanceof TFile || file instanceof TFolder) this.onSourceEvent?.(oldPath, "rename", file.path);
 		const normalizedOldPath = normalizePath(oldPath);
 		if (file instanceof TFolder) {
 			if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
@@ -333,6 +338,7 @@ export class CatalogIndexCoordinator {
 	}
 
 	private handleFileDeleted(file: unknown): void {
+		if (file instanceof TFile || file instanceof TFolder) this.onSourceEvent?.(file.path, "delete");
 		if (file instanceof TFolder) {
 			if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
 			this.enqueueDeletedFolderPaths(normalizePath(file.path));

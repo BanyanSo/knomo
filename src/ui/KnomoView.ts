@@ -1641,8 +1641,8 @@ export class KnomoView extends ItemView {
 		]).then(() => undefined)));
 	}
 
-	private checkConfirmedDailyFile(path: string, refreshOnSuccess = true): Promise<void> | void {
-		if (this.trashViewClosed) return;
+	private checkConfirmedDailyFile(path: string, refreshOnSuccess = true): Promise<void> {
+		if (this.trashViewClosed) return Promise.resolve();
 		const continuation = this.getRandomReunionContinuation();
 		const proof = continuation.files.get(path);
 		const pendingRevision = this.confirmedDailyMemos?.getRevision(path) ?? this.externallyInvalidatedDailyRevisions?.get(path);
@@ -1964,7 +1964,7 @@ export class KnomoView extends ItemView {
 					const bytes = content === null ? null : new TextEncoder().encode(content);
 					const revision = bytes === null ? null : await sha256Bytes(bytes);
 					if (!isCurrent()) return;
-					if (revision !== members[0]!.catalog?.observationHandle.sourceRevision) this.suspendRandomReunionSource(path);
+					if (revision !== members[0].catalog?.observationHandle.sourceRevision) this.suspendRandomReunionSource(path);
 					const body = content === null ? undefined : revision === proof.sourceRevision ? proof.body : await createDailyMemoBodyProof(content);
 					if (!isCurrent()) return;
 					let handles: ReturnType<typeof matchRandomReunionFileProof> = revision === proof.sourceRevision ? new Map(proof.members) : null;
@@ -1993,7 +1993,7 @@ export class KnomoView extends ItemView {
 					if (!isCurrent()) return;
 					if (items.some(item => item.observation.logicalDate !== proof.logicalDate)) throw new CatalogDiscoveryInvalidatedError();
 					const current = items.map(toCatalogMemoView);
-					members.forEach((memo, index) => changes.set(memo.id, current[index]!));
+					members.forEach((memo, index) => changes.set(memo.id, current[index]));
 					acceptedRevisions.set(path, revision!);
 					acceptedProofs.set(path, { ...proof, sourceRevision: revision!, body: body!,
 						members: new Map(current.map(memo => [memo.id, memo.catalog!.observation])) });

@@ -63,6 +63,42 @@ test("灯标置顶和移出保留相邻阅读位置，明暗移动布局复用�
 	} finally { await h.close(); }
 });
 
+test("两个默认视图分别接纳源与查询，隐藏恢复及移除保持各自窗口", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) {
+			const result = await h.page.evaluate(mobile => window.refreshFixture.beaconTwoViews(mobile), mobile);
+			const evidence = JSON.stringify(result);
+			for (const sample of result.samples) for (const count of sample.counts) assert.ok(count <= 1, evidence);
+			assert.deepEqual(result.samples.find(item => item.phase === "hidden resumed")!.counts, [1, 1], evidence);
+			assert.deepEqual(result.samples.find(item => item.phase === "binding first")!.tops, [0, 0], evidence);
+			assert.deepEqual(result.samples.at(-1)!.counts, [1, 0], evidence);
+			assert.equal(result.filteredTop, 0, evidence); assert.equal(result.writes, 2, evidence);
+			assert.deepEqual(result.sizes, [35, 5], evidence);
+		}
+	} finally { await h.close(); }
+});
+
+test("真实灯标服务刷新保留撤权占位、输入焦点，确认后一次恢复和去重", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) for (const loaded of [false, true]) {
+			const result = await h.page.evaluate(options => window.refreshFixture.beaconSourceRefresh(options), { mobile, loaded });
+			const evidence = JSON.stringify({ mobile, loaded, result });
+			assert.equal(result.waiting.state, "locating", evidence); assert.equal(result.waiting.count, 1, evidence);
+			assert.equal(result.waiting.hidden, true, evidence); assert.equal(result.waiting.inert, true, evidence);
+			assert.equal(result.waiting.heightChange, 0, evidence); assert.equal(result.waiting.focused, true, evidence);
+			assert.equal(result.ready.state, "ready", evidence); assert.equal(result.ready.count, 1, evidence);
+			assert.equal(result.ready.selected, 1, evidence); assert.equal(result.ready.focused, true, evidence);
+			assert.equal(result.ready.placeholder, 0, evidence); assert.equal(result.ready.total, result.ready.expected, evidence);
+			assert.equal(result.updated.state, "ready", evidence); assert.equal(result.updated.content, "Changed target", evidence);
+			assert.equal(result.rejected.reason, "missing-id", evidence); assert.equal(result.rejected.placeholder, 0, evidence);
+			assert.equal(result.removed.state, "unset", evidence); assert.equal(result.removed.top, 0, evidence);
+			assert.equal(result.removed.placeholder, 0, evidence);
+		}
+	} finally { await h.close(); }
+});
+
 test("灯标光束以浅色填充汇聚，不形成实色底边，并避开正文与触摸区域", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const h = await browserFixture("zh-CN");
 	try {

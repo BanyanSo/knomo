@@ -7,6 +7,51 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("并发定向读取各自返回目标 Daily，候选 B 不竞争 A 的共享单槽或依赖索引", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const a = "Journal/2026-08-09.md", b = "Journal/2026-08-10.md";
+	const fixture = await createCoordinatorFixture([{ path: a, content: "- 09:00 A ^same\n", mtime: 1 },
+		{ path: b, content: "- 10:00 B ^same\n", mtime: 1 }]);
+	const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
+	coordinator.start(fixture.owner); const release = fixture.blockRead(a);
+	try {
+		const first = coordinator.readPresentationSource(a, "2026-08-09");
+		await waitUntil(async () => fixture.readCount() === 1);
+		const second = await coordinator.readPresentationSource(b, "2026-08-10");
+		assert.equal(second.path, b); assert.equal(second.observations[0]!.content, "B");
+		release(); const result = await first;
+		assert.equal(result.path, a); assert.equal(result.observations[0]!.content, "A");
+		assert.equal(result.blockAnchors?.same, 1); assert.equal(fixture.readCount(), 2);
+	} finally { release(); fixture.unload(); }
+});
+
+test("普通扫描将同轮完整解析交给展示，索引发布失败仍有当前数据且不额外解析", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Journal/2026-08-09.md", fixture = await createCoordinatorFixture([{ path, content: "- 09:00 A ^target\nNon-memo ^target\n", mtime: 1 }]);
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore()), parser = new DiaryMemoParser();
+	let parses = 0; const parse = parser.parse.bind(parser);
+	const sources: import("../src/services/BeaconService").BeaconSource[] = [];
+	t.mock.method(parser, "parse", (...args: Parameters<typeof parse>) => { parses++; return parse(...args); });
+	t.mock.method(catalog, "replaceFile", async () => { throw new Error("Index unavailable"); });
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, parser,
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { onPresentationSource: source => sources.push(source) });
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+		assert.equal(parses, 1); assert.equal(fixture.readCount(), 1); assert.equal(sources.length, 1);
+		assert.equal(sources[0]!.path, path); assert.equal(sources[0]!.blockAnchors?.target, 2);
+		assert.equal(coordinator.getScanSnapshot().failedFileCount, 1);
+	} finally { fixture.unload(); }
+});
+
 test("阅读连续性计量：同字节重复保存与真实正文变化分别记录解析、发布及查询", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

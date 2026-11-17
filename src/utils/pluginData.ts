@@ -65,31 +65,12 @@ export function getBeaconData(savedData: unknown): unknown {
 }
 
 export function parseBeaconReference(value: unknown): BeaconReference | null {
-	if (!isRecord(value) || !isValidBeaconDate(value.logicalDate) || !isRecord(value.handle)) return null;
-	const h = value.handle;
-	if (typeof h.sourcePath !== "string" || h.sourcePath.length === 0 || !h.sourcePath.endsWith(".md")
-		|| h.sourcePath.startsWith("/") || /(?:^|\/)\.\.?(?:\/|$)|[\\:\u0000-\u001f]/u.test(h.sourcePath)
-		|| typeof h.sourceRevision !== "string" || !/^[a-f0-9]{64}$/u.test(h.sourceRevision)
-		|| typeof h.rawBlockHash !== "string" || !/^fnv1a-[a-f0-9]{8}$/u.test(h.rawBlockHash)
-		|| !Number.isSafeInteger(h.startLine) || Number(h.startLine) < 0
-		|| !Number.isSafeInteger(h.endLine) || Number(h.endLine) < Number(h.startLine)) return null;
-	let bodyProof: BeaconReference["bodyProof"];
-	if (value.bodyProof !== undefined) {
-		const p = value.bodyProof;
-		if (!isRecord(p) || typeof p.digest !== "string" || !/^[a-f0-9]{64}$/u.test(p.digest)
-			|| !Number.isSafeInteger(p.startLine) || Number(p.startLine) < 0 || Number(p.startLine) > Number(h.startLine)) return null;
-		bodyProof = { digest: p.digest, startLine: Number(p.startLine) };
-	}
-	return { handle: { sourcePath: h.sourcePath, sourceRevision: h.sourceRevision, startLine: Number(h.startLine),
-		endLine: Number(h.endLine), rawBlockHash: h.rawBlockHash }, logicalDate: value.logicalDate,
-		...(bodyProof ? { bodyProof } : {}) };
-}
-
-export function isValidBeaconDate(value: unknown): value is string {
-	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
-	const date = new Date(value + "T12:00:00");
-	return !Number.isNaN(date.valueOf()) && date.getFullYear() === Number(value.slice(0, 4))
-		&& date.getMonth() + 1 === Number(value.slice(5, 7)) && date.getDate() === Number(value.slice(8, 10));
+	if (!isRecord(value) || typeof value.sourcePath !== "string" || value.sourcePath.length === 0
+		|| !value.sourcePath.endsWith(".md") || value.sourcePath.startsWith("/")
+		|| /(?:^|\/)\.\.?(?:\/|$)|[\\:\u0000-\u001f]|\/\//u.test(value.sourcePath)
+		|| typeof value.blockId !== "string" || !/^[A-Za-z0-9-]+$/u.test(value.blockId)
+		|| typeof value.memoTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/u.test(value.memoTime)) return null;
+	return { sourcePath: value.sourcePath, blockId: value.blockId, memoTime: value.memoTime };
 }
 
 export function buildPluginDataWithBeacon(savedData: unknown, beacon: BeaconReference | undefined): Record<string, unknown> {

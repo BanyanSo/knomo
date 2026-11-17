@@ -8,6 +8,7 @@ import type {
 	CatalogStoreLifecycle,
 	ResolvedMemo,
 	ObservationHandle,
+	MemoObservation,
 } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
@@ -45,6 +46,7 @@ import {
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { CatalogChangeCursor, MemoCatalogService } from "./MemoCatalogService";
+import { buildCatalogObservation } from "./MemoCatalogService";
 import { CATALOG_OBSERVATION_READ_BATCH_LIMIT, CatalogQueryCancelledError, createCatalogCountAbortError } from "./MemoCatalogStore";
 import { getCatalogQueryKey, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
@@ -813,6 +815,11 @@ export class CatalogReadService {
 		if (!isCompleteCoverage(coverage)) throw new Error(`${feature} requires complete Catalog coverage.`);
 		return coverage;
 	}
+}
+
+export function toParsedCatalogMemoItem(observation: MemoObservation, capabilities: CatalogCapabilities): CatalogMemoItem {
+	return toCatalogMemoItem({ kind: "observation", observation: buildCatalogObservation(observation),
+		capabilities: createResolvedMemoCapabilities() }, capabilities);
 }
 
 export function toCatalogMemoItem(resolved: ResolvedMemo, catalogCapabilities: CatalogCapabilities): CatalogMemoItem {

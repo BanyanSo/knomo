@@ -66,7 +66,7 @@ test("生产启动与外部配置入口加载灯标，损坏引用和读取失�
 	h.plugin.unload();
 });
 
-test("等待灯标配置读取时卸载，不继续注册视图、事件或运行时", async t => {
+test("等待灯标读取不阻断视图注册，卸载后的读取结果不继续发布", async t => {
 	const h = harness(t), entered = deferred(), release = deferred();
 	let reads = 0;
 	h.plugin.loadData = async () => {
@@ -76,9 +76,63 @@ test("等待灯标配置读取时卸载，不继续注册视图、事件或运�
 	t.after(() => release.resolve());
 	const loading = h.plugin.onload(); h.release(); await entered.promise;
 	h.plugin.unload(); release.resolve(); await loading;
-	assert.equal(h.calls.includes("view"), false);
-	assert.equal(h.layouts.length, 0);
+	assert.equal(h.calls.includes("view"), true);
 	assert.equal(h.getPrimary().getLifecycle().writable, false);
+});
+
+for (const degraded of [false, true]) test(`生产写入贯穿选中、精确落盘、${degraded ? "索引故障仍展示" : "Catalog 接管"}与幂等保存`, async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	h.monthly.resolve(); await h.getCurrent().initialize();
+	const { TFile } = await import("obsidian"), { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { parseBeaconReference } = await import("../src/utils/pluginData");
+	const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md" });
+	let content = "- 09:00 before\n", indexUnavailable = false;
+	const parser = new DiaryMemoParser();
+	const source = async () => ({ path: file.path, logicalDate: "2026-10-13", content,
+		...await parser.parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(content) }) });
+	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
+	Object.assign(h.plugin.app.vault, { getAbstractFileByPath: (path: string) => path === file.path ? file : null,
+		read: async () => content, readBinary: async () => Buffer.from(content),
+		process: async (_file: unknown, update: (text: string) => string) => { content = update(content); indexUnavailable = degraded; } });
+	const runtime = h.plugin as unknown as {
+		beaconService: import("../src/services/BeaconService").BeaconService;
+		catalogIndexCoordinator: InstanceType<typeof Coordinator>;
+		memoCatalogService: import("../src/services/MemoCatalogService").MemoCatalogService;
+		catalogReadService: import("../src/services/CatalogReadService").CatalogReadService;
+		memoCommandService: import("../src/services/MemoCommandService").MemoCommandService;
+	};
+	let stamp = 1, writes = 0;
+	const save = h.plugin.saveData.bind(h.plugin);
+	t.mock.method(h.plugin, "saveData", async (data: unknown) => { writes++; await save(data); });
+	t.mock.method(runtime.catalogIndexCoordinator, "readPresentationSource", source);
+	const publish = async (input: import("../src/services/MarkdownMutationService").MarkdownCatalogCommitInput) => {
+		await runtime.memoCatalogService.replaceFile({ inventory: { sourcePath: file.path, logicalDate: input.logicalDate, mtime: stamp++, size: content.length },
+			...input.parsed, parserVersion: 19, settingsFingerprint: "test", auditedAt: stamp });
+	};
+	t.mock.method(runtime.catalogIndexCoordinator, "replaceCommittedFile", async (input: import("../src/services/MarkdownMutationService").MarkdownCatalogCommitInput) => {
+		if (indexUnavailable) throw new Error("Catalog publication failed"); await publish(input);
+	});
+	const store = runtime.memoCatalogService.getStore(), getCoverage = store.getCoverage.bind(store);
+	t.mock.method(store, "getCoverage", async () => { if (indexUnavailable) throw new Error("Catalog unavailable"); return getCoverage(); });
+	const before = await source();
+	await publish({ file, logicalDate: before.logicalDate, content, parsed: { ...before, observations: [...before.observations] } });
+	await runtime.beaconService.set(before.observations[0]!);
+	const savingBefore = writes;
+	const item = runtime.beaconService.getSnapshot().memo!.catalog!;
+	const operation = runtime.memoCommandService.startEdit(item, "after");
+	await Promise.all([operation.dailyCommitted, operation.settled]);
+	await runtime.beaconService.refresh();
+	const binding = parseBeaconReference((h.saved() as { beacon: unknown }).beacon)!;
+	assert.equal(content, `- 09:00 after ^${binding.blockId}\n`);
+	assert.equal(runtime.beaconService.getSnapshot().memo?.contentSnapshot, "after");
+	const after = await source(), saved = h.saved() as { beacon: unknown };
+	assert.equal(parseBeaconReference(saved.beacon)!.blockId, binding.blockId);
+	assert.equal(runtime.beaconService.getSnapshot().memo!.catalog!.observationHandle.sourceRevision, after.sourceRevision);
+	assert.equal(writes - savingBefore, 0);
+	assert.equal(await runtime.catalogReadService.getFileSourceRevision(file.path), degraded ? before.sourceRevision : after.sourceRevision);
+	await runtime.beaconService.refresh(); assert.equal(writes - savingBefore, 0);
+	h.plugin.unload();
 });
 
 for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { JSDOM } from "jsdom";
 import { t } from "../src/i18n";
 import type { CatalogCoverage } from "../src/types/catalog";
@@ -15,6 +15,11 @@ import { DelayedLoadingIndicator } from "../src/ui/DelayedLoadingIndicator";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { createReferenceMemo } from "./helpers/referenceMemo";
+
+// 真实查询可以按时间预算让出；Node 夹具也须提供宿主窗口的计时器。
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 interface MemoLoad {
 	memos: MemoViewItem[];
@@ -297,7 +302,7 @@ test("全部笔记首屏已有卡片后，后台快照前进或今日索引待�
 	const { TimeBuoyViewController } = await import("../src/ui/TimeBuoyViewController");
 	for (const mobile of [false, true]) {
 		for (const stage of ["list-invalidated", "list-busy", "today-invalidated", "today-revision", "today-pending", "today-incomplete", "today-io"] as const) {
-			await context.test(`${stage}, mobile=${mobile}`, async () => {
+			await context.test(`${stage}, mobile=${mobile}`, async t => {
 				const h = await createLoadingHarness(mobile);
 				const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
 				try {
@@ -339,6 +344,11 @@ test("全部笔记首屏已有卡片后，后台快照前进或今日索引待�
 					await h.loadInitial();
 					const card = h.root.querySelector(".knomo-card"); assert.ok(card);
 					shown.length = 0; changed = true;
+					if (stage === "list-invalidated") {
+						// 强制命中真实查询的时间让出边界，不能依赖小夹具始终在一个 slice 内完成。
+						let now = performance.now();
+						t.mock.method(performance, "now", () => now += 20);
+					}
 					if (stage === "today-pending") await store.setCoverage({ ...coverage, kind: "partial", pendingFileCount: 1 });
 					await h.view.reloadMemos(false);
 					assert.equal(h.root.querySelector(".knomo-card"), card, stage);

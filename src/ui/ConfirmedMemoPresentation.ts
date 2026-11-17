@@ -1,9 +1,7 @@
 import type { CatalogCapabilities, CatalogQueryFilter, ObservationHandle } from "../types/catalog";
 import type { MemoViewItem } from "../types/memoView";
 import { toCatalogMemoView } from "../types/memoView";
-import { toCatalogMemoItem } from "../services/CatalogReadService";
-import { buildCatalogObservation } from "../services/MemoCatalogService";
-import { createResolvedMemoCapabilities } from "../services/MemoCapabilityModel";
+import { toCatalogMemoItem, toParsedCatalogMemoItem } from "../services/CatalogReadService";
 import { compareCatalogObservations, createCatalogQueryMatcher } from "../services/MemoCatalogStore";
 import { observationHandleKey, type ConfirmedDailyMemoPresentation, type DailyMemoPresentationChange } from "../services/DailyMemoPresentationChange";
 
@@ -13,8 +11,10 @@ interface PendingFilePresentation {
 	revisions: string[];
 	replacements: Map<string, ObservationHandle | null>;
 	memos: Map<string, MemoViewItem>;
+	upsertKeys: Set<string>;
 	pendingRevisions: Set<string>;
 	reconciliation: number;
+	preservePagination: boolean;
 }
 
 // 只保留未被 Catalog 接续的提交和已选中卡片；不缓存整份 Daily 正文，也不产生持久身份。
@@ -23,33 +23,39 @@ export class ConfirmedMemoPresentation {
 
 	get pending(): boolean { return this.files.size > 0; }
 	getRevision(path: string): string | undefined { return this.files.get(path)?.sourceRevision; }
+	preservesPagination(path: string): boolean { return this.files.get(path)?.preservePagination === true; }
 	getChanges(): DailyMemoPresentationChange[] { return [...this.files.values()].map(file => file.change); }
 	clear(): void { this.files.clear(); }
 	remove(path: string): void { this.files.delete(path); }
-	getMemos(): MemoViewItem[] { return [...this.files.values()].flatMap(file => [...file.memos.values()]); }
+	// 只返回本 leaf 可以补入的成员；其它已确认卡片仍可在真实分页读到时采用。
+	getMemos(): MemoViewItem[] { return [...this.files.values()].flatMap(file => [...file.upsertKeys].map(key => file.memos.get(key)!)); }
 
-	apply(input: ConfirmedDailyMemoPresentation, cached: readonly MemoViewItem[], capabilities: CatalogCapabilities, includeChanged = true) {
+	apply(input: ConfirmedDailyMemoPresentation, cached: readonly MemoViewItem[], capabilities: CatalogCapabilities, includeChanged = true,
+		windowIds?: ReadonlySet<string>, preservePagination = false) {
 		const { change, observations } = input;
 		const previous = this.files.get(change.sourcePath);
 		const replacements = new Map(change.replacements.map(item => [observationHandleKey(item.before), item.after]));
 		const after = new Map(observations.map(item => [observationHandleKey(item), item]));
-		const makeMemo = (handle: ObservationHandle): MemoViewItem => {
-			const observation = buildCatalogObservation(after.get(observationHandleKey(handle))!);
-			return toCatalogMemoView(toCatalogMemoItem({ kind: "observation", observation,
-				capabilities: createResolvedMemoCapabilities() }, capabilities));
-		};
+		const makeMemo = (handle: ObservationHandle): MemoViewItem =>
+			toCatalogMemoView(toParsedCatalogMemoItem(after.get(observationHandleKey(handle))!, capabilities));
 		const changes = new Map<string, MemoViewItem | null>();
 		const memos = new Map<string, MemoViewItem>();
+		const upsertKeys = new Set<string>();
 		for (const memo of [...(previous?.memos.values() ?? []), ...cached]) {
 			if (memo.dailyRef.path !== change.sourcePath) continue;
 			const handle = replacements.get(memo.id);
 			const current = handle ? memos.get(observationHandleKey(handle)) ?? makeMemo(handle)
 				: memo.catalog?.observationHandle.sourceRevision === change.sourceRevision ? memo : null;
 			changes.set(memo.id, current);
-			if (current && (includeChanged || change.changed === null || current.id !== observationHandleKey(change.changed))) memos.set(current.id, current);
+			if (current) {
+				memos.set(current.id, current);
+				if (!windowIds || windowIds.has(memo.id)) upsertKeys.add(current.id);
+			}
 		}
-		const changed = change.changed === null || !includeChanged ? [] : [makeMemo(change.changed)];
-		for (const memo of changed) memos.set(memo.id, memo);
+		const changedMemo = change.changed === null ? null : memos.get(observationHandleKey(change.changed)) ?? makeMemo(change.changed);
+		if (changedMemo) memos.set(changedMemo.id, changedMemo);
+		const changed = includeChanged && changedMemo ? [changedMemo] : [];
+		for (const memo of changed) upsertKeys.add(memo.id);
 		// 连续保存只组合已确认提交给出的对应关系，绝不按正文或旧行号猜测 occurrence。
 		const translations = new Map<string, ObservationHandle | null>();
 		for (const [key, handle] of previous?.replacements ?? []) {
@@ -58,8 +64,9 @@ export class ConfirmedMemoPresentation {
 		for (const [key, handle] of replacements) translations.set(key, handle);
 		const revisions = [...(previous?.revisions ?? []), change.beforeSourceRevision, change.sourceRevision];
 		this.files.set(change.sourcePath, { change, sourceRevision: change.sourceRevision,
-			revisions: [...new Set(revisions)], replacements: translations, memos,
-			pendingRevisions: new Set([...(previous?.pendingRevisions ?? []), change.sourceRevision]), reconciliation: 0 });
+			revisions: [...new Set(revisions)], replacements: translations, memos, upsertKeys,
+			pendingRevisions: new Set([...(previous?.pendingRevisions ?? []), change.sourceRevision]), reconciliation: 0,
+			preservePagination });
 		return { changes, changed };
 	}
 
@@ -78,7 +85,8 @@ export class ConfirmedMemoPresentation {
 			}
 			if (current?.catalog && matches(current.catalog.observation)) result.set(current.id, current);
 		}
-		if (addPending) for (const file of this.files.values()) for (const memo of file.memos.values()) {
+		if (addPending) for (const file of this.files.values()) for (const key of file.upsertKeys) {
+			const memo = file.memos.get(key)!;
 			if (memo.catalog && matches(memo.catalog.observation)) result.set(memo.id, memo);
 		}
 		return [...result.values()].sort((left, right) => compareCatalogObservations(left.catalog!.observation, right.catalog!.observation));

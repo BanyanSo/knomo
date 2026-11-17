@@ -14,5 +14,7 @@ export function buildBeaconPresentation(snapshot: BeaconSnapshot, memos: readonl
 		|| memo.catalog.observationHandle.sourcePath === handle.sourcePath && memo.catalog.observationHandle.sourceRevision !== handle.sourceRevision))) {
 		return { memos: [...memos], snapshot: { ...snapshot, state: "locating", memo: undefined } };
 	}
-	return { snapshot, memos: [beacon, ...memos.filter(memo => !memo.catalog || !sameBeaconHandle(memo.catalog.observationHandle, handle))] };
+	const loaded = memos.find(memo => memo.catalog && sameBeaconHandle(memo.catalog.observationHandle, handle));
+	const current = loaded ?? beacon;
+	return { snapshot: { ...snapshot, memo: current }, memos: [current, ...memos.filter(memo => !memo.catalog || !sameBeaconHandle(memo.catalog.observationHandle, handle))] };
 }

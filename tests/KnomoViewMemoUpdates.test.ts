@@ -20,6 +20,160 @@ after(() => {
 	else Reflect.deleteProperty(globalThis, "window");
 });
 
+test("两个 leaf 按提交前普通窗口分别接纳灯标编辑，索引接管不把窗口外缓存补入列表", async () => {
+	const gate = deferred<void>();
+	const h = await fixture({ body: "## Memos\n- 08:00 neighbor ^neighbor\n- 09:00 selected ^beacon\n- 10:00 tail ^tail\n",
+		immediate: true, catalogGate: gate.promise });
+	const other = await h.createView(), selected = h.memos[1]!, cursor = { catalogRevision: 1, observationKey: "cursor", createdAtKey: "date" };
+	const beacon = { getSnapshot: () => ({ state: "locating", selection: 1 }),
+		isBoundObservation: (observation: import("../src/types/catalog").MemoObservation, anchors?: Record<string, number>) =>
+			observation.existingBlockId === "beacon" && anchors?.beacon === 1 };
+	Object.assign(h.view, { beaconService: beacon, isDefaultListState: () => true });
+	Object.assign(other.view, { beaconService: beacon, isDefaultListState: () => true, memos: [h.memos[0]!],
+		catalogCursor: cursor, catalogDesktopTotalCount: 3 });
+	const operation = h.command.startEdit(selected.catalog!, "edited selected");
+	try {
+		await operation.dailyCommitted;
+		assert.equal(h.view.memos.length, 3);
+		assert.equal(h.view.memos.filter(memo => memo.contentSnapshot === "edited selected").length, 1);
+		assert.deepEqual(other.view.memos.map(memo => memo.contentSnapshot), ["neighbor"]);
+		assert.equal(Reflect.get(other.view, "catalogCursor"), cursor);
+		assert.equal(Reflect.get(other.view, "catalogDesktopTotalCount"), 3);
+		assert.deepEqual(other.view.confirmedDailyMemos!.getMemos().map(memo => memo.contentSnapshot), ["neighbor"]);
+	} finally { gate.resolve(); }
+	await operation.settled;
+	assert.deepEqual(other.view.memos.map(memo => memo.contentSnapshot), ["neighbor"]);
+	assert.equal(Reflect.get(other.view, "catalogCursor"), cursor);
+	assert.equal(Reflect.get(other.view, "catalogDesktopTotalCount"), 3);
+	await assert.rejects(h.edit(selected, "stale edit"), /stale|revision|changed/iu);
+});
+
+test("窗口外灯标编辑在索引落后、两个真实分页窗口刷新及继续加载时保留成员、游标边界和总数", async t => {
+	t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 17, 12).getTime() });
+	const gate = deferred<void>(), h = await fixture({ immediate: true, refreshViews: true, catalogGate: gate.promise,
+		body: "## Memos\n" + Array.from({ length: 160 }, (_, index) => `- 09:00 kept-${index}${index === 0 ? " ^beacon" : ""}\n`).join("") });
+	const other = await h.createView(), selected = await readCurrentSourceMemo(h, memo => memo.existingBlockId === "beacon");
+	const beacon = { getSnapshot: () => ({ state: "locating", selection: 1 }),
+		isBoundObservation: (observation: import("../src/types/catalog").MemoObservation, anchors?: Record<string, number>) =>
+			observation.existingBlockId === "beacon" && anchors?.beacon === 1 };
+	const windows = [];
+	for (const [view, pageCount] of [[h.view, 1], [other.view, 2]] as const) {
+		Object.assign(view, { beaconService: beacon });
+		windows.push(await prepareDefaultCatalogWindow(h, view, pageCount));
+	}
+	const operation = h.command.startEdit(selected.catalog!, "edited outside");
+	try {
+		await operation.dailyCommitted;
+		for (const { view, members, cursor } of windows) {
+			assert.deepEqual(view.memos.map(memo => memo.contentSnapshot), members);
+			assert.equal(Reflect.get(view, "catalogCursor"), cursor); assert.equal(Reflect.get(view, "catalogDesktopTotalCount"), 160);
+		}
+		assert.equal(await windows[0]!.production.loadNextCatalogPage.call(h.view), true);
+		assert.equal(h.view.memos.length, 100, "索引尚未接管时也能继续真实旧快照分页");
+		assert.equal(h.view.memos.some(memo => memo.contentSnapshot === "edited outside"), false);
+		assert.equal(await windows[0]!.production.loadNextCatalogPage.call(h.view), true); assert.equal(h.view.memos.length, 150);
+		assert.equal(await windows[0]!.production.loadNextCatalogPage.call(h.view), true); assert.equal(h.view.memos.length, 160);
+		assert.equal(h.view.memos.filter(memo => memo.contentSnapshot === "edited outside").length, 1, "旧索引真实读到目标时采用已确认的当前正文");
+		assert.equal(Reflect.get(h.view, "catalogCursor"), null); assert.equal(Reflect.get(h.view, "catalogDesktopTotalCount"), 160);
+	} finally { gate.resolve(); }
+	await operation.settled; await h.waitForViewRefresh();
+	for (const { view, production } of windows) {
+		assert.equal(view.memos.length, view === h.view ? 160 : 100, "后台刷新保留各 leaf 此时分别已读取的四页/两页");
+		assert.equal(Reflect.get(view, "catalogDesktopTotalCount"), 160);
+		assert.equal(production.getCatalogPresentationTotalCount.call(view), 160);
+		const cursor = Reflect.get(view, "catalogCursor") as import("../src/types/catalogView").CatalogFeatureCursor;
+		if (view === h.view) { assert.equal(cursor, null); assert.equal(await production.loadNextCatalogPage.call(view), false); continue; }
+		assert.ok(cursor); assert.equal(cursor.catalog.catalogRevision, await h.catalog.getStore().getCatalogRevision());
+		assert.equal(await production.loadNextCatalogPage.call(view), true); assert.equal(view.memos.length, 150);
+		assert.equal(new Set(view.memos.map(memo => memo.id)).size, 150);
+		assert.equal(view.memos.some(memo => memo.contentSnapshot === "edited outside"), false);
+		assert.equal(Reflect.get(view, "catalogDesktopTotalCount"), 160);
+	}
+	assert.equal(await windows[1]!.production.loadNextCatalogPage.call(other.view), true);
+	assert.equal(other.view.memos.length, 160); assert.equal(Reflect.get(other.view, "catalogCursor"), null);
+	assert.equal(other.view.memos.filter(memo => memo.contentSnapshot === "edited outside").length, 1, "只有真实分页读到目标时才进入该 leaf 的普通窗口");
+	assert.equal(h.view.memos.length, 160); assert.equal(Reflect.get(other.view, "catalogDesktopTotalCount"), 160);
+});
+
+test("首次设置所需的原生 ID 写入只更新既有成员，不扩充其它 leaf 的普通窗口或重置分页总数", async t => {
+	t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 17, 12).getTime() });
+	const gate = deferred<void>(), confirmed = deferred<void>(), h = await fixture({ immediate: true, refreshViews: true,
+		catalogGate: gate.promise, onConfirmed: () => confirmed.resolve(),
+		body: "## Memos\n" + Array.from({ length: 160 }, (_, index) => `- 09:00 kept-${index}\n`).join("") });
+	const other = await h.createView(), selected = await readCurrentSourceMemo(h, memo => memo.content === "kept-0");
+	const windows = [await prepareDefaultCatalogWindow(h, h.view, 1), await prepareDefaultCatalogWindow(h, other.view, 2)];
+	const reference = h.mutations.createBlockReference({ observation: selected.catalog!.observationHandle, sourcePath: PATH });
+	try {
+		await confirmed.promise;
+		for (const { view, cursor, members } of windows) {
+			assert.deepEqual(view.memos.map(memo => memo.contentSnapshot), members);
+			assert.equal(Reflect.get(view, "catalogCursor"), cursor); assert.equal(Reflect.get(view, "catalogDesktopTotalCount"), 160);
+		}
+	} finally { gate.resolve(); }
+	const result = await reference; await h.waitForViewRefresh();
+	assert.ok(result.blockId); assert.equal(result.observation!.existingBlockId, result.blockId);
+	for (const { view, members } of windows) {
+		assert.deepEqual(view.memos.map(memo => memo.contentSnapshot), members);
+		assert.equal(Reflect.get(view, "catalogDesktopTotalCount"), 160);
+	}
+});
+
+async function readCurrentSourceMemo(h: Awaited<ReturnType<typeof fixture>>, matches: (memo: import("../src/types/catalog").MemoObservation) => boolean) {
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser"), { toCatalogMemoView } = await import("../src/types/memoView");
+	const parsed = await new DiaryMemoParser().parse({ sourcePath: PATH, logicalDate: DATE, bytes: Buffer.from(h.body()) });
+	const observation = parsed.observations.find(matches); assert.ok(observation);
+	return toCatalogMemoView((await h.read.readMemoItems([observation]))[0]!);
+}
+
+async function prepareDefaultCatalogWindow(h: Awaited<ReturnType<typeof fixture>>, view: TestView, pageCount: number) {
+	const { toCatalogMemoView } = await import("../src/types/memoView"), { getMemoListStateKey } = await import("../src/ui/MemoRenderRevision");
+	const production = Object.getPrototypeOf(view), query = production.buildCatalogActiveQuery.call(view, true);
+	let page = await h.read.query({ ...query, limit: 50 }); const items = [...page.items];
+	for (let index = 1; index < pageCount; index++) { page = await h.read.query({ ...query, limit: 50, cursor: page.nextCursor }); items.push(...page.items); }
+	view.memos = items.map(toCatalogMemoView); view.viewStateController.search.commitResult(query, page.catalogRevision, "complete");
+	Object.assign(view, { memoSourceGeneration: 0, catalogDesktopCountRun: 0, catalogCursor: page.nextCursor,
+		cardFlowCoordinator: { generation: 1 },
+		catalogDesktopTotalCount: 160, catalogHistoryExpansionPending: false,
+		catalogDesktopQueryFingerprint: production.getCatalogQueryFingerprint.call(view, true),
+		catalogCoverage: page.coverage, catalogRevision: page.catalogRevision, catalogStatus: page.status,
+		cardFlowError: null, shouldShowTodayTimeBuoys: () => false,
+		trashMemoController: { getSnapshot: () => ({ trashLoading: false, trashError: null, trashMemos: [] }) },
+		getCatalogReadService: () => h.read, reloadMemos: production.reloadMemos,
+		retainMemoCardPreviews: () => {}, syncRecordStatsSource: () => {}, refreshCatalogLibraryIndexes: async () => {},
+		syncSearchControls: () => {}, getMobileSearchStateKey: () => "closed", renderMobileSearchResultsIfChanged: () => {},
+		refreshCatalogDesktopTotalCount: async () => {}, renderNextCardBatch: () => {},
+		getCardFlowStateKey: () => getMemoListStateKey(view.getFilteredMemos()),
+	});
+	production.rememberCatalogRefreshWindow.call(view, Reflect.get(view, "catalogDesktopQueryFingerprint"));
+	return { view, production, members: view.memos.map(memo => memo.contentSnapshot), cursor: page.nextCursor };
+}
+
+test("窗口外灯标与另一张窗口外浮标同时撤权后，确认编辑只恢复原普通窗口成员", async t => {
+	const gate = deferred<void>(), h = await fixture({ immediate: true, catalogGate: gate.promise,
+		body: "## Memos\n- 08:00 neighbor ^neighbor\n- 09:00 selected ^beacon\n- 10:00 buoy @2026-10-10 ^buoy\n" });
+	h.view.memos = [h.memos[0]!];
+	const first = h.command.startEdit(h.memos[0]!.catalog!, "neighbor first"); await first.dailyCommitted;
+	const current = h.random.getSnapshot().memos!, selected = current.find(memo => memo.catalog!.observation.existingBlockId === "beacon")!,
+		buoy = current.find(memo => memo.catalog!.observation.existingBlockId === "buoy")!;
+	Object.assign(h.view, { beaconService: { getSnapshot: () => ({ state: "ready", selection: 1, memo: selected }),
+		isBoundObservation: (observation: import("../src/types/catalog").MemoObservation, anchors?: Record<string, number>) =>
+			observation.existingBlockId === "beacon" && anchors?.beacon === 1 }, isDefaultListState: () => true,
+		trashMemoController: { getSnapshot: () => ({ trashMemos: [] }) }, catalogDesktopTotalCount: 3 });
+	const cursor = { catalogRevision: 1, observationKey: "cursor", createdAtKey: "date" }; Object.assign(h.view, { catalogCursor: cursor });
+	const dom = attachCardFlow(h.view); let second: ReturnType<typeof h.command.startEdit> | undefined;
+	try {
+		Reflect.get(h.view, "syncCardFlowPresentation").call(h.view, { type: "items", mode: "memo", headers: [], memos: [...h.view.memos, buoy] }, null);
+		assert.equal(dom.root.querySelectorAll(".knomo-card").length, 3);
+		const app = Reflect.get(h.view, "app") as import("obsidian").App, process = app.vault.process.bind(app.vault);
+		t.mock.method(app.vault, "process", async (file: TFile, update: (content: string) => string) => {
+			const result = await process(file, update); await h.view.checkConfirmedDailyFile(PATH); return result;
+		});
+		second = h.command.startEdit(selected.catalog!, "edited selected"); await second.dailyCommitted;
+		assert.deepEqual(h.view.memos.map(memo => memo.contentSnapshot), ["neighbor first"]);
+		assert.equal(Reflect.get(h.view, "catalogCursor"), cursor); assert.equal(Reflect.get(h.view, "catalogDesktopTotalCount"), 3);
+	} finally { gate.resolve(); await first.settled; await second?.settled; dom.dispose(); }
+});
+
 test("日期详情接收真实 Daily 编辑、新建和删除广播，原重逢批次不补抽", async () => {
 	const h = await fixture();
 	const { ShuffleDayController } = await import("../src/ui/ShuffleDayController");
@@ -1817,7 +1971,7 @@ async function fixture(options: { body?: string; otherBody?: string; immediate?:
 		now: () => new Date(2026, 7, 22, 12), refreshCatalogPaths: async () => {},
 		refreshLocalCatalog: async () => { throw new Error("Unexpected refresh"); }, rebuildLocalCatalog: async () => {} }, mutations);
 	Object.assign(primary.view, { memoCommandService: command });
-	return { ...primary, memos, read, loadMemos, command, trash, catalog, vault, body: () => vault.read(PATH)!,
+	return { ...primary, memos, read, loadMemos, command, mutations, trash, catalog, vault, body: () => vault.read(PATH)!,
 		randomLoads: () => randomLoads, createView, externalReplace, failCatalog: () => { failCatalog = true; },
 		afterCatalogPublished: (action: () => Promise<void>) => { afterPublished = action; },
 		setDiscoveryGate: (gate: Promise<MemoViewItem[]> | null) => { discoveryGate = gate; },

@@ -105,7 +105,7 @@ async function fixture(withPreviews = false, withProductionCache = false, relati
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 80));
 
-test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并保留主体", async () => {
+test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并保留主体", { timeout: 5000 }, async () => {
 	const h = await fixture(true);
 	try {
 		const [target] = await h.seed("A.md", "## Memos\n\n- 09:00 subject ^target\n");
@@ -125,9 +125,18 @@ test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并�
 		h.read.relations.invalidateResolution(["B.md"]);
 		await settle();
 		assert.equal(queries, 0);
+		let rendered!: () => void;
+		const ready = new Promise<void>(resolve => { rendered = resolve; });
+		const options = (h.page as unknown as { options: MemoRelationsPageOptions }).options;
+		const render = options.renderCard;
+		options.renderCard = (...args) => {
+			const card = render(...args);
+			if (args[1].contentSnapshot.includes("first")) rendered();
+			return card;
+		};
 		h.page.setPresentationPaused(false);
 		h.cards!.setPresentationPaused(false);
-		await settle();
+		await ready;
 		assert.ok(queries > 0);
 		assert.match(h.page.el!.querySelector(".knomo-relations-list")!.textContent!, /first/);
 		assert.equal(h.page.el!.querySelector(".knomo-relations-subject .knomo-card"), originalCard);

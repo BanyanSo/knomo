@@ -1,4 +1,5 @@
 import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
+import { BeaconNotSavedError } from "../services/BeaconService";
 import type { BeaconService } from "../services/BeaconService";
 import { sameBeaconHandle, type BeaconSnapshot } from "../types/beacon";
 import { buildBeaconPresentation } from "./BeaconPresentation";
@@ -1411,6 +1412,7 @@ export class KnomoView extends ItemView {
 		this.externallyInvalidatedDailyRevisions?.clear();
 		this.confirmedDailyFileChecks?.clear();
 		this.readonlyMemoPresentation = undefined;
+		this.beaconPlaceholder = undefined;
 		this.randomReunionContinuation = undefined;
 		this.mobileViewFocusRecovery?.cancel();
 		this.mobileMenuController?.close();
@@ -1562,25 +1564,35 @@ export class KnomoView extends ItemView {
 		const cached = this.getCachedMemos();
 		if (readonly) cached.push(...Array.from(readonly.cards.values(), item => item.memo));
 		const target = presentation.change.changed;
-		const outsideBeacon = target !== null && presentation.change.inserted === null && this.beaconService?.isSelectedHandle(target)
-			&& this.isDefaultListState() && !this.memos.some(memo => presentation.change.replacements
+		const observation = target ? presentation.observations.find(item => sameBeaconHandle(item, target)) : undefined;
+		const windowMemos = [...this.memos, ...Array.from(readonly?.cards.values() ?? []).filter(item => item.inWindow).map(item => item.memo)];
+		const outsideBeacon = target !== null && observation !== undefined && presentation.change.inserted === null
+			&& this.beaconService?.isBoundObservation(observation, presentation.blockAnchors)
+			&& this.isDefaultListState() && !windowMemos.some(memo => presentation.change.replacements
 				.some(item => item.after && sameBeaconHandle(item.after, target) && memo.catalog && sameBeaconHandle(memo.catalog.observationHandle, item.before)));
-		const { changes, changed } = this.confirmedDailyMemos.apply(presentation, cached, capabilities, !outsideBeacon);
+		const updateExistingOnly = presentation.change.updateExistingOnly === true;
+		const preservePagination = outsideBeacon || updateExistingOnly && this.isDefaultListState();
+		const { changes, changed } = this.confirmedDailyMemos.apply(presentation, cached, capabilities, !outsideBeacon && !updateExistingOnly,
+			this.isDefaultListState() ? new Set(windowMemos.map(memo => memo.id)) : undefined, preservePagination);
 		// 保存自身的文件通知可能先撤权；只有提交明确映射的旧卡才由本次确认接续。
 		const resumed: MemoRecord[] = [];
 		for (const { before } of presentation.change.replacements) {
 			const key = observationHandleKey(before);
-			if (!readonly?.cards.delete(key)) continue;
+			const previous = readonly?.cards.get(key);
+			if (!previous) continue;
+			readonly!.cards.delete(key);
 			const current = changes.get(key);
-			if (current) resumed.push(current);
+			// 顶部补读的灯标/浮标也会撤权，但恢复时不能扩充普通查询窗口。
+			if (current && previous.inWindow) resumed.push(current);
 		}
 		if (readonly?.cards.size === 0) this.readonlyMemoPresentation = undefined;
-		if (resumed.length > 0) this.catalogDesktopTotalCount = null;
+		if (resumed.length > 0 && !preservePagination) this.catalogDesktopTotalCount = null;
 		this.randomReunionController.cancelPending();
 		this.shuffleDayController.cancelPending();
 		// 保存视图在面板退场前准备卡片，其它正在输入的移动视图继续保留延后渲染。
 		this.presentingConfirmedSave = this.isSaving;
-		try { this.applyCachedMemoChanges(changes, [...resumed, ...changed], true, previousPresentation, presentation.change.inserted !== null); }
+		try { this.applyCachedMemoChanges(changes, [...resumed, ...changed], true, previousPresentation, presentation.change.inserted !== null,
+			false, false, preservePagination); }
 		finally { this.presentingConfirmedSave = false; }
 		const proof = captureRandomReunionFileProof(presentation, this.randomReunionController.getSnapshot().memos ?? []);
 		if (proof) continuation.files.set(presentation.change.sourcePath, proof);
@@ -1626,7 +1638,7 @@ export class KnomoView extends ItemView {
 	private dailyFileValidationGeneration = 0;
 	private preservingReadonlyMemoPresentation = false;
 	private readonlyMemoPresentation: {
-		scope: string; cards: Map<string, { memo: MemoRecord; card: HTMLElement }>;
+		scope: string; cards: Map<string, { memo: MemoRecord; card: HTMLElement; inWindow?: boolean }>;
 	} | undefined;
 
 	private getReadonlyMemoPresentation() {
@@ -1648,6 +1660,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private beaconPresentation: BeaconSnapshot | undefined;
+	private beaconPlaceholder: { memo: MemoRecord; card: HTMLElement; selection: number; scope: string } | undefined;
 
 	private handleBeaconChanged(): void {
 		if (this.trashViewClosed || !this.cardFlowEl) return;
@@ -1659,6 +1672,15 @@ export class KnomoView extends ItemView {
 			top.setAttr("data-beacon-status", t("beacon.locating"));
 			top.setAttr("aria-label", t("beacon.locating"));
 			top.setAttr("inert", "");
+			const snapshot = this.beaconService?.getSnapshot();
+			if (previous && snapshot && snapshot.selection === this.beaconPresentation?.selection
+				&& (snapshot.state === "locating" || snapshot.state === "ready") && !this.beaconPlaceholder) {
+				this.beaconPlaceholder = { memo: previous, card: makeReadonlyMemoCard(top), selection: snapshot.selection,
+					scope: this.getCardFlowViewStateKey() };
+				this.memoMarkdownRenderer.releaseCard(top, "card-flow");
+				this.relationCards?.release(top);
+				this.removeCardImageTargets(top);
+			}
 		}
 		this.renderCardFlow();
 		this.syncCardMenuState();
@@ -1666,11 +1688,17 @@ export class KnomoView extends ItemView {
 
 	private applyBeaconPresentation<T extends CardFlowPresentation>(presentation: T): T | Extract<CardFlowPresentation, { type: "items" }> {
 		this.beaconPresentation = undefined;
-		if (!this.beaconService || !this.isDefaultListState()) return presentation;
+		if (!this.beaconService || !this.isDefaultListState()) { this.beaconPlaceholder = undefined; return presentation; }
 		const snapshot = this.beaconService.getSnapshot();
-		if (snapshot.state === "unset") return presentation;
+		if (snapshot.state === "unset") { this.beaconPlaceholder = undefined; return presentation; }
 		const result = buildBeaconPresentation(snapshot, presentation.type === "items" ? presentation.memos : []);
 		this.beaconPresentation = result.snapshot;
+		const placeholder = this.beaconPlaceholder;
+		if (placeholder && result.snapshot.state === "locating" && placeholder.selection === snapshot.selection
+			&& placeholder.scope === this.getCardFlowViewStateKey()) {
+			// 沿用原卡高度的撤权快照；旧正文已隐藏，不进入查询或操作集合。
+			result.memos = [placeholder.memo, ...result.memos.filter(memo => memo.id !== placeholder.memo.id)];
+		} else this.beaconPlaceholder = undefined;
 		const headers = [...(presentation.headers ?? [])];
 		if (presentation.type === "empty" && this.cardFlowError) headers.push({ type: "summary", text: `${presentation.title} ${presentation.description}`, feedback: true });
 		return { type: "items", mode: "memo", headers, memos: result.memos };
@@ -1683,7 +1711,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private isTopBeacon(memo: MemoRecord): boolean {
-		return this.beaconPresentation?.state === "ready" && this.isDefaultListState() && this.isCurrentBeacon(memo);
+		return (this.beaconPlaceholder?.memo.id === memo.id
+			|| this.beaconPresentation?.state === "ready" && this.isCurrentBeacon(memo)) && this.isDefaultListState();
 	}
 
 	private registerConfirmedDailyFileEvents(): void {
@@ -1725,9 +1754,10 @@ export class KnomoView extends ItemView {
 				}) : [];
 				const focus = flow ? new MemoFocusRestore(flow, mounted) : null;
 				const readonly = mounted.length ? this.getReadonlyMemoPresentation()
-					?? { scope: this.getCardFlowViewStateKey(), cards: new Map<string, { memo: MemoRecord; card: HTMLElement }>() } : undefined;
+					?? { scope: this.getCardFlowViewStateKey(), cards: new Map<string, { memo: MemoRecord; card: HTMLElement; inWindow?: boolean }>() } : undefined;
 				for (const { card, memo } of mounted) {
-					readonly?.cards.set(memo.id, { memo, card: makeReadonlyMemoCard(card) });
+					const inWindow = readonly?.cards.get(memo.id)?.inWindow ?? this.memos.some(member => member.id === memo.id);
+					readonly?.cards.set(memo.id, { memo, card: makeReadonlyMemoCard(card), inWindow });
 					this.memoMarkdownRenderer.releaseCard(card, "card-flow");
 					this.relationCards?.release(card);
 					this.removeCardImageTargets(card);
@@ -1875,7 +1905,8 @@ export class KnomoView extends ItemView {
 			for (const memo of pending) changes.set(memo.id, byKey.get(memo.id)!);
 			const upserts = pending.length > 0 ? pending.map(memo => byKey.get(memo.id)!)
 				: inserted ? [byKey.get(observationHandleKey(inserted))!] : [];
-			if (this.applyCachedMemoChanges(changes, upserts, pending.length > 0)) {
+			if (this.applyCachedMemoChanges(changes, upserts, pending.length > 0, undefined, false, false, false,
+				this.confirmedDailyMemos?.preservesPagination(change.sourcePath))) {
 				this.confirmedDailyMemos?.acknowledge(change);
 				if (feedbackRun === (this.pageFeedbackRun ?? 0)) { this.pageRefreshError = null; this.syncPageFeedback(); }
 			}
@@ -1924,6 +1955,7 @@ export class KnomoView extends ItemView {
 	private applyCachedMemoChanges(
 		changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], confirmed = false,
 		previousPresentation = this.captureMemoChangePresentation(), created = false, readonlyPresentation = false, preserveRandomMemos = false,
+		preservePagination = false,
 	): boolean {
 		this.cancelCatalogDesktopQuery();
 		this.remapHistoryBrowsePositions(changes, previousPresentation.memos);
@@ -1939,8 +1971,10 @@ export class KnomoView extends ItemView {
 			const additions = this.isReferrerQuery() ? [] : inserted;
 			this.memos = [...new Map([...this.memos, ...additions].map(memo => [memo.id, memo])).values()]
 				.sort((left, right) => compareCatalogObservations(left.catalog!.observation, right.catalog!.observation));
-			this.cancelCatalogDesktopCount();
-			this.catalogCursor = null;
+			if (!preservePagination) {
+				this.cancelCatalogDesktopCount();
+				this.catalogCursor = null;
+			}
 		}
 		const pinned = (this.confirmedTodayTimeBuoys ?? []).flatMap(item => {
 			const memo = changes.has(item.memo.id) ? changes.get(item.memo.id) : item.memo;
@@ -1971,7 +2005,7 @@ export class KnomoView extends ItemView {
 			this.hasConfirmedMemoPresentation = true;
 			this.cardFlowError = null;
 		}
-		if (confirmed && !sameMemos) {
+		if (confirmed && !sameMemos && !preservePagination) {
 			this.catalogDesktopTotalCount = created && typeof this.catalogDesktopTotalCount === "number"
 				? this.catalogDesktopTotalCount + current.memos.length - previousPresentation.memos.length : null;
 		}
@@ -2103,7 +2137,6 @@ export class KnomoView extends ItemView {
 
 	async refresh(forceRebuild = false): Promise<void> {
 		if (this.trashViewClosed) return;
-		void this.beaconService?.refresh();
 		this.pendingViewRefresh = this.pendingViewRefresh === true || forceRebuild;
 		await this.flushPresentationRefresh();
 	}
@@ -2141,6 +2174,8 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		this.resumePresentationAfterRefresh = true;
+		const beacon = this.beaconService?.getSnapshot();
+		if (beacon && beacon.state !== "ready" && beacon.state !== "unset") void this.beaconService?.retry();
 		void this.flushPresentationRefresh().catch(error => this.reportViewRefreshFailure(error, "visibility-refresh"));
 	}
 
@@ -4968,7 +5003,7 @@ export class KnomoView extends ItemView {
 			const existingCard = existingCards.get(renderKey) ?? null;
 			const previousMemo = this.renderedCardMemos.get(renderKey) ?? null;
 			let card: HTMLElement;
-			if (existingCard !== null && (this.getReadonlyMemoPresentation()?.cards.has(memo.id) || this.isRandomReunionMemoPending(memo))) {
+			if (existingCard !== null && (this.beaconPlaceholder?.memo.id === memo.id || this.getReadonlyMemoPresentation()?.cards.has(memo.id) || this.isRandomReunionMemoPending(memo))) {
 				card = existingCard.hasAttribute("data-knomo-readonly-transition") ? existingCard : makeReadonlyMemoCard(existingCard);
 			} else if (
 				existingCard !== null
@@ -5158,7 +5193,8 @@ export class KnomoView extends ItemView {
 		const date = snapshot.logicalDate ? new Intl.DateTimeFormat(getKnomoLocale(), { year: "numeric", month: "short", day: "numeric" })
 			.format(new Date(snapshot.logicalDate + "T12:00:00")) : null;
 		status.createDiv({ text: snapshot.state === "locating" ? t("beacon.locating") : snapshot.reason === "unreadable"
-			? t("beacon.unavailable") : date ? t("beacon.unlocatedDate", { date }) : t("beacon.unlocated") });
+			? t("beacon.unavailable") : snapshot.reason === "missing-id" ? t("beacon.missingId")
+			: snapshot.reason === "conflicting-id" ? t("beacon.conflictingId") : snapshot.reason === "not-memo" ? t("beacon.notMemo") : date ? t("beacon.unlocatedDate", { date }) : t("beacon.unlocated") });
 		if (snapshot.state !== "locating" && snapshot.reason !== "unreadable") status.createDiv({ text: t("beacon.recovery") });
 		const remove = status.createEl("button", { text: t("beacon.remove"), attr: { type: "button" } });
 		remove.addEventListener("click", () => { void this.beaconService?.remove(snapshot.selection).catch(() => new Notice(t("beacon.saveFailed"))); });
@@ -5309,6 +5345,7 @@ export class KnomoView extends ItemView {
 	): HTMLElement {
 		const snapshot = surface === "card-flow" ? this.getReadonlyMemoPresentation()?.cards.get(memo.id) : undefined;
 		if (snapshot) { container.appendChild(snapshot.card); return snapshot.card; }
+		if (surface === "card-flow" && this.beaconPlaceholder?.memo.id === memo.id) { container.appendChild(this.beaconPlaceholder.card); return this.beaconPlaceholder.card; }
 		const readonly = surface === "card-flow" && this.isRandomReunionMemoPending(memo);
 		const effectiveTimeBuoy = timeBuoy ?? this.getVisibleMemoTimeBuoy(memo);
 		const card = renderKnomoMemoCard(container, memo, {
@@ -6085,7 +6122,7 @@ export class KnomoView extends ItemView {
 			try {
 				if (action === "set-beacon" && memo.catalog && memo.status === "active") await this.beaconService?.set(memo.catalog.observationHandle);
 				else if (beaconSelection !== undefined) await this.beaconService?.remove(beaconSelection);
-			} catch { new Notice(t("beacon.saveFailed")); }
+			} catch (error) { new Notice(t(error instanceof BeaconNotSavedError ? "beacon.saveDailyFirst" : "beacon.saveFailed")); }
 			return;
 		}
 		if (action === "share-image") {
@@ -8704,6 +8741,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private findMemoById(memoId: string, surface?: CardRenderSurface): MemoRecord | null {
+		if ((surface === undefined || surface === "card-flow") && this.beaconPlaceholder?.memo.id === memoId) return null;
 		if ((surface === undefined || surface === "card-flow") && this.getReadonlyMemoPresentation()?.cards.has(memoId)) return null;
 		if (this.randomReunionContinuation?.pendingPaths.size && (surface === undefined || surface === "card-flow")
 			&& this.activeNav === "random" && !this.randomDayOpen) {

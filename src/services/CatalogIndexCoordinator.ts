@@ -1,3 +1,4 @@
+import type { BeaconSource } from "./BeaconService";
 import { normalizePath, TFile, TFolder } from "obsidian";
 import type { App, Component } from "obsidian";
 import type { CatalogScanSnapshot } from "../types/catalogView";
@@ -46,6 +47,7 @@ interface CatalogPathRevision {
 }
 
 export interface CatalogIndexCoordinatorOptions {
+	onPresentationSource?: (source: BeaconSource) => void;
 	onSourceEvent?: (path: string, kind: "change" | "delete" | "rename", newPath?: string) => void;
 	enabled?: boolean;
 	fullAuditIntervalMs?: number;
@@ -73,6 +75,7 @@ export class CatalogIndexCoordinator {
 	private readonly progressIntervalMs: number;
 	private readonly now: () => number;
 	private readonly onProgress: ((coverage: CatalogCoverage, scan: CatalogScanSnapshot) => void | Promise<void>) | null;
+	private readonly onPresentationSource: CatalogIndexCoordinatorOptions["onPresentationSource"];
 	private readonly onSourceEvent: CatalogIndexCoordinatorOptions["onSourceEvent"];
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
 	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
@@ -132,6 +135,7 @@ export class CatalogIndexCoordinator {
 		this.progressIntervalMs = Math.max(0, options.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS);
 		this.now = options.now ?? Date.now;
 		this.onProgress = options.onProgress ?? null;
+		this.onPresentationSource = options.onPresentationSource;
 		this.onSourceEvent = options.onSourceEvent;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
 		this.onDailyPeriodsChanged = options.onDailyPeriodsChanged ?? null;
@@ -208,6 +212,28 @@ export class CatalogIndexCoordinator {
 		await Promise.all(refreshed);
 	}
 
+	// 每次定向读取返回自己的路径与版本，不切换已选目标，也不依赖索引成功。
+	async readPresentationSource(path: string, logicalDate: string): Promise<BeaconSource> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile) || this.isStopped()) throw new Error("Daily source is unavailable.");
+		const revision = { generation: this.getPathGeneration(path), mtime: file.stat.mtime, size: file.stat.size };
+		const settings = this.settingsFingerprint;
+		const bytes = new Uint8Array(await this.app.vault.readBinary(file));
+		const parsed = await this.parser.parse({ sourcePath: path, logicalDate, bytes });
+		if (this.isStopped() || settings !== this.settingsFingerprint || !this.isPathRevisionCurrent(path, revision)) {
+			throw new Error("Daily source changed during reading.");
+		}
+		return { path, logicalDate, ...parsed };
+	}
+
+	private notifyPresentationSource(source: BeaconSource, revision: CatalogPathRevision, settings: string): void {
+		queueMicrotask(() => {
+			if (!this.isStopped() && settings === this.settingsFingerprint && this.isPathRevisionCurrent(source.path, revision)) {
+				this.onPresentationSource?.(source);
+			}
+		});
+	}
+
 	async replaceCommittedFile(input: MarkdownCatalogCommitInput): Promise<void> {
 		if (!this.opened || this.isStopped()) throw new Error("Memo Catalog is not available.");
 		const sourcePath = normalizePath(input.file.path);
@@ -220,6 +246,7 @@ export class CatalogIndexCoordinator {
 		this.bumpPathGeneration(sourcePath);
 		const revision = { generation: this.getPathGeneration(sourcePath), mtime: input.file.stat.mtime, size: input.file.stat.size };
 		const settingsFingerprint = this.settingsFingerprint;
+		this.notifyPresentationSource({ path: sourcePath, logicalDate: input.logicalDate, ...input.parsed }, revision, settingsFingerprint);
 		if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;
 		await this.runPathSerial(sourcePath, async () => {
 			if (this.isStopped()) throw new Error("Memo Catalog is not available.");
@@ -633,6 +660,7 @@ export class CatalogIndexCoordinator {
 				yieldControl: () => this.yieldToEventLoop(),
 			});
 			if (this.isStopped()) return;
+			this.notifyPresentationSource({ path: sourcePath, logicalDate: inventory.logicalDate, ...parsed }, revision, settingsFingerprint);
 			await this.runPathSerial(sourcePath, async () => {
 				if (!this.isPathRevisionCurrent(sourcePath, revision)) {
 					this.requeueCurrentPath(sourcePath);

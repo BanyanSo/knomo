@@ -14,6 +14,8 @@ import { DailyInventoryIndex } from "./services/DailyInventoryIndex";
 import { DailyNotesProvider } from "./services/DailyNotesProvider";
 import { DiaryMemoParser } from "./services/DiaryMemoParser";
 import { DailyMemoWriteGateway } from "./services/DailyMemoWriteGateway";
+import { toParsedCatalogMemoItem } from "./services/CatalogReadService";
+import { createCatalogCapabilities } from "./services/MemoCapabilityModel";
 import type { CatalogReadService } from "./services/CatalogReadService";
 import type { CatalogScanSnapshot } from "./types/catalogView";
 import {
@@ -38,7 +40,6 @@ import { FallbackMemoCatalogStore, InMemoryMemoCatalogStore } from "./services/M
 import { ObsidianExcludeService } from "./services/ObsidianExcludeService";
 import { PluginDataStore } from "./services/PluginDataStore";
 import { BeaconService, BeaconSourceUnavailableError, BeaconSourceUnlocatedError } from "./services/BeaconService";
-import { createDailyMemoBodyProof } from "./services/DailyMemoPresentationChange";
 import { sha256Bytes } from "./utils/sha256";
 import { SelfWriteTracker } from "./services/SelfWriteTracker";
 import { SettingsService } from "./services/SettingsService";
@@ -237,6 +238,7 @@ export default class KnomoPlugin extends Plugin {
 			() => Promise.resolve(getEffectiveDailyConfig()),
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
+				onPresentationSource: source => this.beaconService?.observeSource(source),
 				onSourceEvent: (path, kind, newPath) => this.beaconService?.sourceChanged(path, kind, newPath),
 				isConfigurationComplete: () => dailyNotesProvider.getConfig() !== null,
 				onProgress: (coverage, scan) => this.updateOpenViewCatalogProgress(coverage, scan),
@@ -266,6 +268,7 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseDailyNoteDateFromPath(presentation.change.sourcePath, getEffectiveDailyConfig());
 				if (date === null || formatDatePart(date) !== presentation.change.logicalDate) return;
 				this.beaconService?.confirmed(presentation);
+				void this.beaconService?.refresh();
 				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 					if (!(leaf.view instanceof KnomoView)) continue;
 					try { leaf.view.handleConfirmedDailyMemoChange(presentation); }
@@ -302,7 +305,10 @@ export default class KnomoPlugin extends Plugin {
 		this.register(() => trashStore.dispose());
 		let trashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 		const trashService = new IndependentTrashService(this.app, trashStore, {
-			onDailyConfirmed: (presentation, target) => this.beaconService?.confirmed(presentation, target),
+			onDailyConfirmed: (presentation, target, anchors) => {
+				this.beaconService?.confirmed(presentation, target, anchors);
+				void this.beaconService?.refresh();
+			},
 			assertActive: () => {
 				if (lowPriorityWorkQueue.signal.aborted
 					|| this.settingsService.getLoadStatus() !== "ready") throw new Error("Trash operation cancelled or configuration changed.");
@@ -361,33 +367,21 @@ export default class KnomoPlugin extends Plugin {
 					|| knomoCurrentConfigService.getStatus() !== "ready") throw new BeaconSourceUnavailableError();
 				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
 				if (date === null) throw new BeaconSourceUnlocatedError();
-				const file = this.app.vault.getAbstractFileByPath(path);
-				if (!(file instanceof TFile)) throw new BeaconSourceUnlocatedError();
-				const content = await this.app.vault.read(file);
-				const parsed = await diaryMemoParser.parse({ sourcePath: path, logicalDate: formatDatePart(date), bytes: new TextEncoder().encode(content) });
-				return { path, logicalDate: formatDatePart(date), ...parsed, bodyProof: await createDailyMemoBodyProof(content) };
+				return this.catalogIndexCoordinator!.readPresentationSource(path, formatDatePart(date));
 			},
 			isSourceCurrent: async source => {
 				if (lowPriorityWorkQueue.signal.aborted || knomoCurrentConfigService.getStatus() !== "ready") return false;
 				const date = parseDailyNoteDateFromPath(source.path, getEffectiveDailyConfig());
 				const file = this.app.vault.getAbstractFileByPath(source.path);
 				return date !== null && formatDatePart(date) === source.logicalDate && file instanceof TFile
-					&& await sha256Bytes(new TextEncoder().encode(await this.app.vault.read(file))) === source.sourceRevision;
+					&& await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(file))) === source.sourceRevision;
 			},
-			readMemo: async handle => {
-				try {
-					if (await this.catalogReadService!.getFileSourceRevision(handle.sourcePath) !== handle.sourceRevision) {
-						await this.catalogIndexCoordinator!.refreshPaths([handle.sourcePath]);
-					}
-					return (await this.catalogReadService!.readMemoItems([handle]))[0] ?? null;
-				}
-				catch { return null; }
-			},
+			createBlockReference: observation => markdownMutationService.createBlockReference({ observation, sourcePath: observation.sourcePath }),
+			fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial",
+				coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
 			onFailure: (error, operation) => { logContinuationFailure("view", "beacon", error); new Notice(t(operation === "read" ? "beacon.unavailable" : "beacon.saveFailed")); },
 		});
 		this.register(() => this.beaconService?.dispose());
-		await this.beaconService.reload();
-		if (lowPriorityWorkQueue.signal.aborted) return;
 		this.register(() => this.catalogReadService?.relations.dispose());
 		this.registerTrashEvents(trashStore);
 		const clearTrash = createClearTrashAction({
@@ -577,6 +571,8 @@ export default class KnomoPlugin extends Plugin {
 			retryRuntimeState,
 		);
 		this.addSettingTab(settingTab);
+
+		void this.beaconService.reload();
 
 		// 前台默认值已完成；后台配置串行链与 inventory 同步启动。
 		const configurationInitialization = knomoCurrentConfigService.initialize();

@@ -194,7 +194,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				return { ...committedResult(current, false), blockId };
 			}
 			const changed = findReplacementObservation(prepared, current, afterRawBlock, blockId);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed, false, true);
 			return { ...committedResult(changed, catalogUpdatePending), blockId };
 		});
 	}
@@ -233,6 +233,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		changedBefore: MemoObservation | null = null,
 		changedAfter: MemoObservation | null = insertedObservation ?? null,
 		retainRandomReunion = false,
+		updateExistingOnly = false,
 	): Promise<boolean> {
 		let bodyProof: DailyMemoBodyProof | undefined;
 		if (retainRandomReunion && this.options.onDailyConfirmed) {
@@ -241,6 +242,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		}
 		await this.dailyGateway.commit(prepared);
 		const presentationChange = buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter);
+		if (updateExistingOnly) presentationChange.updateExistingOnly = true;
 		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
 		let diskConfirmed = prepared.mode !== "active_editor";
 		if (!diskConfirmed && (onDailyCommitted || this.options.onDailyConfirmed)) {
@@ -249,7 +251,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		}
 		try {
 			if (diskConfirmed && this.options.onDailyConfirmed) this.options.onDailyConfirmed({
-				change: presentationChange, observations: prepared.after.observations,
+				change: presentationChange, observations: prepared.after.observations, blockAnchors: prepared.after.blockAnchors,
 				...(bodyProof ? { bodyProof } : {}),
 			});
 		} catch (error) {

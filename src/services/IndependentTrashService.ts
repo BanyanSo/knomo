@@ -11,7 +11,7 @@ import { buildDailyMemoPresentationChange, type ConfirmedDailyMemoPresentation }
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 export interface IndependentTrashOptions {
-	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation, deletedTarget?: ObservationHandle) => void;
+	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation, deletedTarget?: MemoObservation, beforeBlockAnchors?: Readonly<Record<string, number>>) => void;
 	assertActive?: () => void;
 	getLogicalDateForPath: (path: string) => Promise<string>;
 	// 返回 null 表示原路径已不适用；配置不可读必须抛错，不能猜测。
@@ -160,7 +160,7 @@ export class IndependentTrashService {
 
 	private async updateCatalog(prepared: PreparedDailyWrite, observation?: MemoObservation, deleted?: MemoObservation): Promise<boolean> {
 		const presentationChange = buildDailyMemoPresentationChange(prepared, deleted ?? null, observation ?? null);
-		try { this.options.onDailyConfirmed?.({ change: presentationChange, observations: prepared.after.observations }, deleted); }
+		try { this.options.onDailyConfirmed?.({ change: presentationChange, observations: prepared.after.observations, blockAnchors: prepared.after.blockAnchors }, deleted, prepared.before.blockAnchors); }
 		catch (error) { logContinuationFailure("trash", "confirmed-render", error); }
 		try {
 			this.options.assertActive?.();

@@ -24,6 +24,11 @@ import { InMemoryMemoCatalogStore } from "../../src/services/MemoCatalogStore";
 import { CatalogReadService } from "../../src/services/CatalogReadService";
 import type { BeaconSnapshot } from "../../src/types/beacon";
 import { registerKnomoIcons } from "../../src/icons";
+import type { BeaconSource } from "../../src/services/BeaconService";
+import { toParsedCatalogMemoItem } from "../../src/services/CatalogReadService";
+import { BeaconService } from "../../src/services/BeaconService";
+import { PluginDataStore } from "../../src/services/PluginDataStore";
+import { toCatalogMemoView } from "../../src/types/memoView";
 
 export function installDomHelpers(): void {
 	Object.assign(HTMLElement.prototype, {
@@ -133,8 +138,9 @@ export async function beaconGeometry(options: { mobile: boolean; dark: boolean; 
 	const input = document.createElement("input"); document.body.append(input); input.focus();
 	view.renderCardFlow = () => {};
 	snapshot = { state: "locating", selection: 1 }; view.handleBeaconChanged();
-	const deferred = { hidden: getComputedStyle(oldTop.querySelector<HTMLElement>(".knomo-card-body")!).visibility === "hidden",
-		inert: oldTop.hasAttribute("inert"), heightChange: oldTop.getBoundingClientRect().height - oldHeight, focused: document.activeElement === input };
+	const waitingTop = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
+	const deferred = { hidden: getComputedStyle(waitingTop.querySelector<HTMLElement>(".knomo-card-body")!).visibility === "hidden",
+		inert: waitingTop.hasAttribute("inert"), heightChange: waitingTop.getBoundingClientRect().height - oldHeight, focused: document.activeElement === input };
 	snapshot = { state: "ready", selection: 1, memo: selected }; render(); input.remove();
 	snapshot = { state: "unset", selection: 2 }; render(); await frames(); const removed = sample();
 	// 相关旧源普通卡/浮标卡未跟上时，新旧正文不能双显。
@@ -149,6 +155,133 @@ export async function beaconGeometry(options: { mobile: boolean; dark: boolean; 
 	// 恢复纯视觉状态用于截图；不增加功能标题或扩大普通分页窗口。
 	snapshot = { state: "ready", selection: 4, memo: selected }; render(); flow.scrollTop = 0; await frames();
 	return { before, pinned, visual, dateFlip, removed, delayed, deferred, ordinaryCount: memos.length };
+}
+
+export async function beaconSourceRefresh(options: { mobile: boolean; loaded: boolean }) {
+	const h = fixture(options.mobile), { view, flow } = h;
+	prepareBeaconSurface(flow, { ...options, dark: options.mobile, reduce: options.mobile });
+	const path = "Daily/2026-11-16.md", date = "2026-11-16";
+	let content = "## Memos\n" + Array.from({ length: 35 }, (_, index) => `- 08:30 Memo ${index}${index === 8 ? " ^beacon" : ""}\n`).join("");
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore()), parser = new DiaryMemoParser();
+	await catalog.open(); const read = new CatalogReadService({ catalog });
+	let source: BeaconSource, revision = 0, saved: unknown = {}, gate: Promise<void> | undefined;
+	const seed = async () => {
+		const parsed = await parser.parse({ sourcePath: path, logicalDate: date, bytes: new TextEncoder().encode(content) });
+		source = { path, logicalDate: date, ...parsed };
+		await catalog.replaceFile({ inventory: { sourcePath: path, logicalDate: date, mtime: ++revision, size: content.length },
+			...parsed, parserVersion: 19, settingsFingerprint: "test", auditedAt: revision });
+	};
+	await seed();
+	const list = async () => (await read.query({ limit: 100 })).items.map(toCatalogMemoView)
+		.filter(memo => options.loaded || memo.catalog?.observation.existingBlockId !== "beacon");
+	const service = new BeaconService(new PluginDataStore({ loadData: async () => saved,
+		saveData: async data => { saved = data; } } as import("obsidian").Plugin), {
+		readSource: async () => { await gate; return source; },
+		isSourceCurrent: async value => value.sourceRevision === source.sourceRevision,
+		createBlockReference: async handle => ({ status: "committed", observation: source.observations.find(item => item.startLine === handle.startLine)!, blockId: "beacon", catalogUpdatePending: false }),
+		fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
+		onFailure: error => { throw error; },
+	});
+	Object.assign(view, { beaconService: service, getCardFlowViewStateKey: () => "default", getPageFeedbackContext: () => "beacon-refresh",
+		settingsService: { getSettings: () => ({ recentTimeFlowEnabled: true }) }, getTodayTimeBuoyItems: () => [], memos: await list() });
+	delete view.prepareRecentTimeFlow; delete view.renderCardFlowHeaders;
+	const render = () => view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: view.memos }, null);
+	view.renderCardFlow = render;
+	const unsubscribe = service.subscribe(() => view.handleBeaconChanged());
+	try {
+		await service.reload(); render(); await service.set(source!.observations[8]!); await h.settle();
+		const top = flow.querySelector<HTMLElement>("[data-beacon-top]")!, height = top.getBoundingClientRect().height;
+		const input = document.createElement("textarea"); document.body.append(input); input.focus();
+		input.dispatchEvent(new CompositionEvent("compositionstart", { data: "输" }));
+		let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; });
+		content = content.replace("Memo 0", "Neighbor changed\n  extra line"); await seed();
+		service.sourceChanged(path); render(); await frames();
+		const waitingTop = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
+		const waiting = { count: flow.querySelectorAll("[data-beacon-top]").length,
+			hidden: getComputedStyle(waitingTop.querySelector<HTMLElement>(".knomo-card-body")!).visibility === "hidden",
+			inert: waitingTop.hasAttribute("inert"), heightChange: waitingTop.getBoundingClientRect().height - height,
+			focused: document.activeElement === input, state: service.getSnapshot().state };
+		gate = undefined; release(); await service.refresh(); view.memos = await list(); render(); await h.settle();
+		const ready = { state: service.getSnapshot().state, count: flow.querySelectorAll("[data-beacon-top]").length,
+			selected: Array.from(flow.querySelectorAll(".knomo-card-content")).filter(item => item.textContent === "Memo 8").length,
+			focused: document.activeElement === input, placeholder: flow.querySelectorAll("[data-beacon-status]").length,
+			total: flow.querySelectorAll(".knomo-card").length, expected: view.memos.length + (options.loaded ? 0 : 1) };
+		content = content.replace("Memo 8", "Changed target"); await seed(); service.sourceChanged(path); await service.refresh();
+		const updated = { state: service.getSnapshot().state, content: service.getSnapshot().memo?.contentSnapshot };
+		content = content.replace(" ^beacon", ""); await seed(); service.sourceChanged(path); await service.refresh();
+		const rejected = { state: service.getSnapshot().state, reason: service.getSnapshot().reason,
+			placeholder: flow.querySelectorAll("[data-beacon-status]").length, status: flow.querySelector(".knomo-beacon-status")?.textContent };
+		content = content.replace("Changed target", "Changed target ^beacon"); await seed();
+		view.memos = await list(); await service.set(source!.observations[8]!); render();
+		gate = new Promise<void>(resolve => { release = resolve; }); service.sourceChanged(path); render();
+		await service.remove(service.getSnapshot().selection);
+		const removed = { state: service.getSnapshot().state, top: flow.querySelectorAll("[data-beacon-top]").length,
+			placeholder: flow.querySelectorAll("[data-beacon-status]").length };
+		gate = undefined; release(); await service.refresh();
+		input.dispatchEvent(new CompositionEvent("compositionend", { data: "输入" })); input.remove();
+		return { waiting, ready, updated, rejected, removed };
+	} finally { unsubscribe(); service.dispose(); catalog.close(); }
+}
+
+export async function beaconTwoViews(mobile: boolean) {
+	const left = fixture(mobile);
+	const host = document.createElement("main"); host.className = "knomo-plugin"; document.body.append(host);
+	const rightFlow = host.createDiv({ cls: "knomo-card-flow" });
+	const right = fixture(mobile, false, rightFlow);
+	for (const h of [left, right]) prepareBeaconSurface(h.flow, { mobile, dark: mobile, reduce: mobile });
+	const path = "Daily/2026-11-16.md", logicalDate = "2026-11-16", parser = new DiaryMemoParser();
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore()); await catalog.open();
+	const read = new CatalogReadService({ catalog });
+	let content = "## Memos\n" + Array.from({ length: 35 }, (_, i) => `- 08:${String(i).padStart(2, "0")} Memo ${i}${i === 8 ? " ^beacon" : ""}\n`).join("");
+	let source!: BeaconSource, stamp = 0, saved: unknown = {}, writes = 0;
+	const publish = async () => {
+		const parsed = await parser.parse({ sourcePath: path, logicalDate, bytes: new TextEncoder().encode(content) });
+		source = { path, logicalDate, ...parsed };
+		await catalog.replaceFile({ inventory: { sourcePath: path, logicalDate, mtime: ++stamp, size: content.length },
+			...parsed, parserVersion: 19, settingsFingerprint: "test", auditedAt: stamp });
+	};
+	await publish();
+	const service = new BeaconService(new PluginDataStore({ loadData: async () => saved, saveData: async data => { writes++; saved = data; } } as import("obsidian").Plugin), {
+		readSource: async () => source,
+		isSourceCurrent: async value => value.sourceRevision === source.sourceRevision,
+		createBlockReference: async handle => ({ status: "committed", observation: source.observations.find(item => item.startLine === handle.startLine)!, blockId: "beacon", catalogUpdatePending: false }),
+		fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
+		onFailure: error => { throw error; },
+	});
+	let hidden = false, defaultScope = true;
+	const renderers = [left, right].map((h, i) => {
+		Object.assign(h.view, { beaconService: service, getCardFlowViewStateKey: () => "default", isDefaultListState: () => i === 0 ? defaultScope : true,
+			getPageFeedbackContext: () => "two-views", settingsService: { getSettings: () => ({ recentTimeFlowEnabled: true }) },
+			getTodayTimeBuoyItems: () => [], memos: [] });
+		delete h.view.prepareRecentTimeFlow; delete h.view.renderCardFlowHeaders;
+		const render = () => { if (i !== 1 || !hidden) h.view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: h.view.memos }, null); };
+		h.view.renderCardFlow = render; return render;
+	});
+	const lists = async (i: number) => { const h = [left, right][i]!; h.view.memos = (await read.query({ limit: i === 0 ? 35 : 5 })).items.map(toCatalogMemoView); renderers[i]!(); };
+	const off = [left, right].map(h => service.subscribe(() => h.view.handleBeaconChanged()));
+	const samples: Array<{ phase: string; counts: number[]; tops: number[] }> = [];
+	const sample = (phase: string) => samples.push({ phase, counts: [left, right].map(h => Array.from(h.flow.querySelectorAll<HTMLElement>(".knomo-card"))
+		.filter(card => /Memo 8|Edited selected/u.test(card.querySelector(".knomo-card-content")?.textContent ?? "")
+			&& !card.hasAttribute("inert") && !card.hasAttribute("data-knomo-readonly-transition")).length),
+		tops: [left, right].map(h => h.flow.querySelectorAll("[data-beacon-top]:not([inert])").length) });
+	try {
+		await service.reload(); await lists(0); await lists(1); await service.set(source.observations[8]!); sample("initial");
+		hidden = true;
+		content = content.replace("Memo 0", "neighbor changed\n  extra"); await publish(); service.sourceChanged(path);
+		service.observeSource(source); await lists(0); sample("query first");
+		await Promise.all([service.refresh(), service.refresh()]); sample("binding after query");
+		const before = source;
+		content = content.replace("Memo 8", "Edited selected"); await publish(); service.sourceChanged(path);
+		service.confirmed({ change: { sourcePath: path, logicalDate, beforeSourceRevision: before.sourceRevision, sourceRevision: source.sourceRevision,
+			replacements: before.observations.map((item, i) => ({ before: item, after: source.observations[i]! })), inserted: null, changed: source.observations[8]! },
+			observations: source.observations, blockAnchors: source.blockAnchors });
+		await service.refresh(); sample("binding first"); await lists(0); sample("query after binding");
+		hidden = false; await lists(1); sample("hidden resumed");
+		defaultScope = false; renderers[0]!(); const filteredTop = left.flow.querySelectorAll("[data-beacon-top]").length;
+		defaultScope = true; renderers[0]!(); await service.remove(service.getSnapshot().selection); sample("removed");
+		await left.settle(); await right.settle();
+		return { samples, filteredTop, writes, sizes: [left.view.memos.length, right.view.memos.length] };
+	} finally { for (const dispose of off) dispose(); service.dispose(); catalog.close(); host.remove(); }
 }
 
 export async function beaconStylePreview(options: { mobile: boolean; dark: boolean; today: boolean }) {
@@ -203,9 +336,9 @@ export async function beaconStylePreview(options: { mobile: boolean; dark: boole
 
 const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 
-function fixture(mobile = false, richMarkdown = false) {
+function fixture(mobile = false, richMarkdown = false, flowOverride?: HTMLElement) {
 	Object.assign(Platform, { isMobile: mobile });
-	const flow = document.getElementById("flow")!;
+	const flow = flowOverride ?? document.getElementById("flow")!;
 	flow.replaceChildren(); flow.scrollTop = 0;
 	const view = Object.create(KnomoView.prototype);
 	const context = { enabled: true, dates: ["2026-11-08", "2026-11-07", "2026-11-06"], pinnedKeys: new Set<string>() };

@@ -12,11 +12,14 @@ export interface DailyMemoPresentationChange {
 	replacements: ReadonlyArray<{ before: ObservationHandle; after: ObservationHandle | null }>;
 	inserted: ObservationHandle | null;
 	changed: ObservationHandle | null;
+	// 原生引用锚点只刷新已有成员，不把目标补入其它视图的查询窗口。
+	updateExistingOnly?: true;
 }
 
 export interface ConfirmedDailyMemoPresentation {
 	change: DailyMemoPresentationChange;
 	observations: readonly MemoObservation[];
+	blockAnchors?: Readonly<Record<string, number>>;
 	bodyProof?: DailyMemoBodyProof;
 }
 

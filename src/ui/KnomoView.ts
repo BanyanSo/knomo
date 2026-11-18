@@ -1669,8 +1669,8 @@ export class KnomoView extends ItemView {
 		const previous = key ? this.renderedCardMemos.get(key) : undefined;
 		if (top && (!previous || !this.isCurrentBeacon(previous))) {
 			// 输入期间仍沿用整页延迟刷新；先隐藏失效正文并撤权，保留原高度与键盘布局。
-			top.setAttr("data-beacon-status", t("beacon.locating"));
-			top.setAttr("aria-label", t("beacon.locating"));
+			top.setAttr("data-beacon-placeholder", "");
+			top.setAttr("aria-hidden", "true");
 			top.setAttr("inert", "");
 			const snapshot = this.beaconService?.getSnapshot();
 			if (previous && snapshot && snapshot.selection === this.beaconPresentation?.selection
@@ -1699,9 +1699,15 @@ export class KnomoView extends ItemView {
 			// 沿用原卡高度的撤权快照；旧正文已隐藏，不进入查询或操作集合。
 			result.memos = [placeholder.memo, ...result.memos.filter(memo => memo.id !== placeholder.memo.id)];
 		} else this.beaconPlaceholder = undefined;
+		if (presentation.type === "empty" && result.memos.length === 0 && !this.getBeaconRecovery()) return presentation;
 		const headers = [...(presentation.headers ?? [])];
 		if (presentation.type === "empty" && this.cardFlowError) headers.push({ type: "summary", text: `${presentation.title} ${presentation.description}`, feedback: true });
 		return { type: "items", mode: "memo", headers, memos: result.memos };
+	}
+
+	private getBeaconRecovery(): BeaconSnapshot | undefined {
+		const snapshot = this.beaconPresentation;
+		return snapshot?.state === "unavailable" && snapshot.reason !== "unreadable" ? snapshot : undefined;
 	}
 
 	private isCurrentBeacon(memo: MemoRecord): boolean {
@@ -1873,7 +1879,11 @@ export class KnomoView extends ItemView {
 		const inserted = change.inserted !== null && (this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
 			|| this.randomDayController?.getSnapshot().selectedDate === change.logicalDate)
 			? change.inserted : null;
-		if (replacements.length === 0 && inserted === null && pending.length === 0) return;
+		if (replacements.length === 0 && inserted === null && pending.length === 0) {
+			// 此入口已等待 Catalog 提交；没有本页成员也必须结束确认交接。
+			this.confirmedDailyMemos?.acknowledge(change);
+			return;
+		}
 		const changes = new Map<string, MemoRecord | null>(replacements.map(item => [observationHandleKey(item.before), null]));
 		const handles = [...new Map([...replacements.flatMap(item => item.after ? [item.after] : []),
 			...(inserted ? [inserted] : []), ...pending.map(memo => memo.catalog!.observationHandle)]
@@ -5008,7 +5018,7 @@ export class KnomoView extends ItemView {
 			} else if (
 				existingCard !== null
 				&& !existingCard.hasAttribute("data-knomo-readonly-transition")
-				&& !existingCard.hasAttribute("data-beacon-status")
+				&& !existingCard.hasAttribute("data-beacon-placeholder")
 				&& existingCard.hasAttribute("data-beacon-top") === this.isTopBeacon(memo)
 				&& (!this.isTopBeacon(memo) || existingCard.getAttr("data-beacon-buoy") === (this.getVisibleMemoTimeBuoy(memo)?.status ?? "none"))
 				&& (presentation.mode !== "memo" || existingCard.getAttr("data-time-presentation") === JSON.stringify(getRecentMemoPresentation(memo, this.recentTimeFlowContext).time))
@@ -5184,20 +5194,15 @@ export class KnomoView extends ItemView {
 		this.cardFlowFeedback.context = headers.some(header => header.type === "summary" && header.feedback) ? this.getPageFeedbackContext() : "";
 		const elements = syncKnomoCardFlowHeaders(container, headers, this.getPageFeedbackContext(), this.cardFlowFeedback);
 		const previous = container.querySelector<HTMLElement>(".knomo-beacon-status");
-		const snapshot = this.beaconPresentation && this.isDefaultListState() ? this.beaconPresentation : undefined;
-		if (!snapshot || snapshot.state === "ready" || snapshot.state === "unset") { previous?.remove(); return elements; }
-		const key = JSON.stringify([snapshot, getKnomoLocale()]);
+		const snapshot = this.isDefaultListState() ? this.getBeaconRecovery() : undefined;
+		if (!snapshot) { previous?.remove(); return elements; }
+		const key = JSON.stringify([snapshot.selection, getKnomoLocale()]);
 		if (previous?.getAttr("data-beacon-state") === key) { elements.push(previous); return elements; }
 		previous?.remove();
-		const status = container.createEl("aside", { cls: "knomo-beacon-status", attr: { role: "status", "data-beacon-state": key } });
-		const date = snapshot.logicalDate ? new Intl.DateTimeFormat(getKnomoLocale(), { year: "numeric", month: "short", day: "numeric" })
-			.format(new Date(snapshot.logicalDate + "T12:00:00")) : null;
-		status.createDiv({ text: snapshot.state === "locating" ? t("beacon.locating") : snapshot.reason === "unreadable"
-			? t("beacon.unavailable") : snapshot.reason === "missing-id" ? t("beacon.missingId")
-			: snapshot.reason === "conflicting-id" ? t("beacon.conflictingId") : snapshot.reason === "not-memo" ? t("beacon.notMemo") : date ? t("beacon.unlocatedDate", { date }) : t("beacon.unlocated") });
-		if (snapshot.state !== "locating" && snapshot.reason !== "unreadable") status.createDiv({ text: t("beacon.recovery") });
+		const status = container.createEl("aside", { cls: "knomo-beacon-status", attr: { "data-beacon-state": key } });
+		status.createDiv({ text: t("beacon.recovery"), attr: { role: "status" } });
 		const remove = status.createEl("button", { text: t("beacon.remove"), attr: { type: "button" } });
-		remove.addEventListener("click", () => { void this.beaconService?.remove(snapshot.selection).catch(() => new Notice(t("beacon.saveFailed"))); });
+		remove.addEventListener("click", () => { void this.beaconService?.remove(snapshot.selection).catch(() => new Notice(t("beacon.removeFailed"))); });
 		container.insertBefore(status, elements.length > 0 ? elements[elements.length - 1].nextSibling : container.firstChild);
 		elements.push(status);
 		return elements;
@@ -5834,7 +5839,7 @@ export class KnomoView extends ItemView {
 			this.closeCardMenu();
 			const token = sourceEl?.closest<HTMLElement>("[data-beacon-selection]")?.getAttr("data-beacon-selection");
 			if (token !== null && token !== undefined) {
-				await this.beaconService?.remove(Number(token)).catch(() => new Notice(t("beacon.saveFailed")));
+				await this.beaconService?.remove(Number(token)).catch(() => new Notice(t("beacon.removeFailed")));
 				return;
 			}
 			return;
@@ -6122,7 +6127,10 @@ export class KnomoView extends ItemView {
 			try {
 				if (action === "set-beacon" && memo.catalog && memo.status === "active") await this.beaconService?.set(memo.catalog.observationHandle);
 				else if (beaconSelection !== undefined) await this.beaconService?.remove(beaconSelection);
-			} catch (error) { new Notice(t(error instanceof BeaconNotSavedError ? "beacon.saveDailyFirst" : "beacon.saveFailed")); }
+			} catch (error) {
+				new Notice(t(action === "remove-beacon" ? "beacon.removeFailed"
+					: error instanceof BeaconNotSavedError ? "beacon.saveDailyFirst" : "beacon.setFailed"));
+			}
 			return;
 		}
 		if (action === "share-image") {

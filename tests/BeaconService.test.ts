@@ -53,6 +53,19 @@ test("原句柄 stale 时拒绝设置，不通过 block ID 换取新句柄", asy
 	assert.deepEqual(h.data.beacon, saved); assert.equal(h.anchorWrites, 0);
 });
 
+test("首次锚点写入后真有并发正文修改时，不保存新灯标", async () => {
+	const h = await pinned(BODY.replace(" ^tail", ""));
+	const oldBeacon = structuredClone(h.data.beacon);
+	h.beforeRead = async path => {
+		h.beforeRead = undefined;
+		await h.write(h.content().replace("tail", "edited elsewhere"), path);
+	};
+	await assert.rejects(h.service.set(h.source.observations[2]!), /Beacon source changed/u);
+	assert.equal(h.anchorWrites, 1);
+	assert.match(h.content(), /edited elsewhere \^generated-1/u);
+	assert.deepEqual(h.data.beacon, oldBeacon);
+});
+
 for (const existing of [false, true]) test(`活动编辑器${existing ? "已有" : "新建"} ID 尚未落盘，保留原灯标并提示保存后重试`, async () => {
 	const h = await pinned(); const saved = structuredClone(h.data.beacon);
 	await h.write(existing ? BODY.replace("tail", "unsaved tail") : BODY.replace(" ^tail", ""));
@@ -229,7 +242,7 @@ test("外部删除文件、缺少删除前计数或原句柄不符都不能清�
 	assert.deepEqual(h.data.beacon, saved); assert.equal(h.failures.length, 1);
 	h.failSave = false; await h.service.refresh(); assert.equal(h.data.beacon, undefined);
 	const file = await pinned(); const record = structuredClone(file.data.beacon); file.service.sourceChanged(PATH, "delete"); await file.service.refresh();
-	assert.deepEqual(file.data.beacon, record); assert.equal(file.service.getSnapshot().reason, "unreadable");
+	assert.deepEqual(file.data.beacon, record); assert.equal(file.service.getSnapshot().reason, "unlocated");
 });
 
 test("旧记录保留供移除或重设，磁盘配置读取失败须先恢复读取", async () => {

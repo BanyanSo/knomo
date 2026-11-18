@@ -212,15 +212,13 @@ export class CatalogIndexCoordinator {
 		await Promise.all(refreshed);
 	}
 
-	// 每次定向读取返回自己的路径与版本，不切换已选目标，也不依赖索引成功。
+	// 定向读取只核对文件对象。调用方按磁盘字节复核版本，索引重扫或迟到的文件时间通知不撤销读取。
 	async readPresentationSource(path: string, logicalDate: string): Promise<BeaconSource> {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile) || this.isStopped()) throw new Error("Daily source is unavailable.");
-		const revision = { generation: this.getPathGeneration(path), mtime: file.stat.mtime, size: file.stat.size };
-		const settings = this.settingsFingerprint;
 		const bytes = new Uint8Array(await this.app.vault.readBinary(file));
 		const parsed = await this.parser.parse({ sourcePath: path, logicalDate, bytes });
-		if (this.isStopped() || settings !== this.settingsFingerprint || !this.isPathRevisionCurrent(path, revision)) {
+		if (this.isStopped() || file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file) {
 			throw new Error("Daily source changed during reading.");
 		}
 		return { path, logicalDate, ...parsed };

@@ -169,7 +169,10 @@ export class BeaconService {
 		if (!selectedPath || !matches(selectedPath)) return;
 		const previous = this.source ?? this.presentedSource;
 		this.invalidate();
-		if (kind === "delete") { this.deleted = true; this.publish("unavailable", "unreadable"); }
+		if (kind === "delete") {
+			this.deleted = true;
+			if (this.readable) this.publish("unavailable", "unlocated");
+		}
 		if (kind === "rename" && newPath !== undefined && !this.deleted) {
 			if (previous?.path === selectedPath) this.renamedSources.set(selectedPath + "\0" + previous.sourceRevision,
 				{ sourcePath: selectedPath, sourceRevision: previous.sourceRevision });
@@ -215,7 +218,7 @@ export class BeaconService {
 		if (this.raw === undefined) { this.publish("unset"); return; }
 		const ref = this.reference, path = this.selectedPath();
 		if (!ref || !path) { this.publish("unavailable", "unlocated"); return; }
-		if (this.deleted) { this.publish("unavailable", "unreadable"); return; }
+		if (this.deleted) { this.publish("unavailable", "unlocated"); return; }
 		try {
 			let source = this.source ?? await this.options.readSource(path);
 			if (!current()) return;

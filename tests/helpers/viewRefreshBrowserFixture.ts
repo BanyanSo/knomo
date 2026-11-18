@@ -164,7 +164,7 @@ export async function beaconSourceRefresh(options: { mobile: boolean; loaded: bo
 	let content = "## Memos\n" + Array.from({ length: 35 }, (_, index) => `- 08:30 Memo ${index}${index === 8 ? " ^beacon" : ""}\n`).join("");
 	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore()), parser = new DiaryMemoParser();
 	await catalog.open(); const read = new CatalogReadService({ catalog });
-	let source: BeaconSource, revision = 0, saved: unknown = {}, gate: Promise<void> | undefined;
+	let source: BeaconSource, revision = 0, saved: unknown = {}, gate: Promise<void> | undefined, sourceUnreadable = false;
 	const seed = async () => {
 		const parsed = await parser.parse({ sourcePath: path, logicalDate: date, bytes: new TextEncoder().encode(content) });
 		source = { path, logicalDate: date, ...parsed };
@@ -176,7 +176,11 @@ export async function beaconSourceRefresh(options: { mobile: boolean; loaded: bo
 		.filter(memo => options.loaded || memo.catalog?.observation.existingBlockId !== "beacon");
 	const service = new BeaconService(new PluginDataStore({ loadData: async () => saved,
 		saveData: async data => { saved = data; } } as import("obsidian").Plugin), {
-		readSource: async () => { await gate; return source; },
+		readSource: async () => {
+			await gate;
+			if (sourceUnreadable) throw new Error("Daily unreadable");
+			return source;
+		},
 		isSourceCurrent: async value => value.sourceRevision === source.sourceRevision,
 		createBlockReference: async handle => ({ status: "committed", observation: source.observations.find(item => item.startLine === handle.startLine)!, blockId: "beacon", catalogUpdatePending: false }),
 		fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
@@ -198,28 +202,35 @@ export async function beaconSourceRefresh(options: { mobile: boolean; loaded: bo
 		service.sourceChanged(path); render(); await frames();
 		const waitingTop = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
 		const waiting = { count: flow.querySelectorAll("[data-beacon-top]").length,
-			hidden: getComputedStyle(waitingTop.querySelector<HTMLElement>(".knomo-card-body")!).visibility === "hidden",
+			hidden: getComputedStyle(waitingTop).visibility === "hidden" && waitingTop.getAttribute("aria-hidden") === "true",
+			status: flow.querySelector(".knomo-beacon-status")?.textContent,
 			inert: waitingTop.hasAttribute("inert"), heightChange: waitingTop.getBoundingClientRect().height - height,
 			focused: document.activeElement === input, state: service.getSnapshot().state };
 		gate = undefined; release(); await service.refresh(); view.memos = await list(); render(); await h.settle();
 		const ready = { state: service.getSnapshot().state, count: flow.querySelectorAll("[data-beacon-top]").length,
 			selected: Array.from(flow.querySelectorAll(".knomo-card-content")).filter(item => item.textContent === "Memo 8").length,
-			focused: document.activeElement === input, placeholder: flow.querySelectorAll("[data-beacon-status]").length,
+			focused: document.activeElement === input, placeholder: flow.querySelectorAll("[data-beacon-placeholder]").length,
 			total: flow.querySelectorAll(".knomo-card").length, expected: view.memos.length + (options.loaded ? 0 : 1) };
 		content = content.replace("Memo 8", "Changed target"); await seed(); service.sourceChanged(path); await service.refresh();
 		const updated = { state: service.getSnapshot().state, content: service.getSnapshot().memo?.contentSnapshot };
+		sourceUnreadable = true; service.sourceChanged(path); await service.refresh();
+		const unreadable = { reason: service.getSnapshot().reason, status: flow.querySelector(".knomo-beacon-status")?.textContent,
+			placeholder: flow.querySelectorAll("[data-beacon-placeholder]").length };
+		sourceUnreadable = false;
 		content = content.replace(" ^beacon", ""); await seed(); service.sourceChanged(path); await service.refresh();
 		const rejected = { state: service.getSnapshot().state, reason: service.getSnapshot().reason,
-			placeholder: flow.querySelectorAll("[data-beacon-status]").length, status: flow.querySelector(".knomo-beacon-status")?.textContent };
+			placeholder: flow.querySelectorAll("[data-beacon-placeholder]").length,
+			status: flow.querySelector(".knomo-beacon-status [role='status']")?.textContent,
+			remove: flow.querySelector(".knomo-beacon-status button")?.textContent };
 		content = content.replace("Changed target", "Changed target ^beacon"); await seed();
 		view.memos = await list(); await service.set(source!.observations[8]!); render();
 		gate = new Promise<void>(resolve => { release = resolve; }); service.sourceChanged(path); render();
 		await service.remove(service.getSnapshot().selection);
 		const removed = { state: service.getSnapshot().state, top: flow.querySelectorAll("[data-beacon-top]").length,
-			placeholder: flow.querySelectorAll("[data-beacon-status]").length };
+			placeholder: flow.querySelectorAll("[data-beacon-placeholder]").length };
 		gate = undefined; release(); await service.refresh();
 		input.dispatchEvent(new CompositionEvent("compositionend", { data: "输入" })); input.remove();
-		return { waiting, ready, updated, rejected, removed };
+		return { waiting, ready, updated, unreadable, rejected, removed };
 	} finally { unsubscribe(); service.dispose(); catalog.close(); }
 }
 

@@ -57,7 +57,7 @@ test("灯标置顶和移出保留相邻阅读位置，明暗移动布局复用�
 			assert.equal(result.removed.topCount, 0, evidence);
 			assert.equal(result.removed.selectedCount, loaded ? 1 : 0, evidence);
 			assert.equal(result.delayed.top, 0, evidence); assert.equal(result.delayed.new, 0, evidence);
-			assert.match(result.delayed.status ?? "", /Locating Beacon/u, evidence);
+			assert.equal(result.delayed.status, undefined, evidence);
 			await h.page.screenshot({ path: `.tmp/beacon-${mobile ? "mobile-dark" : "desktop-light"}-${today ? "today" : "light"}-${loaded ? "loaded" : "outside"}.png` });
 		}
 	} finally { await h.close(); }
@@ -87,12 +87,17 @@ test("真实灯标服务刷新保留撤权占位、输入焦点，确认后一�
 			const evidence = JSON.stringify({ mobile, loaded, result });
 			assert.equal(result.waiting.state, "locating", evidence); assert.equal(result.waiting.count, 1, evidence);
 			assert.equal(result.waiting.hidden, true, evidence); assert.equal(result.waiting.inert, true, evidence);
+			assert.equal(result.waiting.status, undefined, evidence);
 			assert.equal(result.waiting.heightChange, 0, evidence); assert.equal(result.waiting.focused, true, evidence);
 			assert.equal(result.ready.state, "ready", evidence); assert.equal(result.ready.count, 1, evidence);
 			assert.equal(result.ready.selected, 1, evidence); assert.equal(result.ready.focused, true, evidence);
 			assert.equal(result.ready.placeholder, 0, evidence); assert.equal(result.ready.total, result.ready.expected, evidence);
 			assert.equal(result.updated.state, "ready", evidence); assert.equal(result.updated.content, "Changed target", evidence);
+			assert.equal(result.unreadable.reason, "unreadable", evidence);
+			assert.equal(result.unreadable.status, undefined, evidence); assert.equal(result.unreadable.placeholder, 0, evidence);
 			assert.equal(result.rejected.reason, "missing-id", evidence); assert.equal(result.rejected.placeholder, 0, evidence);
+			assert.equal(result.rejected.status, "Can't find your Beacon. Set it again from a memo’s menu.", evidence);
+			assert.equal(result.rejected.remove, "Remove from Beacon", evidence);
 			assert.equal(result.removed.state, "unset", evidence); assert.equal(result.removed.top, 0, evidence);
 			assert.equal(result.removed.placeholder, 0, evidence);
 		}

@@ -90,16 +90,8 @@ body {
 
 .knomo-plugin .knomo-card.has-time-buoy .knomo-card-beacon-light { right: 45px; width: calc(100% - 45px); }
 
-.knomo-plugin .knomo-card[data-beacon-status] * { visibility: hidden; }
-.knomo-plugin .knomo-card[data-beacon-status]::after {
-	content: attr(data-beacon-status);
-	position: absolute;
-	top: 12px;
-	left: 12px;
-	color: var(--text-muted);
-	font-size: var(--knomo-text-ui-base);
-	pointer-events: none;
-}
+.knomo-plugin .knomo-card[data-beacon-placeholder],
+.knomo-plugin .knomo-card[data-beacon-placeholder] * { visibility: hidden; }
 
 .knomo-plugin .knomo-card-beacon-fill,
 .knomo-plugin .knomo-card-beacon-ray {

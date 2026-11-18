@@ -118,6 +118,59 @@ test("首次设置所需的原生 ID 写入只更新既有成员，不扩充其�
 	}
 });
 
+for (const takeover of ["publication", "refresh"] as const) test(`目标 Daily 完全不在另一 leaf 缓存中时，${takeover} 接管空成员确认并恢复搜索计数`, async () => {
+	const gate = deferred<void>(), confirmed = deferred<void>();
+	const h = await fixture({ immediate: true, catalogGate: gate.promise, onConfirmed: () => confirmed.resolve(),
+		body: "## Memos\n- 09:00 selected\n", otherBody: "## Memos\n- 10:00 other\n" });
+	const other = await h.createView(), selected = h.memos.find(memo => memo.dailyRef.path === PATH)!;
+	const targetChanges = new Map([[selected.id, null]]);
+	other.random.applyMemoChanges(targetChanges, false); other.shuffle.applyMemoChanges(targetChanges);
+	other.view.memos = h.memos.filter(memo => memo.dailyRef.path !== PATH);
+	const members = [...other.view.memos], cursor = { catalogRevision: 1, observationKey: "cursor", createdAtKey: "date" };
+	Object.assign(other.view, { catalogCursor: cursor, catalogDesktopTotalCount: 2 });
+	const production = Object.getPrototypeOf(other.view);
+	assert.ok(production.getCachedMemos.call(other.view).every((memo: MemoViewItem) => memo.dailyRef.path !== PATH));
+	if (takeover === "refresh") h.failCatalog();
+	const reference = h.mutations.createBlockReference({ observation: selected.catalog!.observationHandle, sourcePath: PATH });
+	try {
+		await confirmed.promise;
+		assert.equal(other.view.confirmedDailyMemos!.pending, true);
+		assert.deepEqual(other.view.confirmedDailyMemos!.getMemos(), []);
+		await production.reconcileConfirmedCatalog.call(other.view);
+		assert.equal(other.view.confirmedDailyMemos!.pending, true, "索引尚未接管时不能丢弃确认记录");
+		assert.deepEqual(other.view.memos, members); assert.equal(Reflect.get(other.view, "catalogCursor"), cursor);
+	} finally { gate.resolve(); }
+	const result = await reference;
+	assert.ok(result.blockId);
+	if (takeover === "refresh") {
+		assert.equal(result.catalogUpdatePending, true);
+		assert.equal(other.view.confirmedDailyMemos!.pending, true, "发布失败不能确认接管");
+		await h.externalReplace(h.body());
+		await production.reconcileConfirmedCatalog.call(other.view);
+	}
+	assert.equal(other.view.confirmedDailyMemos!.pending, false, "Catalog 接管后空成员记录必须收尾");
+	assert.deepEqual(other.view.memos, members);
+	assert.equal(Reflect.get(other.view, "catalogCursor"), cursor);
+	assert.equal(Reflect.get(other.view, "catalogDesktopTotalCount"), 2);
+	other.view.viewStateController.searchQuery = "other";
+	assert.equal(production.shouldCountCatalogQuery.call(other.view), true);
+	const page = await h.read.query({ textTerms: ["other"], limit: 20 });
+	assert.equal(production.getImmediateCatalogTotalCount.call(other.view, { ...page, memos: members }), 1);
+	Object.assign(other.view, { containerEl: { win: { setTimeout, clearTimeout } },
+		catalogCoverage: page.coverage, catalogRevision: page.catalogRevision, catalogStatus: page.status,
+		syncRecordStatsSource: () => {}, retainMemoCardPreviews: () => {} });
+	const search = other.view.createMobileSearchController();
+	Object.assign(other.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	try {
+		search.searchQuery = "other"; search.isOpen = true;
+		await search.refreshAppliedResults();
+		assert.deepEqual(search.getDisplayedMemos().map(memo => memo.contentSnapshot), ["other"]);
+		assert.equal(search.getDisplayedCount(), 1);
+		assert.deepEqual(other.view.memos, members, "搜索计数恢复不能扩充普通窗口");
+	} finally { search.isOpen = false; }
+});
+
 async function readCurrentSourceMemo(h: Awaited<ReturnType<typeof fixture>>, matches: (memo: import("../src/types/catalog").MemoObservation) => boolean) {
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser"), { toCatalogMemoView } = await import("../src/types/memoView");
 	const parsed = await new DiaryMemoParser().parse({ sourcePath: PATH, logicalDate: DATE, bytes: Buffer.from(h.body()) });

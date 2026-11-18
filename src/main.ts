@@ -363,23 +363,27 @@ export default class KnomoPlugin extends Plugin {
 		this.catalogReadService = this.memoCommandService.getReadService();
 		this.beaconService = new BeaconService(pluginDataStore, {
 			readSource: async path => {
-				if (lowPriorityWorkQueue.signal.aborted || this.settingsService.getLoadStatus() !== "ready"
-					|| knomoCurrentConfigService.getStatus() !== "ready") throw new BeaconSourceUnavailableError();
+				// 灯标只依赖 Daily 范围和可读设置，不等待 Monthly 配置核验。
+				if (lowPriorityWorkQueue.signal.aborted || this.settingsService.getLoadStatus() !== "ready") throw new BeaconSourceUnavailableError();
 				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
-				if (date === null) throw new BeaconSourceUnlocatedError();
+				if (date === null || !(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw new BeaconSourceUnlocatedError();
 				return this.catalogIndexCoordinator!.readPresentationSource(path, formatDatePart(date));
 			},
 			isSourceCurrent: async source => {
-				if (lowPriorityWorkQueue.signal.aborted || knomoCurrentConfigService.getStatus() !== "ready") return false;
-				const date = parseDailyNoteDateFromPath(source.path, getEffectiveDailyConfig());
+				if (lowPriorityWorkQueue.signal.aborted || this.settingsService.getLoadStatus() !== "ready") return false;
 				const file = this.app.vault.getAbstractFileByPath(source.path);
-				return date !== null && formatDatePart(date) === source.logicalDate && file instanceof TFile
-					&& await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(file))) === source.sourceRevision;
+				if (!(file instanceof TFile)) return false;
+				const revision = await sha256Bytes(new Uint8Array(await this.app.vault.readBinary(file)));
+				if (revision !== source.sourceRevision || lowPriorityWorkQueue.signal.aborted
+					|| this.settingsService.getLoadStatus() !== "ready"
+					|| file.path !== source.path || this.app.vault.getAbstractFileByPath(source.path) !== file) return false;
+				const date = parseDailyNoteDateFromPath(source.path, getEffectiveDailyConfig());
+				return date !== null && formatDatePart(date) === source.logicalDate;
 			},
 			createBlockReference: observation => markdownMutationService.createBlockReference({ observation, sourcePath: observation.sourcePath }),
 			fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial",
 				coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
-			onFailure: (error, operation) => { logContinuationFailure("view", "beacon", error); new Notice(t(operation === "read" ? "beacon.unavailable" : "beacon.saveFailed")); },
+			onFailure: (error, operation) => logContinuationFailure("view", `beacon-${operation}`, error),
 		});
 		this.register(() => this.beaconService?.dispose());
 		this.register(() => this.catalogReadService?.relations.dispose());

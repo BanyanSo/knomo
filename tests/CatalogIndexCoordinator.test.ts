@@ -30,6 +30,34 @@ test("并发定向读取各自返回目标 Daily，候选 B 不竞争 A 的共�
 	} finally { release(); fixture.unload(); }
 });
 
+test("灯标读取期间同字节的索引重扫不撤销读取，同路径替换文件仍须拒绝", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Journal/2026-08-09.md", date = "2026-08-09", body = "- 09:00 A ^beacon\n";
+	const fixture = await createCoordinatorFixture([{ path, content: body, mtime: 1 }]);
+	const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
+	coordinator.start(fixture.owner);
+	try {
+		await coordinator.initialize(); await coordinator.waitForIdle();
+		const releaseFirst = fixture.blockRead(path);
+		const reading = coordinator.readPresentationSource(path, date);
+		const refresh = coordinator.refreshPaths([path]);
+		releaseFirst();
+		const [source] = await Promise.all([reading, refresh]);
+		assert.equal(source.blockAnchors?.beacon, 1);
+		const releaseSecond = fixture.blockRead(path);
+		const replaced = coordinator.readPresentationSource(path, date);
+		fixture.removeFile(path);
+		fixture.setFile(path, body, 1);
+		releaseSecond();
+		await assert.rejects(replaced, /Daily source changed/u);
+	} finally { fixture.unload(); }
+});
+
 test("普通扫描将同轮完整解析交给展示，索引发布失败仍有当前数据且不额外解析", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

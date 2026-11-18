@@ -49,7 +49,7 @@ export class BeaconService {
 	private readable = false;
 	private closed = false;
 	private deleted = false;
-	private settingSource: { path: string; interrupted: boolean } | null = null;
+	private settingSource: { path: string; interrupted: boolean; events: number } | null = null;
 	private pending: { reference: BeaconReference | null; intent: number; selection: number; generation: number } | null = null;
 	private resolving: { generation: number; intent: number; promise: Promise<void> } | null = null;
 
@@ -76,11 +76,13 @@ export class BeaconService {
 				const raw = getBeaconData(await this.store.read());
 				if (this.closed) return;
 				this.readable = true;
-				if (fingerprint(raw) !== fingerprint(this.raw) || this.selection === 0) this.adopt(raw);
+				this.accept(raw);
 				this.invalidate();
 			} catch (error) {
 				if (this.closed) return;
 				this.readable = false;
+				this.configuration++;
+				this.invalidate();
 				this.publish("unavailable", "unreadable");
 				this.options.onFailure(error, "read");
 			}
@@ -95,8 +97,9 @@ export class BeaconService {
 			this.assertWritable();
 			if (intent !== this.intent) return;
 			const expected = fingerprint(this.raw), configuration = this.configuration;
-			const setting = this.settingSource = { path: original.sourcePath, interrupted: false };
-			const current = () => !this.closed && this.intent === intent && this.configuration === configuration && !setting.interrupted;
+			const setting = this.settingSource = { path: original.sourcePath, interrupted: false, events: 0 };
+			const current = () => !this.closed && this.readable && this.intent === intent
+				&& this.configuration === configuration && !setting.interrupted;
 			try {
 				const result = await this.options.createBlockReference(original);
 				if (!current()) throw new Error("Beacon selection changed.");
@@ -109,29 +112,27 @@ export class BeaconService {
 				if (!sameBeaconHandle(result.observation, observation) || source.path !== original.sourcePath
 					|| !await this.options.isSourceCurrent(source) || !current()) throw new Error("Beacon source changed.");
 				const reference = referenceFor(observation);
-				const saved = await this.store.mutate(async data => {
-					this.assertWritable();
-					if (!current() || !await this.options.isSourceCurrent(source) || !current()) throw new Error("Beacon source changed.");
+				const saved = await this.store.mutate(data => {
 					const raw = getBeaconData(data);
 					return fingerprint(raw) === expected
 						? { nextData: buildPluginDataWithBeacon(data, reference), result: { applied: true, raw: reference } }
 						: { nextData: null, result: { applied: false, raw } };
+				}, async () => {
+					const events = setting.events;
+					if (!current() || !await this.options.isSourceCurrent(source) || !current()) throw new Error("Beacon source changed.");
+					return () => {
+						if (!current()) throw new Error("Beacon source changed.");
+						return setting.events === events;
+					};
 				});
 				if (this.closed) return;
-				if (!saved.applied) { this.adopt(saved.raw); this.invalidate(); return; }
-				// 已开始的保存必须接住落盘值，后续排队的移除/换选才可据此做 CAS。
-				if (!current()) {
-					this.raw = saved.raw; this.reference = parseBeaconReference(saved.raw); this.pending = null;
-					// 候选文件在保存期间消失/改名，旧路径后来重建也不能发布为成功。
-					if (setting.interrupted) this.deleted = true;
-					if (this.intent === intent) {
-						this.selection++; this.invalidate(); this.publish("unavailable", "unreadable");
-						throw new Error("Beacon source changed while settings were being saved.");
-					}
-					return;
-				}
-				this.adopt(saved.raw);
+				// 落盘选择也要交给排队中的新意图；旧菜单令牌随旧选择失效。
+				this.accept(saved.raw, saved.applied ? setting : undefined);
 				this.invalidate();
+				if (saved.applied && setting.interrupted && this.intent === intent) {
+					this.publish("unavailable", "unlocated");
+					throw new Error("Beacon source changed while settings were being saved.");
+				}
 			} finally { if (this.settingSource === setting) this.settingSource = null; }
 		}).finally(() => this.resumePending()).then(() => intent === this.intent ? this.refresh() : undefined);
 	}
@@ -150,22 +151,52 @@ export class BeaconService {
 					: { nextData: null, result: getBeaconData(data) };
 			});
 			if (this.closed) return;
-			this.adopt(raw); this.invalidate();
+			this.accept(raw); this.invalidate();
 		}).finally(() => this.resumePending()).then(() => this.refresh());
 	}
 
 	// 消费普通扫描已有的完整解析；只保留所选文件，不缓存候选或全库正文。
 	observeSource(source: BeaconSource): void {
-		if (this.closed || !this.readable || this.deleted || source.path !== this.selectedPath()
-			|| this.source?.sourceRevision === source.sourceRevision && this.source.logicalDate === source.logicalDate) return;
+		if (this.closed || !this.readable || this.deleted) return;
+		if (source.path !== this.selectedPath()) {
+			void this.verifyRecreatedSource(source);
+			return;
+		}
+		if (this.source?.sourceRevision === source.sourceRevision && this.source.logicalDate === source.logicalDate) return;
 		this.invalidate(); this.source = source;
 		void this.refresh();
 	}
 
+	private async verifyRecreatedSource(source: BeaconSource): Promise<void> {
+		const key = source.path + "\0" + source.sourceRevision;
+		const previous = this.renamedSources.get(key);
+		if (!previous) return;
+		const selection = this.selection, configuration = this.configuration;
+		try {
+			if (!await this.options.isSourceCurrent(source) || this.closed || !this.readable || this.deleted
+				|| selection !== this.selection || configuration !== this.configuration || this.renamedSources.get(key) !== previous) return;
+			// Catalog 可以复用字节完全相同的分区；当前 Vault 文件的证明足以解除这一条等待。
+			this.renamedSources.delete(key);
+			this.publish(this.snapshot.state, this.snapshot.reason, this.snapshot.memo);
+		} catch (error) {
+			if (!this.closed && selection === this.selection && this.renamedSources.get(key) === previous) {
+				this.options.onFailure(error, "read");
+			}
+		}
+	}
+
 	sourceChanged(path: string, kind: "change" | "delete" | "rename" = "change", newPath?: string): void {
 		const matches = (target: string) => target === path || target.startsWith(path + "/");
-		if (this.settingSource && matches(this.settingSource.path) && kind !== "change") this.settingSource.interrupted = true;
+		if (this.settingSource && matches(this.settingSource.path)) {
+			this.settingSource.events++;
+			if (kind !== "change") this.settingSource.interrupted = true;
+		}
 		const selectedPath = this.selectedPath();
+		for (const [key, previous] of this.renamedSources) {
+			if (matches(previous.sourcePath) || (kind === "rename" && selectedPath && matches(selectedPath))) {
+				this.renamedSources.set(key, { ...previous });
+			}
+		}
 		if (!selectedPath || !matches(selectedPath)) return;
 		const previous = this.source ?? this.presentedSource;
 		this.invalidate();
@@ -194,11 +225,16 @@ export class BeaconService {
 			&& deletedTarget.sourceRevision === change.beforeSourceRevision
 			&& change.replacements.some(item => sameBeaconHandle(item.before, deletedTarget) && item.after === null)) {
 			this.pending = { reference: null, intent: this.intent, selection: this.selection, generation: this.generation };
-			this.publish("unavailable", "missing-id");
+			if (this.readable) this.publish("unavailable", "missing-id");
 		} else if (presentation.blockAnchors) {
 			this.source = { path: change.sourcePath, logicalDate: change.logicalDate, sourceRevision: change.sourceRevision,
 				observations: presentation.observations, blockAnchors: presentation.blockAnchors };
 		}
+	}
+
+	refreshIfNeeded(): Promise<void> {
+		return this.pending || this.snapshot.state === "locating" || this.snapshot.reason === "unreadable"
+			? this.refresh() : Promise.resolve();
 	}
 
 	refresh(): Promise<void> {
@@ -212,7 +248,8 @@ export class BeaconService {
 
 	private async resolve(generation: number): Promise<void> {
 		const selection = this.selection, intent = this.intent;
-		const current = () => !this.closed && generation === this.generation && selection === this.selection && intent === this.intent;
+		const current = () => !this.closed && this.readable && generation === this.generation
+			&& selection === this.selection && intent === this.intent;
 		if (this.pending && this.pending.intent !== intent) return;
 		if (this.pending?.reference === null) { await this.persistPending(); return; }
 		if (this.raw === undefined) { this.publish("unset"); return; }
@@ -233,7 +270,7 @@ export class BeaconService {
 			const next = referenceFor(observation);
 			if (fingerprint(next) !== fingerprint(this.raw)) this.pending = { reference: next, intent, selection, generation };
 			// 配置时间保存失败不遮掉已确认的当前正文；下一次有效刷新可重试。
-			this.publish("ready", undefined, this.options.fromObservation(observation), source.logicalDate);
+			this.publish("ready", undefined, toCatalogMemoView(this.options.fromObservation(observation)));
 			if (this.pending) await this.persistPending();
 		} catch (error) {
 			if (!current()) return;
@@ -247,7 +284,7 @@ export class BeaconService {
 		if (!pending) return Promise.resolve();
 		return this.serial(async () => {
 			const raw = this.raw;
-			const current = () => !this.closed && this.pending === pending && this.intent === pending.intent
+			const current = () => !this.closed && this.readable && this.pending === pending && this.intent === pending.intent
 				&& this.selection === pending.selection && (pending.reference === null || this.generation === pending.generation);
 			if (!current()) return;
 			try {
@@ -257,39 +294,47 @@ export class BeaconService {
 				});
 				if (!result.applied) {
 					if (!current()) return;
-					this.adopt(result.raw); this.invalidate();
+					this.accept(result.raw); this.invalidate();
 					queueMicrotask(() => { void this.refresh(); }); return;
 				}
 				if (this.closed || this.selection !== pending.selection || fingerprint(this.raw) !== fingerprint(raw)) return;
+				if (pending.reference === null) {
+					this.accept(undefined);
+					this.invalidate();
+					return;
+				}
 				this.raw = result.raw;
-				if (this.pending !== pending) return;
-				this.pending = null;
-				if (pending.reference === null) { this.adopt(undefined); this.invalidate(); }
-				else this.reference = pending.reference;
+				this.reference = pending.reference;
+				if (this.pending === pending) this.pending = null;
 			} catch (error) { if (current()) this.options.onFailure(error, "write"); }
 		});
 	}
 
 	private selectedPath(): string | null { return this.reference ? this.renamedPath ?? this.reference.sourcePath : null; }
-	private adopt(raw: unknown): void {
-		this.raw = raw; this.reference = parseBeaconReference(raw); this.selection++;
+	private accept(raw: unknown, explicitSet?: { interrupted: boolean }): void {
+		const next = parseBeaconReference(raw);
+		const sameBinding = next && this.reference && next.blockId === this.reference.blockId
+			&& (next.sourcePath === this.reference.sourcePath || next.sourcePath === this.renamedPath);
+		const sameSelection = this.selection > 0 && (sameBinding || fingerprint(raw) === fingerprint(this.raw));
+		this.raw = raw; this.reference = next;
+		if (sameSelection && !explicitSet) return;
+		this.selection++;
 		this.pending = null; this.source = null; this.presentedSource = null;
-		this.deleted = false; this.renamedPath = null; this.renamedSources.clear();
+		this.deleted = explicitSet?.interrupted ?? false; this.renamedPath = null; this.renamedSources.clear();
 	}
 	private invalidate(): void {
 		this.generation++; this.source = null;
 		if (this.pending?.reference) this.pending = null;
 		// 源事件不能替代失败的配置重读；保留可重试的读取错误。
-		if (!this.readable && this.snapshot.reason === "unreadable") return;
+		if (!this.readable) return;
 		this.publish(this.raw === undefined ? "unset" : "locating");
 	}
-	private publish(state: BeaconSnapshot["state"], reason?: BeaconSnapshot["reason"], memo?: CatalogMemoItem, logicalDate?: string): void {
+	private publish(state: BeaconSnapshot["state"], reason?: BeaconSnapshot["reason"], memo?: BeaconSnapshot["memo"]): void {
 		// 只保留上次实际展示过的路径/版本，供明确改名时等待旧卡；不参与目标匹配或写入。
-		if (state === "ready" && memo) this.presentedSource = { path: memo.sourcePath, sourceRevision: memo.observationHandle.sourceRevision };
+		if (state === "ready" && memo?.catalog) this.presentedSource = { path: memo.dailyRef.path, sourceRevision: memo.catalog.observationHandle.sourceRevision };
 		const next: BeaconSnapshot = { state, selection: this.selection,
 			...(this.renamedSources.size ? { previousSources: [...this.renamedSources.values()] } : {}),
-			...(logicalDate ? { logicalDate } : {}), ...(reason ? { reason } : {}),
-			...(memo ? { memo: toCatalogMemoView(memo) } : {}) };
+			...(reason ? { reason } : {}), ...(memo ? { memo } : {}) };
 		if (JSON.stringify(next) === JSON.stringify(this.snapshot)) return;
 		this.snapshot = next; this.notify();
 	}

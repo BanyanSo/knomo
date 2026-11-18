@@ -12,9 +12,11 @@ interface PendingFilePresentation {
 	replacements: Map<string, ObservationHandle | null>;
 	memos: Map<string, MemoViewItem>;
 	upsertKeys: Set<string>;
+	admittedChanges: Set<string>;
 	pendingRevisions: Set<string>;
 	reconciliation: number;
 	preservePagination: boolean;
+	affectsQueryMembership: boolean;
 }
 
 // 只保留未被 Catalog 接续的提交和已选中卡片；不缓存整份 Daily 正文，也不产生持久身份。
@@ -22,6 +24,7 @@ export class ConfirmedMemoPresentation {
 	private readonly files = new Map<string, PendingFilePresentation>();
 
 	get pending(): boolean { return this.files.size > 0; }
+	get affectsQueryMembership(): boolean { return [...this.files.values()].some(file => file.affectsQueryMembership); }
 	getRevision(path: string): string | undefined { return this.files.get(path)?.sourceRevision; }
 	preservesPagination(path: string): boolean { return this.files.get(path)?.preservePagination === true; }
 	getChanges(): DailyMemoPresentationChange[] { return [...this.files.values()].map(file => file.change); }
@@ -41,6 +44,7 @@ export class ConfirmedMemoPresentation {
 		const changes = new Map<string, MemoViewItem | null>();
 		const memos = new Map<string, MemoViewItem>();
 		const upsertKeys = new Set<string>();
+		const admittedChanges = new Set<string>();
 		for (const memo of [...(previous?.memos.values() ?? []), ...cached]) {
 			if (memo.dailyRef.path !== change.sourcePath) continue;
 			const handle = replacements.get(memo.id);
@@ -49,13 +53,19 @@ export class ConfirmedMemoPresentation {
 			changes.set(memo.id, current);
 			if (current) {
 				memos.set(current.id, current);
-				if (!windowIds || windowIds.has(memo.id)) upsertKeys.add(current.id);
+				const alreadyAdmitted = previous?.admittedChanges.has(memo.id);
+				if (alreadyAdmitted) admittedChanges.add(current.id);
+				// 纯锚点提交只接续查询自己读到的成员，同时保留之前显式接纳的提交。
+				if (change.updateExistingOnly ? alreadyAdmitted : !windowIds || windowIds.has(memo.id)) upsertKeys.add(current.id);
 			}
 		}
 		const changedMemo = change.changed === null ? null : memos.get(observationHandleKey(change.changed)) ?? makeMemo(change.changed);
 		if (changedMemo) memos.set(changedMemo.id, changedMemo);
 		const changed = includeChanged && changedMemo ? [changedMemo] : [];
-		for (const memo of changed) upsertKeys.add(memo.id);
+		for (const memo of changed) {
+			upsertKeys.add(memo.id);
+			admittedChanges.add(memo.id);
+		}
 		// 连续保存只组合已确认提交给出的对应关系，绝不按正文或旧行号猜测 occurrence。
 		const translations = new Map<string, ObservationHandle | null>();
 		for (const [key, handle] of previous?.replacements ?? []) {
@@ -64,9 +74,9 @@ export class ConfirmedMemoPresentation {
 		for (const [key, handle] of replacements) translations.set(key, handle);
 		const revisions = [...(previous?.revisions ?? []), change.beforeSourceRevision, change.sourceRevision];
 		this.files.set(change.sourcePath, { change, sourceRevision: change.sourceRevision,
-			revisions: [...new Set(revisions)], replacements: translations, memos, upsertKeys,
+			revisions: [...new Set(revisions)], replacements: translations, memos, upsertKeys, admittedChanges,
 			pendingRevisions: new Set([...(previous?.pendingRevisions ?? []), change.sourceRevision]), reconciliation: 0,
-			preservePagination });
+			preservePagination, affectsQueryMembership: !change.updateExistingOnly || previous?.affectsQueryMembership === true });
 		return { changes, changed };
 	}
 

@@ -118,6 +118,95 @@ test("首次设置所需的原生 ID 写入只更新既有成员，不扩充其�
 	}
 });
 
+for (const entry of ["beacon", "copy-link"] as const) test(`${entry} 的纯锚点提交按各查询窗口接续，索引接管后继续分页`, async t => {
+	t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 17, 12).getTime() });
+	const gate = deferred<void>(), confirmed = deferred<void>();
+	const h = await fixture({ immediate: true, refreshViews: true, catalogGate: gate.promise, onConfirmed: () => confirmed.resolve(),
+		body: "## Memos\n" + Array.from({ length: 160 }, (_, index) => `- 09:00 kept-${index}\n`).join("") });
+	const desktop = await h.createView(), mobile = await h.createView(), target = await readCurrentSourceMemo(h, memo => memo.content === "kept-0");
+	desktop.view.viewStateController.searchQuery = "kept";
+	const first = await prepareDefaultCatalogWindow(h, h.view, 1), filtered = await prepareDefaultCatalogWindow(h, desktop.view, 2);
+	await prepareDefaultCatalogWindow(h, mobile.view, 2);
+	Object.assign(mobile.view, { containerEl: { win: { setTimeout, clearTimeout } } });
+	const search = mobile.view.createMobileSearchController();
+	Object.assign(mobile.view, { mobileSearchController: search });
+	Object.assign(search, { renderResults: () => {}, syncControls: () => {} });
+	search.searchQuery = "kept"; search.isOpen = true;
+	await search.refreshAppliedResults();
+	const mobileMembers = search.getDisplayedMemos().map(memo => memo.contentSnapshot);
+	const mobileCursor = Reflect.get(search, "cursor");
+	assert.equal(mobileMembers.length, 50);
+	assert.equal(mobile.view.memos.length, 100, "同一 leaf 的主列表保有搜索窗口以外的缓存");
+	const loadSource = async () => {
+		const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+		return { path: PATH, logicalDate: DATE, ...await new DiaryMemoParser().parse({ sourcePath: PATH, logicalDate: DATE, bytes: Buffer.from(h.body()) }) };
+	};
+	const { BeaconService } = await import("../src/services/BeaconService");
+	const { PluginDataStore } = await import("../src/services/PluginDataStore");
+	const { toParsedCatalogMemoItem } = await import("../src/services/CatalogReadService");
+	let saved: unknown = {};
+	const beacon = new BeaconService(new PluginDataStore({
+		loadData: async () => saved, saveData: async (value: unknown) => { saved = value; },
+	} as import("obsidian").Plugin), {
+		readSource: loadSource, isSourceCurrent: async source => (await loadSource()).sourceRevision === source.sourceRevision,
+		createBlockReference: observation => h.mutations.createBlockReference({ observation, sourcePath: PATH }),
+		fromObservation: observation => toParsedCatalogMemoItem(observation, target.catalog!.capabilities.catalog),
+		onFailure: error => { throw error; },
+	});
+	t.after(() => { search.isOpen = false; beacon.dispose(); });
+	await beacon.reload();
+	const operation = entry === "beacon" ? beacon.set(target.catalog!.observationHandle) : h.command.createReferenceText(target.catalog!);
+	try {
+		await confirmed.promise;
+		for (const { view, members, cursor } of [first, filtered]) {
+			assert.deepEqual(view.getFilteredMemos().map(memo => memo.contentSnapshot), members);
+			assert.equal(Reflect.get(view, "catalogCursor"), cursor);
+			assert.equal(Reflect.get(view, "catalogDesktopTotalCount"), 160);
+		}
+		assert.deepEqual(search.getDisplayedMemos().map(memo => memo.contentSnapshot), mobileMembers);
+		assert.equal(Reflect.get(search, "cursor"), mobileCursor);
+		await search.refreshAppliedResults();
+		assert.deepEqual(search.getDisplayedMemos().map(memo => memo.contentSnapshot), mobileMembers);
+		assert.equal(search.getDisplayedMemos().some(memo => memo.contentSnapshot === "kept-0"), false);
+	} finally { gate.resolve(); await operation; }
+	await h.waitForViewRefresh();
+	const revision = await h.catalog.getStore().getCatalogRevision();
+	for (const { view, members, production } of [first, filtered]) {
+		assert.deepEqual(view.getFilteredMemos().map(memo => memo.contentSnapshot), members);
+		assert.equal(Reflect.get(view, "catalogCursor").catalog.catalogRevision, revision);
+		assert.equal(await production.loadNextCatalogPage.call(view), true);
+		assert.equal(view.memos.length, members.length + 50);
+		assert.equal(new Set(view.memos.map(memo => memo.id)).size, view.memos.length);
+	}
+	assert.deepEqual(search.getDisplayedMemos().map(memo => memo.contentSnapshot), mobileMembers);
+	assert.equal(Reflect.get(search, "cursor").catalog.catalogRevision, revision);
+	await Object.getPrototypeOf(search).refreshRemoteResults.call(search, false);
+	assert.equal(search.getDisplayedMemos().length, 100);
+	assert.equal(new Set(search.getDisplayedMemos().map(memo => memo.id)).size, 100);
+	if (entry === "beacon") assert.equal(beacon.getSnapshot().memo?.contentSnapshot, "kept-0");
+	assert.equal((h.body().match(/ \^[a-z0-9]{6}$/gmu) ?? []).length, 1);
+});
+
+test("真实新建后连续复制块链接，索引滞后时只补入已经接纳的新建", async () => {
+	const gate = deferred<void>(), anchored = deferred<void>();
+	let confirmations = 0;
+	const h = await fixture({ immediate: true, catalogGate: gate.promise, rejectStalePublication: true,
+		onConfirmed: () => { if (++confirmations === 2) anchored.resolve(); },
+		body: "## Memos\n- 09:00 kept first\n- 10:00 kept second\n" });
+	const creating = h.command.startCreate("kept new");
+	let copying: ReturnType<typeof h.command.createReferenceText> | undefined;
+	try {
+		await creating.dailyCommitted;
+		const target = h.view.memos.find(memo => memo.contentSnapshot === "kept first")!;
+		copying = h.command.createReferenceText(target.catalog!);
+		await anchored.promise;
+		assert.deepEqual(h.view.confirmedDailyMemos!.merge([], { textTerms: ["kept"] }).map(memo => memo.contentSnapshot), ["kept new"]);
+		assert.equal(h.view.memos.filter(memo => memo.contentSnapshot === "kept new").length, 1);
+		assert.equal(h.view.memos.find(memo => memo.contentSnapshot === "kept first")?.catalog?.observation.existingBlockId?.length, 6);
+	} finally { gate.resolve(); await Promise.all([creating.settled, copying]); }
+	assert.equal(h.view.memos.filter(memo => memo.contentSnapshot === "kept new").length, 1);
+});
+
 for (const takeover of ["publication", "refresh"] as const) test(`目标 Daily 完全不在另一 leaf 缓存中时，${takeover} 接管空成员确认并恢复搜索计数`, async () => {
 	const gate = deferred<void>(), confirmed = deferred<void>();
 	const h = await fixture({ immediate: true, catalogGate: gate.promise, onConfirmed: () => confirmed.resolve(),
@@ -208,7 +297,9 @@ test("窗口外灯标与另一张窗口外浮标同时撤权后，确认编辑�
 	const first = h.command.startEdit(h.memos[0]!.catalog!, "neighbor first"); await first.dailyCommitted;
 	const current = h.random.getSnapshot().memos!, selected = current.find(memo => memo.catalog!.observation.existingBlockId === "beacon")!,
 		buoy = current.find(memo => memo.catalog!.observation.existingBlockId === "buoy")!;
+	const { sameBeaconHandle } = await import("../src/types/beacon");
 	Object.assign(h.view, { beaconService: { getSnapshot: () => ({ state: "ready", selection: 1, memo: selected }),
+		isSelectedHandle: (handle: import("../src/types/catalog").ObservationHandle) => sameBeaconHandle(selected.catalog!.observationHandle, handle),
 		isBoundObservation: (observation: import("../src/types/catalog").MemoObservation, anchors?: Record<string, number>) =>
 			observation.existingBlockId === "beacon" && anchors?.beacon === 1 }, isDefaultListState: () => true,
 		trashMemoController: { getSnapshot: () => ({ trashMemos: [] }) }, catalogDesktopTotalCount: 3 });

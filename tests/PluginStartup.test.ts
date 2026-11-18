@@ -48,7 +48,6 @@ test("生产启动与外部配置入口加载灯标，损坏引用和读取失�
 	await h.plugin.saveData(withBeacon);
 	await h.plugin.onExternalSettingsChange();
 	assert.equal(beacon.getSnapshot().state, "unavailable");
-	assert.equal(beacon.getSnapshot().logicalDate, undefined);
 	assert.deepEqual((h.saved() as Record<string, unknown>).beacon, withBeacon.beacon);
 	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
 	const read = h.plugin.loadData;
@@ -93,12 +92,14 @@ for (const degraded of [false, true]) test(`首次生成灯标锚点后文件通
 	const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md", extension: "md", stat: { mtime: 1, size: 0 } });
 	let content = "- 09:00 before\n", indexUnavailable = false;
 	let lateFileNotice = false, fileNotices = 0;
+	let beforeBinaryRead: (() => Promise<void>) | undefined;
 	const parser = new DiaryMemoParser();
 	const source = async () => ({ path: file.path, logicalDate: "2026-10-13", content,
 		...await parser.parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(content) }) });
 	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
 	Object.assign(h.plugin.app.vault, { getAbstractFileByPath: (path: string) => path === file.path ? file : null,
 		read: async () => content, readBinary: async () => {
+			await beforeBinaryRead?.();
 			if (lateFileNotice) {
 				lateFileNotice = false;
 				file.stat = { ctime: 1, mtime: file.stat.mtime + 1, size: Buffer.byteLength(content) };
@@ -149,7 +150,39 @@ for (const degraded of [false, true]) test(`首次生成灯标锚点后文件通
 	assert.equal(writes - savingBefore, 0);
 	assert.equal(await runtime.catalogReadService.getFileSourceRevision(file.path), degraded ? before.sourceRevision : after.sourceRevision);
 	await runtime.beaconService.refresh(); assert.equal(writes - savingBefore, 0);
+	if (degraded) { h.plugin.unload(); return; }
+
+	const originalLoad = h.plugin.loadData.bind(h.plugin);
+	let failConfigRead = false;
+	t.mock.method(h.plugin, "loadData", async () => {
+		if (failConfigRead) throw new Error("Plugin data read failed");
+		return originalLoad();
+	});
+	const entered = deferred(), release = deferred();
+	beforeBinaryRead = async () => { entered.resolve(); await release.promise; };
+	content = content.replace("09:00", "10:00");
+	runtime.beaconService.sourceChanged(file.path);
+	const slow = runtime.beaconService.refresh();
+	await entered.promise;
+	failConfigRead = true;
+	await h.plugin.onExternalSettingsChange();
+	release.resolve(); await slow;
+	assert.equal(runtime.beaconService.getSnapshot().reason, "unreadable");
+	assert.equal(parseBeaconReference((h.saved() as { beacon: unknown }).beacon)?.memoTime, "09:00");
+
+	failConfigRead = false; beforeBinaryRead = undefined;
+	await h.plugin.onExternalSettingsChange();
+	assert.equal(runtime.beaconService.getSnapshot().state, "ready");
+	assert.equal(parseBeaconReference((h.saved() as { beacon: unknown }).beacon)?.memoTime, "10:00");
+	const unloading = deferred(), late = deferred();
+	beforeBinaryRead = async () => { unloading.resolve(); await late.promise; };
+	runtime.beaconService.sourceChanged(file.path);
+	const duringUnload = runtime.beaconService.refresh();
+	await unloading.promise;
+	const lastSnapshot = runtime.beaconService.getSnapshot();
 	h.plugin.unload();
+	late.resolve(); await duringUnload;
+	assert.equal(runtime.beaconService.getSnapshot(), lastSnapshot);
 });
 
 for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {

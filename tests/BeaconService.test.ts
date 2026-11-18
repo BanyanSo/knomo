@@ -204,6 +204,62 @@ test("时间同步排队期间外部换选，CAS 不覆盖新记录", async () =
 	assert.equal(parseBeaconReference(h.data.beacon)!.blockId, "tail");
 });
 
+test("迟到保存接纳跨 Daily 同名 ID，旧菜单和原选择的改名过渡均不能接管", async () => {
+	const h = await pinned(), oldSelection = h.service.getSnapshot().selection;
+	const entered = deferred(), release = deferred();
+	const next = await h.write(BODY.replace("selected ^selected", "new selection ^selected"), "Daily/2026-11-17.md", "2026-11-17");
+	const moved = await h.write(BODY, "Daily/2026-11-18.md", "2026-11-18");
+	h.service.sourceChanged(PATH, "rename", moved.path);
+	h.beforeSave = async () => { h.beforeSave = undefined; entered.resolve(); await release.promise; };
+	const setting = h.service.set(next.observations[1]!);
+	await entered.promise;
+	const removing = h.service.remove(oldSelection);
+	release.resolve(); await setting; await removing;
+	assert.equal(parseBeaconReference(h.data.beacon)?.sourcePath, next.path);
+	assert.equal(h.service.getSnapshot().memo?.dailyRef.path, next.path);
+	assert.equal(h.service.getSnapshot().previousSources, undefined);
+	assert.notEqual(h.service.getSnapshot().selection, oldSelection);
+});
+
+for (const newPath of [false, true]) test(`外部时间更新保留已确认改名（${newPath ? "新路径" : "原路径"}）和选择令牌`, async () => {
+	const h = await pinned(), token = h.service.getSnapshot().selection, old = h.service.getSnapshot().memo!;
+	const moved = await h.write(BODY.replace("09:00", "15:00"), "Daily/2026-11-17.md", "2026-11-17");
+	h.service.sourceChanged(PATH, "rename", moved.path);
+	h.data.beacon = { sourcePath: newPath ? moved.path : PATH, blockId: "selected", memoTime: "14:00" };
+	await h.service.reload();
+	assert.deepEqual(h.data.beacon, { sourcePath: moved.path, blockId: "selected", memoTime: "15:00" });
+	assert.equal(h.service.getSnapshot().selection, token);
+	assert.equal(buildBeaconPresentation(h.service.getSnapshot(), [old]).snapshot.state, "locating");
+});
+
+for (const external of ["beacon", "settings"] as const) test(`最终 Daily 核对期间的外部 ${external} 写入从最新配置合并`, async () => {
+	const h = await pinned(), entered = deferred(), release = deferred();
+	let checks = 0;
+	h.beforeValidate = async () => { if (++checks === 2) { entered.resolve(); await release.promise; } };
+	const setting = h.service.set(h.source.observations[2]!);
+	await entered.promise;
+	const record = { sourcePath: PATH, blockId: "first", memoTime: "08:00" };
+	h.data[external] = external === "beacon" ? record : { remote: true };
+	release.resolve(); await setting;
+	if (external === "beacon") assert.deepEqual(h.data.beacon, record);
+	else {
+		assert.deepEqual(h.data.settings, { remote: true });
+		assert.equal(parseBeaconReference(h.data.beacon)?.blockId, "tail");
+	}
+});
+
+for (const sameBytes of [true, false]) test(`插件数据读取期间的 Daily 通知重新校验字节（${sameBytes ? "同版" : "改写"}）`, async () => {
+	const h = await pinned(), entered = deferred(), release = deferred();
+	h.beforeLoad = async () => { h.beforeLoad = undefined; entered.resolve(); await release.promise; };
+	const setting = h.service.set(h.source.observations[2]!);
+	const outcome = sameBytes ? setting : assert.rejects(setting, /source changed/u);
+	await entered.promise;
+	if (!sameBytes) await h.write(BODY.replace("tail ^tail", "rewritten ^tail"));
+	h.service.sourceChanged(PATH);
+	release.resolve(); await outcome;
+	assert.equal(parseBeaconReference(h.data.beacon)?.blockId, sameBytes ? "tail" : "selected");
+});
+
 for (const folder of [false, true]) test(`明确${folder ? "父目录" : "跨日期文件"}改名后复核锚点再更新路径，旧路径重建不接管`, async () => {
 	const h = await pinned(), next = folder ? "Archive/2026-11-16.md" : "Daily/2026-11-17.md";
 	await h.write(BODY.replace("09:00", "15:30"), next, folder ? DATE : "2026-11-17");
@@ -266,6 +322,24 @@ test("配置读取失败后源事件和普通扫描不能将错误变成永久�
 	assert.equal(h.service.getSnapshot().state, "ready"); assert.equal(h.writes, writes);
 });
 
+test("配置读取失败使已启动的 Daily 核对失效并阻止时间保存", async () => {
+	const h = await pinned(), saved = structuredClone(h.data.beacon), writes = h.writes;
+	const loading = deferred(), stopLoading = deferred(), validating = deferred(), stopValidating = deferred();
+	await h.write(BODY.replace("09:00", "11:00"));
+	h.beforeLoad = async () => { loading.resolve(); await stopLoading.promise; };
+	h.beforeValidate = async () => { validating.resolve(); await stopValidating.promise; };
+	const reload = h.service.reload(); await loading.promise;
+	const refresh = h.service.refresh(); await validating.promise;
+	h.failRead = true; stopLoading.resolve(); await reload;
+	h.failRead = false; h.beforeLoad = undefined; h.beforeValidate = undefined;
+	stopValidating.resolve(); await refresh;
+	assert.equal(h.service.getSnapshot().reason, "unreadable");
+	assert.deepEqual(h.data.beacon, saved); assert.equal(h.writes, writes);
+	await h.service.retry();
+	assert.equal(h.service.getSnapshot().state, "ready");
+	assert.equal(parseBeaconReference(h.data.beacon)?.memoTime, "11:00");
+});
+
 test("源读取失效后紧接明确改名，仍等待各 leaf 的改名前旧卡退出才展示新路径灯标", async () => {
 	const h = await pinned(), oldMemo = h.service.getSnapshot().memo!, next = "Daily/2026-11-17.md";
 	h.service.sourceChanged(PATH);
@@ -279,6 +353,68 @@ test("源读取失效后紧接明确改名，仍等待各 leaf 的改名前旧�
 	const accepted = buildBeaconPresentation(h.service.getSnapshot(), [current]);
 	assert.equal(accepted.snapshot.state, "ready"); assert.equal(accepted.memos.length, 1);
 	assert.equal(accepted.memos[0], current);
+});
+
+for (const sameBytes of [true, false]) test(`旧路径${sameBytes ? "同字节" : "不同字节"}重建后两个 leaf 继续展示新路径选择`, async () => {
+	const h = await pinned(), oldMemo = h.service.getSnapshot().memo!, next = "Daily/2026-11-17.md";
+	const selection = h.service.getSnapshot().selection;
+	await h.write(BODY, next, "2026-11-17");
+	h.service.sourceChanged(PATH, "rename", next); await h.service.refresh();
+	const left = buildBeaconPresentation(h.service.getSnapshot(), [oldMemo]);
+	const right = buildBeaconPresentation(h.service.getSnapshot(), []);
+	assert.equal(left.snapshot.state, "locating"); assert.equal(right.snapshot.memo?.dailyRef.path, next);
+	const recreated = await h.write(sameBytes ? BODY : BODY.replace("selected ^selected", "separate ^selected"));
+	h.service.sourceChanged(PATH); h.service.observeSource(recreated);
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(h.service.getSnapshot().selection, selection);
+	assert.equal(parseBeaconReference(h.data.beacon)?.sourcePath, next);
+	const ordinary = sameBytes ? oldMemo : toCatalogMemoView(h.item(recreated.observations[1]!));
+	const result = buildBeaconPresentation(h.service.getSnapshot(), [ordinary]);
+	assert.deepEqual(result.memos.map(memo => memo.dailyRef.path), [next, PATH]);
+});
+
+test("旧路径证明晚到时无法解除再次改名后的等待", async () => {
+	const h = await pinned(), moved = "Daily/2026-11-17.md", final = "Daily/2026-11-18.md";
+	const started = deferred(), release = deferred();
+	await h.write(BODY, moved, "2026-11-17");
+	h.service.sourceChanged(PATH, "rename", moved); await h.service.refresh();
+	h.beforeValidate = async source => { if (source.path === PATH) { started.resolve(); await release.promise; } };
+	h.service.observeSource(h.source);
+	await started.promise;
+	await h.write(BODY, final, "2026-11-18");
+	h.service.sourceChanged(moved, "rename", final); await h.service.refresh();
+	release.resolve(); await new Promise<void>(resolve => setImmediate(resolve));
+	assert.deepEqual(h.service.getSnapshot().previousSources?.map(source => source.sourcePath), [PATH, moved]);
+	assert.equal(h.service.getSnapshot().memo?.dailyRef.path, final);
+});
+
+test("普通索引批次复用已核对的版本，并重试失败的时间保存", async () => {
+	const h = await pinned(), writes = h.writes;
+	let checks = 0; h.beforeValidate = () => { checks++; };
+	await h.service.refreshIfNeeded(); await h.service.refreshIfNeeded();
+	assert.equal(checks, 0); assert.equal(h.writes, writes);
+	const edited = await h.write(BODY.replace("09:00", "11:00"));
+	h.failSave = true;
+	h.service.sourceChanged(PATH); h.service.observeSource(edited); await h.service.refreshIfNeeded();
+	assert.equal(checks, 1); assert.equal(h.service.getSnapshot().state, "ready"); assert.equal(h.writes, writes);
+	h.failSave = false; await h.service.refreshIfNeeded();
+	assert.equal(parseBeaconReference(h.data.beacon)?.memoTime, "11:00");
+	assert.equal(h.writes, writes + 1);
+	const checksAfterSave = checks;
+	await h.service.refreshIfNeeded(); assert.equal(checks, checksAfterSave);
+});
+
+test("读取配置失效时保留 Trash 删除证明，恢复读取后再清理引用", async () => {
+	const h = await pinned(), before = h.source, saved = structuredClone(h.data.beacon);
+	const token = h.service.getSnapshot().selection;
+	h.failRead = true; await h.service.reload();
+	const after = await h.write(BODY.replace("- 09:00 selected ^selected\n", ""));
+	h.service.confirmed(change(before, after, before.observations[1]), before.observations[1], before.blockAnchors);
+	await h.service.refreshIfNeeded();
+	assert.equal(h.service.getSnapshot().reason, "unreadable"); assert.deepEqual(h.data.beacon, saved);
+	h.failRead = false; await h.service.retry();
+	assert.equal(h.data.beacon, undefined); assert.equal(h.service.getSnapshot().state, "unset");
+	assert.notEqual(h.service.getSnapshot().selection, token);
 });
 
 test("来源暂不可读与未确认新版本不报 ID 缺失，销毁后的慢结果不发布", async () => {
@@ -316,6 +452,7 @@ async function fixture(body = BODY, initial: Record<string, unknown> = { setting
 		beforeRead: undefined as ((path: string) => void | Promise<void>) | undefined,
 		beforeLoad: undefined as (() => void | Promise<void>) | undefined,
 		beforeSave: undefined as (() => void | Promise<void>) | undefined,
+		beforeValidate: undefined as ((source: BeaconSource) => void | Promise<void>) | undefined,
 		afterCreate: undefined as (() => void | Promise<void>) | undefined,
 		content: () => files.get(PATH)!.content,
 		write: async (content: string, path = PATH, logicalDate = DATE) => {
@@ -330,7 +467,10 @@ async function fixture(body = BODY, initial: Record<string, unknown> = { setting
 		saveData: async (data: Record<string, unknown>) => { await h.beforeSave?.(); if (h.failSave) throw new Error("save failed"); h.writes++; h.data = structuredClone(data); } } as Plugin);
 	const service = new BeaconService(store, {
 		readSource: async path => { h.reads++; const source = files.get(path)?.source; await h.beforeRead?.(path); if (h.readError) throw h.readError; if (!source) throw new Error("source unavailable"); return source; },
-		isSourceCurrent: async source => source.sourceRevision === files.get(source.path)?.source.sourceRevision,
+		isSourceCurrent: async source => {
+			await h.beforeValidate?.(source);
+			return source.sourceRevision === files.get(source.path)?.source.sourceRevision;
+		},
 		fromObservation: h.item,
 		createBlockReference: async handle => {
 			const file = files.get(handle.sourcePath)!, current = file.source.observations.find(item => sameBeaconHandle(item, handle));

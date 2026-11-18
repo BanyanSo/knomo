@@ -80,6 +80,61 @@ test("普通扫描将同轮完整解析交给展示，索引发布失败仍有�
 	} finally { fixture.unload(); }
 });
 
+test("改名前路径同字节重建且分区未变时，普通解析解除旧卡阻挡", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { BeaconService } = await import("../src/services/BeaconService");
+	const { PluginDataStore } = await import("../src/services/PluginDataStore");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { toParsedCatalogMemoItem } = await import("../src/services/CatalogReadService");
+	const { createCatalogCapabilities } = await import("../src/services/MemoCapabilityModel");
+	const { buildBeaconPresentation } = await import("../src/ui/BeaconPresentation");
+	const path = "Journal/2026-08-09.md", next = "Journal/2026-08-10.md", body = "- 09:00 Memo ^target\n";
+	const fixture = await createCoordinatorFixture([{ path, content: body, mtime: 1 }]);
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+	let data: unknown = { beacon: { sourcePath: path, blockId: "target", memoTime: "09:00" } };
+	let oldPathWrites = 0;
+	const replace = catalog.replaceFile.bind(catalog);
+	t.mock.method(catalog, "replaceFile", (input: Parameters<typeof replace>[0]) => {
+		if (input.inventory.sourcePath === path) oldPathWrites++;
+		return replace(input);
+	});
+	const capabilities = createCatalogCapabilities({ kind: "partial", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 });
+	const service = new BeaconService(new PluginDataStore({
+		loadData: async () => data, saveData: async (value: unknown) => { data = value; },
+	} as import("obsidian").Plugin), {
+		readSource: sourcePath => coordinator.readPresentationSource(sourcePath, sourcePath === path ? "2026-08-09" : "2026-08-10"),
+		isSourceCurrent: async source => {
+			const file = fixture.file(source.path);
+			if (!file) return false;
+			const bytes = await (fixture.app as App).vault.readBinary(file);
+			return fixture.file(source.path) === file && sha256(new Uint8Array(bytes)) === source.sourceRevision;
+		},
+		createBlockReference: async () => { throw new Error("Unexpected anchor write"); },
+		fromObservation: observation => toParsedCatalogMemoItem(observation, capabilities),
+		onFailure: error => { throw error; },
+	});
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), {
+			onPresentationSource: source => service.observeSource(source),
+			onSourceEvent: (sourcePath, kind, nextPath) => service.sourceChanged(sourcePath, kind, nextPath),
+		});
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+		await service.reload();
+		const old = service.getSnapshot().memo!;
+		assert.ok(old); assert.equal(oldPathWrites, 1);
+		fixture.renameFile(path, next, 1); fixture.emitVaultEvent("rename", fixture.file(next), path);
+		fixture.setFile(path, body, 1); fixture.emitVaultEvent("create", fixture.file(path));
+		await waitUntil(async () => service.getSnapshot().memo?.dailyRef.path === next && service.getSnapshot().previousSources === undefined);
+		await coordinator.waitForIdle();
+		assert.equal(oldPathWrites, 1, "旧路径使用 Catalog 原分区");
+		assert.deepEqual(buildBeaconPresentation(service.getSnapshot(), [old]).memos.map(memo => memo.dailyRef.path), [next, path]);
+	} finally { service.dispose(); fixture.unload(); }
+});
+
 test("阅读连续性计量：同字节重复保存与真实正文变化分别记录解析、发布及查询", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");

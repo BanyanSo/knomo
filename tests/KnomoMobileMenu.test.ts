@@ -548,6 +548,48 @@ test("desktop Card and Scope keep their existing popovers and never instantiate 
 	} finally { h.close(); }
 });
 
+test("桌面仅同步打开的灯标菜单；手机原生菜单保留打开时的移除令牌", async () => {
+	const h = await createHarness();
+	const { KNOMO_BEACON_ICON } = await import("../src/constants");
+	try {
+		h.originalMemo.catalog = createReferenceMemo("selected").catalog;
+		h.view.mobileSearchPageOpen = false;
+		let currentSelection = 8, memoLookups = 0;
+		const received: Array<{ action: MemoAction; selection: number | undefined }> = [];
+		Object.assign(h.view, {
+			positionOpenCardMenu: () => {},
+			findMemoById: () => { memoLookups++; return h.originalMemo; },
+			beaconService: { getSnapshot: () => ({ selection: currentSelection }), isSelectedHandle: () => currentSelection === 8 },
+			handleMemoAction: async (action: MemoAction, _memo: MemoViewItem, _focus: boolean, selection?: number) => {
+				received.push({ action, selection });
+			},
+		});
+		h.view.currentLayout = "desktop-wide";
+		h.view.syncCardMenuState(); assert.equal(memoLookups, 0);
+		h.view.toggleCardMenu(h.originalMemo.id);
+		const button = h.f.card.querySelector("[data-memo-action='remove-beacon']")!;
+		assert.equal(button.getAttribute("data-beacon-selection"), "8");
+		currentSelection = 9;
+		Reflect.get(h.view, "syncOpenCardBeaconActions").call(h.view);
+		assert.equal(button.getAttribute("data-memo-action"), "set-beacon");
+		assert.equal(button.hasAttribute("data-beacon-selection"), false);
+		h.view.toggleCardMenu(h.originalMemo.id);
+		const closedLookups = memoLookups;
+		currentSelection = 8;
+		Reflect.get(h.view, "syncOpenCardBeaconActions").call(h.view);
+		assert.equal(memoLookups, closedLookups);
+		assert.equal(button.getAttribute("data-memo-action"), "set-beacon");
+
+		h.view.currentLayout = "mobile";
+		h.view.toggleCardMenu(h.originalMemo.id);
+		const nativeAction = h.menus.at(-1)!.items.find(item => item.icon === KNOMO_BEACON_ICON)!;
+		assert.equal(nativeAction.title, "Remove from Beacon");
+		currentSelection = 9;
+		nativeAction.click!();
+		assert.deepEqual(received, [{ action: "remove-beacon", selection: 8 }]);
+	} finally { h.close(); }
+});
+
 test("mobile back belongs to the active view, dismisses the keyboard first and leaves host Modal/Menu to the host", async () => {
 	const h = await createHarness();
 	const { Platform } = await import("obsidian");

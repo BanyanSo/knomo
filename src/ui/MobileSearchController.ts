@@ -55,7 +55,7 @@ interface MobileSearchControllerOptions {
 	getCoverageKey?: () => string;
 	getQueryContextKey?: () => string;
 	projectResults?: (memos: readonly MemoRecord[], filter: CatalogQueryFilter) => MemoRecord[];
-	hasPendingConfirmedMemos?: () => boolean;
+	hasPendingMembershipChanges?: () => boolean;
 	prepareResultsAcceptance?: () => (consume?: boolean) => void;
 	onResultsAccepted?: (page: Omit<MobileSearchPage, "items" | "nextCursor">) => void;
 	batchSize: number;
@@ -101,6 +101,7 @@ export class MobileSearchController {
 	readonly session = new SearchSession();
 	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
+	private revokedResults: { key: string; memos: Map<string, MemoRecord> } | null = null;
 	private displayedCount: number | null = null;
 	private summaryPresentation: { key: string; summary: ResultCountSummary } | null = null;
 	private pendingQueryKey: string | null = null;
@@ -389,6 +390,7 @@ export class MobileSearchController {
 		this.clearDebounce();
 		this.session.close();
 		this.open = false;
+		this.revokedResults = null;
 		this.pageEl?.detach();
 		this.pageEl = null;
 		this.inputEl = null;
@@ -487,6 +489,7 @@ export class MobileSearchController {
 		this.session.reset();
 		this.displayedContext = null;
 		this.displayedMemos = null;
+		this.revokedResults = null;
 		this.acceptedWindow = null;
 		this.displayedCount = null;
 		this.summaryPresentation = null;
@@ -531,6 +534,7 @@ export class MobileSearchController {
 		if (!this.hasSearchConditions()) {
 			this.cancelPendingRequest();
 			this.displayedMemos = null;
+			this.revokedResults = null;
 			this.acceptedWindow = null;
 			this.displayedCount = null;
 			this.summaryPresentation = null;
@@ -556,7 +560,10 @@ export class MobileSearchController {
 			return;
 		}
 		const sameScope = this.getDisplayedRequestKey() === key;
-		if (!sameScope || changeIntent === "view-scope-change") this.acceptedWindow = null;
+		if (!sameScope || changeIntent === "view-scope-change") {
+			this.acceptedWindow = null;
+			this.revokedResults = null;
+		}
 		if (this.acceptedResultsInvalidated || !sameScope) reset = true;
 		const windowSize = reset && sameScope ? Math.max(Math.min(this.visibleCount, this.displayedMemos?.length ?? 0),
 			this.acceptedWindow?.key === key ? this.acceptedWindow.count : 0) : 0;
@@ -640,17 +647,18 @@ export class MobileSearchController {
 			acceptResults?.();
 			this.displayedContext = context;
 			this.displayedMemos = projected;
+			this.revokedResults = null;
 			this.cursor = page.nextCursor;
 			if (reset) {
 				this.acceptedResultsInvalidated = false;
-				this.displayedCount = !this.options.hasPendingConfirmedMemos?.()
+				this.displayedCount = !this.options.hasPendingMembershipChanges?.()
 					&& page.status.relations?.complete !== false
 					&& page.nextCursor === null && isQueryCovered(page.coverage, filter) ? this.displayedMemos.length : null;
 			}
 			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
 			this.rememberAcceptedWindow();
 			this.options.onResultsAccepted?.(page);
-			if (reset && this.displayedCount === null && !this.options.hasPendingConfirmedMemos?.()
+			if (reset && this.displayedCount === null && !this.options.hasPendingMembershipChanges?.()
 				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
@@ -727,13 +735,16 @@ export class MobileSearchController {
 	private rememberAcceptedWindow(): void {
 		const key = this.getDisplayedRequestKey();
 		if (key !== null && !this.acceptedResultsInvalidated) {
-			this.acceptedWindow = { key, count: Math.min(this.visibleCount, this.displayedMemos?.length ?? 0) };
+			this.acceptedWindow = { key, count: this.displayedMemos?.length ?? 0 };
 		}
 	}
 
 	suspendLoadingFeedback(): void { this.loadingIndicator.clear(); }
 
 	getDisplayedMemos(): readonly MemoRecord[] { return this.displayedMemos ?? []; }
+	getRevokedMemos(): MemoRecord[] {
+		return this.open && this.revokedResults?.key === this.getViewStateKey() ? [...this.revokedResults.memos.values()] : [];
+	}
 	getDisplayedCount(): number | null {
 		return this.getDisplayedFilter().hasReferrers && (this.acceptedResultsInvalidated || this.options.getResultStatus?.(this.getDisplayedFilter()).complete === false)
 			? null : this.displayedCount;
@@ -769,7 +780,7 @@ export class MobileSearchController {
 			&& (this.options.getCatalogRevision?.() ?? catalogRevision) === catalogRevision
 			&& (this.options.getCoverageKey?.() ?? coverageKey) === coverageKey
 			&& (!filter.hasReferrers || this.options.getRelationRevision?.() === relationsVersion)
-			&& !this.options.hasPendingConfirmedMemos?.();
+			&& !this.options.hasPendingMembershipChanges?.();
 		try {
 			// 计数属于查询快照，首屏之后启动，同一查询的后续分页不能使它失效。
 			await new Promise<void>(resolve => {
@@ -813,15 +824,33 @@ export class MobileSearchController {
 		}
 	}
 
-	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false, readonlyPresentation = false): void {
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false,
+		readonlyPresentation = false, anchorOnly = false): void {
 		if (!this.open || !this.hasSearchConditions()) return;
 		this.rememberAcceptedWindow();
 		const hadPendingQuery = this.pendingQueryKey !== null;
 		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.getDisplayedRequestKey();
-		this.cancelPendingRequest();
+		this.cancelPendingRequest(anchorOnly);
 		// 保存成功不证明新记录已被引用，已有成员由 changes 原位更新。
 		const filter = this.getDisplayedFilter();
 		const additions = filter.hasReferrers ? [] : this.options.filterMemos(inserted, filter);
+		if (readonlyPresentation) {
+			const key = this.getDisplayedRequestKey();
+			if (key !== null) {
+				if (this.revokedResults?.key !== key) this.revokedResults = { key, memos: new Map() };
+				for (const memo of this.displayedMemos ?? []) {
+					if (changes.get(memo.id) === null) this.revokedResults.memos.set(memo.id, memo);
+				}
+			}
+		} else if (anchorOnly) {
+			// 只使用已撤权窗口中有明确替换关系的成员，包括已读但尚未挂载的卡片。
+			for (const memo of this.getRevokedMemos()) {
+				if (!changes.has(memo.id)) continue;
+				this.revokedResults!.memos.delete(memo.id);
+				const current = changes.get(memo.id);
+				if (current) additions.push(current);
+			}
+		}
 		if (additions.length === 0 && !this.displayedMemos?.some(memo => changes.has(memo.id))) {
 			if (!hadPendingQuery) return;
 			this.session.requestStatus = this.session.result === null ? "idle" : "ready";
@@ -839,7 +868,7 @@ export class MobileSearchController {
 				? compareCatalogObservations(left.catalog.observation, right.catalog.observation)
 				: right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
 		const current = this.getMatchedMemos();
-		if (!areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
+		if (!anchorOnly && !areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
 			? this.displayedCount + current.length - previous.length : null;
 		if (this.session.result) this.session.requestStatus = "ready";
 		if (readonlyPresentation && this.resultsEl) {

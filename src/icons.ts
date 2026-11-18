@@ -1,6 +1,5 @@
 import { addIcon } from "obsidian";
 import { KNOMO_BEACON_ICON } from "./constants";
-export { KNOMO_BEACON_ICON } from "./constants";
 
 export const KNOMO_ALL_NOTES_ICON = "knomo-all-notes";
 export const KNOMO_LOGO_ICON = "knomo-logo";

@@ -196,11 +196,15 @@ export function syncMemoCardBeaconAction(card: HTMLElement, memo: MemoRecord, se
 		button = renderCardAction(menu, memo.id, action, getMemoActionLabel(action), "knomo-card-action");
 		menu.insertBefore(button, menu.querySelector(".knomo-card-menu-separator"));
 	}
-	button.setAttr("data-memo-action", action);
-	button.setAttr("data-memo-id", memo.id);
-	button.querySelector(".knomo-menu-label")?.setText(getMemoActionLabel(action));
-	if (selection === undefined) button.removeAttribute("data-beacon-selection");
-	else button.setAttr("data-beacon-selection", String(selection));
+	if (button.getAttribute("data-memo-action") !== action) {
+		button.setAttr("data-memo-action", action);
+		button.querySelector(".knomo-menu-label")?.setText(getMemoActionLabel(action));
+	}
+	const token = selection === undefined ? null : String(selection);
+	if (button.getAttribute("data-beacon-selection") !== token) {
+		if (token === null) button.removeAttribute("data-beacon-selection");
+		else button.setAttr("data-beacon-selection", token);
+	}
 }
 
 function renderMemoCardTime<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderMemoCardOptions<TMemo>): void {

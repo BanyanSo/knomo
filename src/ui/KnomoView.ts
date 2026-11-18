@@ -992,7 +992,7 @@ export class KnomoView extends ItemView {
 			getQueryContextKey: () => JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]),
 			getSourceScope: () => this.scopeFilter === "referenced" ? "referenced" : "all",
 			projectResults: (memos, filter) => this.confirmedDailyMemos?.merge(memos, filter) ?? mergeCatalogMemoPages(memos),
-			hasPendingConfirmedMemos: () => this.confirmedDailyMemos?.pending ?? false,
+			hasPendingMembershipChanges: () => this.confirmedDailyMemos?.affectsQueryMembership ?? false,
 			prepareResultsAcceptance: () => this.prepareCatalogResultAcceptance(),
 			onResultsAccepted: page => {
 				this.catalogCoverage = page.coverage;
@@ -1564,36 +1564,40 @@ export class KnomoView extends ItemView {
 		const readonly = this.getReadonlyMemoPresentation();
 		const cached = this.getCachedMemos();
 		if (readonly) cached.push(...Array.from(readonly.cards.values(), item => item.memo));
+		const updateExistingOnly = presentation.change.updateExistingOnly === true;
+		if (updateExistingOnly) cached.push(...(this.mobileSearchController?.getRevokedMemos?.() ?? []));
 		const target = presentation.change.changed;
 		const observation = target ? presentation.observations.find(item => sameBeaconHandle(item, target)) : undefined;
-		const windowMemos = [...this.memos, ...Array.from(readonly?.cards.values() ?? []).filter(item => item.inWindow).map(item => item.memo)];
+		const windowMemos = [...this.memos, ...Array.from(readonly?.cards.values() ?? []).filter(item => item.inWindow).map(item => item.memo),
+			...(readonly?.windowMemos?.values() ?? [])];
+		if (readonly?.windowMemos) cached.push(...readonly.windowMemos.values());
+		const windowIds = new Set(windowMemos.map(memo => memo.id));
 		const outsideBeacon = target !== null && observation !== undefined && presentation.change.inserted === null
 			&& this.beaconService?.isBoundObservation(observation, presentation.blockAnchors)
-			&& this.isDefaultListState() && !windowMemos.some(memo => presentation.change.replacements
-				.some(item => item.after && sameBeaconHandle(item.after, target) && memo.catalog && sameBeaconHandle(memo.catalog.observationHandle, item.before)));
-		const updateExistingOnly = presentation.change.updateExistingOnly === true;
-		const preservePagination = outsideBeacon || updateExistingOnly && this.isDefaultListState();
+			&& this.isDefaultListState() && !presentation.change.replacements.some(item =>
+				item.after && sameBeaconHandle(item.after, target) && windowIds.has(observationHandleKey(item.before)));
+		const preservePagination = outsideBeacon || updateExistingOnly;
 		const { changes, changed } = this.confirmedDailyMemos.apply(presentation, cached, capabilities, !outsideBeacon && !updateExistingOnly,
-			this.isDefaultListState() ? new Set(windowMemos.map(memo => memo.id)) : undefined, preservePagination);
+			this.isDefaultListState() ? windowIds : undefined, preservePagination);
 		// 保存自身的文件通知可能先撤权；只有提交明确映射的旧卡才由本次确认接续。
 		const resumed: MemoRecord[] = [];
 		for (const { before } of presentation.change.replacements) {
 			const key = observationHandleKey(before);
 			const previous = readonly?.cards.get(key);
-			if (!previous) continue;
-			readonly!.cards.delete(key);
+			const wasInWindow = readonly?.windowMemos?.delete(key) || previous?.inWindow;
+			readonly?.cards.delete(key);
 			const current = changes.get(key);
 			// 顶部补读的灯标/浮标也会撤权，但恢复时不能扩充普通查询窗口。
-			if (current && previous.inWindow) resumed.push(current);
+			if (current && wasInWindow) resumed.push(current);
 		}
-		if (readonly?.cards.size === 0) this.readonlyMemoPresentation = undefined;
+		if (readonly?.cards.size === 0 && !readonly.windowMemos?.size) this.readonlyMemoPresentation = undefined;
 		if (resumed.length > 0 && !preservePagination) this.catalogDesktopTotalCount = null;
 		this.randomReunionController.cancelPending();
 		this.shuffleDayController.cancelPending();
 		// 保存视图在面板退场前准备卡片，其它正在输入的移动视图继续保留延后渲染。
 		this.presentingConfirmedSave = this.isSaving;
-		try { this.applyCachedMemoChanges(changes, [...resumed, ...changed], true, previousPresentation, presentation.change.inserted !== null,
-			false, false, preservePagination); }
+		try { this.applyCachedMemoChanges(changes, updateExistingOnly ? changed : [...resumed, ...changed], true, previousPresentation,
+			presentation.change.inserted !== null, false, false, preservePagination, updateExistingOnly ? resumed : undefined); }
 		finally { this.presentingConfirmedSave = false; }
 		const proof = captureRandomReunionFileProof(presentation, this.randomReunionController.getSnapshot().memos ?? []);
 		if (proof) continuation.files.set(presentation.change.sourcePath, proof);
@@ -1640,6 +1644,7 @@ export class KnomoView extends ItemView {
 	private preservingReadonlyMemoPresentation = false;
 	private readonlyMemoPresentation: {
 		scope: string; cards: Map<string, { memo: MemoRecord; card: HTMLElement; inWindow?: boolean }>;
+		windowMemos?: Map<string, MemoRecord>;
 	} | undefined;
 
 	private getReadonlyMemoPresentation() {
@@ -1651,7 +1656,7 @@ export class KnomoView extends ItemView {
 
 	private retainReadonlyMemoPresentation<T extends CardFlowPresentation>(presentation: T): T | Extract<CardFlowPresentation, { type: "items" }> {
 		const readonly = this.getReadonlyMemoPresentation();
-		if (!readonly) return this.applyBeaconPresentation(presentation);
+		if (!readonly?.cards.size) return this.applyBeaconPresentation(presentation);
 		// 旧卡只参与当前范围的显示；查询窗口与操作查找仍使用已经撤权的实时集合。
 		const memos = mergeCatalogMemoPages([...Array.from(readonly.cards.values(), item => item.memo),
 			...(presentation.type === "items" ? presentation.memos : [])]);
@@ -1709,7 +1714,7 @@ export class KnomoView extends ItemView {
 			}
 		}
 		this.renderCardFlow();
-		this.syncCardMenuState();
+		this.syncOpenCardBeaconActions();
 	}
 
 	private applyBeaconPresentation<T extends CardFlowPresentation>(presentation: T): T | Extract<CardFlowPresentation, { type: "items" }> {
@@ -1737,9 +1742,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private isCurrentBeacon(memo: MemoRecord): boolean {
-		const snapshot = this.beaconService?.getSnapshot();
-		return snapshot?.state === "ready" && !!snapshot.memo?.catalog && !!memo.catalog
-			&& sameBeaconHandle(snapshot.memo.catalog.observationHandle, memo.catalog.observationHandle);
+		return !!memo.catalog && this.beaconService?.isSelectedHandle(memo.catalog.observationHandle) === true;
 	}
 
 	private isTopBeacon(memo: MemoRecord): boolean {
@@ -1785,8 +1788,13 @@ export class KnomoView extends ItemView {
 					return memo?.dailyRef.path === path ? [{ card, memo }] : [];
 				}) : [];
 				const focus = flow ? new MemoFocusRestore(flow, mounted) : null;
-				const readonly = mounted.length ? this.getReadonlyMemoPresentation()
-					?? { scope: this.getCardFlowViewStateKey(), cards: new Map<string, { memo: MemoRecord; card: HTMLElement; inWindow?: boolean }>() } : undefined;
+				const windowMemos = this.memos.filter(memo => memo.dailyRef.path === path && memo.catalog?.observationHandle.sourceRevision !== current);
+				const readonly: typeof this.readonlyMemoPresentation = mounted.length || windowMemos.length ? this.getReadonlyMemoPresentation()
+					?? { scope: this.getCardFlowViewStateKey(), cards: new Map() } : undefined;
+				if (readonly && windowMemos.length) {
+					readonly.windowMemos ??= new Map();
+					for (const memo of windowMemos) readonly.windowMemos.set(memo.id, memo);
+				}
 				for (const { card, memo } of mounted) {
 					const inWindow = readonly?.cards.get(memo.id)?.inWindow ?? this.memos.some(member => member.id === memo.id);
 					readonly?.cards.set(memo.id, { memo, card: makeReadonlyMemoCard(card), inWindow });
@@ -1905,14 +1913,16 @@ export class KnomoView extends ItemView {
 		const inserted = change.inserted !== null && (this.shuffleDayController.getSnapshot().selectedDate === change.logicalDate
 			|| this.randomDayController?.getSnapshot().selectedDate === change.logicalDate)
 			? change.inserted : null;
-		if (replacements.length === 0 && inserted === null && pending.length === 0) {
+		const confirmedMembers = change.updateExistingOnly ? cached.filter(memo => memo.dailyRef.path === change.sourcePath
+			&& memo.catalog?.observationHandle.sourceRevision === change.sourceRevision) : [];
+		if (replacements.length === 0 && inserted === null && pending.length === 0 && confirmedMembers.length === 0) {
 			// 此入口已等待 Catalog 提交；没有本页成员也必须结束确认交接。
 			this.confirmedDailyMemos?.acknowledge(change);
 			return;
 		}
 		const changes = new Map<string, MemoRecord | null>(replacements.map(item => [observationHandleKey(item.before), null]));
 		const handles = [...new Map([...replacements.flatMap(item => item.after ? [item.after] : []),
-			...(inserted ? [inserted] : []), ...pending.map(memo => memo.catalog!.observationHandle)]
+			...(inserted ? [inserted] : []), ...[...pending, ...confirmedMembers].map(memo => memo.catalog!.observationHandle)]
 			.map(handle => [observationHandleKey(handle), handle])).values()];
 		let current: Awaited<ReturnType<CatalogReadService["readMemoItems"]>>;
 		try {
@@ -1939,10 +1949,11 @@ export class KnomoView extends ItemView {
 				changes.set(memo.id, projected ? byKey.get(projected.id) ?? projected : null);
 			}
 			for (const memo of pending) changes.set(memo.id, byKey.get(memo.id)!);
+			for (const memo of confirmedMembers) changes.set(memo.id, byKey.get(memo.id)!);
 			const upserts = pending.length > 0 ? pending.map(memo => byKey.get(memo.id)!)
 				: inserted ? [byKey.get(observationHandleKey(inserted))!] : [];
-			if (this.applyCachedMemoChanges(changes, upserts, pending.length > 0, undefined, false, false, false,
-				this.confirmedDailyMemos?.preservesPagination(change.sourcePath))) {
+			if (this.applyCachedMemoChanges(changes, upserts, pending.length > 0 || change.updateExistingOnly === true, undefined, false, false, false,
+				change.updateExistingOnly || this.confirmedDailyMemos?.preservesPagination(change.sourcePath), change.updateExistingOnly ? [] : undefined)) {
 				this.confirmedDailyMemos?.acknowledge(change);
 				if (feedbackRun === (this.pageFeedbackRun ?? 0)) { this.pageRefreshError = null; this.syncPageFeedback(); }
 			}
@@ -1991,7 +2002,7 @@ export class KnomoView extends ItemView {
 	private applyCachedMemoChanges(
 		changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], confirmed = false,
 		previousPresentation = this.captureMemoChangePresentation(), created = false, readonlyPresentation = false, preserveRandomMemos = false,
-		preservePagination = false,
+		preservePagination = false, anchorWindowMemos?: readonly MemoRecord[],
 	): boolean {
 		this.cancelCatalogDesktopQuery();
 		this.remapHistoryBrowsePositions(changes, previousPresentation.memos);
@@ -2004,7 +2015,7 @@ export class KnomoView extends ItemView {
 		});
 		if (confirmed) {
 			// 入向关联只能由关系查询确认；即时提交仍可更新列表中已有的成员。
-			const additions = this.isReferrerQuery() ? [] : inserted;
+			const additions = this.isReferrerQuery() ? anchorWindowMemos ?? [] : [...(anchorWindowMemos ?? []), ...inserted];
 			this.memos = [...new Map([...this.memos, ...additions].map(memo => [memo.id, memo])).values()]
 				.sort((left, right) => compareCatalogObservations(left.catalog!.observation, right.catalog!.observation));
 			if (!preservePagination) {
@@ -2020,7 +2031,7 @@ export class KnomoView extends ItemView {
 		this.filteredMemosCache = null;
 		if (this.catalogTodayTimeBuoys !== null) {
 			const today = this.catalogTodayTimeBuoys.todayDate;
-			this.catalogTodayTimeBuoys = { ...this.catalogTodayTimeBuoys, todayCursor: null,
+			this.catalogTodayTimeBuoys = { ...this.catalogTodayTimeBuoys, todayCursor: preservePagination ? this.catalogTodayTimeBuoys.todayCursor : null,
 				today: this.catalogTodayTimeBuoys.today.flatMap(item => {
 					if (!changes.has(item.memo.id)) return [item];
 					const memo = changes.get(item.memo.id);
@@ -2034,7 +2045,7 @@ export class KnomoView extends ItemView {
 		this.shuffleDayController.applyMemoChanges(changes, inserted);
 		this.randomDayController?.applyMemoChanges(changes, inserted);
 		this.timeBuoyViewController.applyMemoChanges(changes, confirmed ? inserted : []);
-		this.mobileSearchController?.applyMemoChanges(changes, confirmed ? inserted : [], created, readonlyPresentation);
+		this.mobileSearchController?.applyMemoChanges(changes, confirmed ? inserted : [], created, readonlyPresentation, anchorWindowMemos !== undefined);
 		const current = this.captureMemoChangePresentation();
 		const sameMemos = areMemoListsUnchanged(previousPresentation.memos, current.memos, changes);
 		if (confirmed && current.memos.length > 0) {
@@ -3253,7 +3264,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private getImmediateCatalogTotalCount(load: CatalogMemoLoad): number | null {
-		if (this.confirmedDailyMemos?.pending || load.status.relations?.complete === false) return null;
+		if (this.confirmedDailyMemos?.affectsQueryMembership || load.status.relations?.complete === false) return null;
 		return load.nextCursor === null && isQueryCovered(load.coverage, this.viewStateController.search.result?.filter ?? this.buildCatalogActiveQuery(true))
 			? load.memos.length
 			: null;
@@ -3319,7 +3330,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private shouldCountCatalogQuery(): boolean {
-		if (this.confirmedDailyMemos?.pending) return false;
+		if (this.confirmedDailyMemos?.affectsQueryMembership) return false;
 		return this.activeNav === "things" || this.activeNav === "review"
 			|| (this.recordStatsSearchFilter !== null && this.recordStatsSearchFilter !== undefined)
 			|| (this.activeTagKey !== null && this.activeTagKey !== undefined)
@@ -8202,16 +8213,29 @@ export class KnomoView extends ItemView {
 		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el ?? null]) {
 			if (container === null) continue;
 			for (const card of container.findAll(".knomo-card")) {
-				if (this.beaconService) {
-					const memo = this.findMemoById(card.getAttr("data-memo-id") ?? "", container === this.relationsPage?.el ? "relations" : container === this.mobileSearchResultsEl ? "mobile-search" : "card-flow");
-					if (memo) syncMemoCardBeaconAction(card, memo, this.isCurrentBeacon(memo) ? this.beaconService.getSnapshot().selection : undefined);
-				}
 				const isOpen = this.activeMenuMemoId !== null && card.getAttr("data-memo-id") === this.activeMenuMemoId;
 				card.toggleClass("is-menu-open", isOpen && this.currentLayout !== "mobile");
-				if (isOpen && this.currentLayout !== "mobile") this.positionOpenCardMenu(card);
+				if (isOpen && this.currentLayout !== "mobile") {
+					this.syncOpenCardBeaconAction(card);
+					this.positionOpenCardMenu(card);
+				}
 				card.find(".knomo-card-menu")?.setAttr("aria-expanded", String(isOpen));
 			}
 		}
+	}
+
+	private syncOpenCardBeaconActions(): void {
+		if (this.currentLayout === "mobile" || this.activeMenuMemoId === null) return;
+		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el ?? null]) {
+			for (const card of container?.findAll(".knomo-card.is-menu-open") ?? []) this.syncOpenCardBeaconAction(card);
+		}
+	}
+
+	private syncOpenCardBeaconAction(card: HTMLElement): void {
+		const id = card.getAttr("data-memo-id");
+		if (!this.beaconService || !id || id !== this.activeMenuMemoId || card.hasAttribute("inert")) return;
+		const memo = this.findMemoById(id, this.getMemoSurface(card));
+		if (memo) syncMemoCardBeaconAction(card, memo, this.isCurrentBeacon(memo) ? this.beaconService.getSnapshot().selection : undefined);
 	}
 
 	private registerMobileMenuTriggerEvents(): void {

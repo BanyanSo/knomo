@@ -245,7 +245,7 @@ export default class KnomoPlugin extends Plugin {
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
 				preserveMetaKeysOnRebuild: [MONTHLY_PROJECTION_CHECKPOINT_META_KEY],
 				onCatalogSettled: async () => {
-					void this.beaconService?.refresh();
+					void this.beaconService?.refreshIfNeeded();
 					await this.catalogReadService?.relations.refreshState();
 					await this.monthlyProjectionCoordinator?.handleCatalogSettled();
 					await this.queueRefreshOpenViews();
@@ -268,7 +268,7 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseDailyNoteDateFromPath(presentation.change.sourcePath, getEffectiveDailyConfig());
 				if (date === null || formatDatePart(date) !== presentation.change.logicalDate) return;
 				this.beaconService?.confirmed(presentation);
-				void this.beaconService?.refresh();
+				void this.beaconService?.refreshIfNeeded();
 				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 					if (!(leaf.view instanceof KnomoView)) continue;
 					try { leaf.view.handleConfirmedDailyMemoChange(presentation); }
@@ -307,7 +307,7 @@ export default class KnomoPlugin extends Plugin {
 		const trashService = new IndependentTrashService(this.app, trashStore, {
 			onDailyConfirmed: (presentation, target, anchors) => {
 				this.beaconService?.confirmed(presentation, target, anchors);
-				void this.beaconService?.refresh();
+				void this.beaconService?.refreshIfNeeded();
 			},
 			assertActive: () => {
 				if (lowPriorityWorkQueue.signal.aborted
@@ -680,7 +680,7 @@ export default class KnomoPlugin extends Plugin {
 		);
 		await committed;
 		await presentation;
-		void this.beaconService?.refresh();
+		void this.beaconService?.refreshIfNeeded();
 		// 卡片展示失败不改变 Daily/Catalog 成功状态；普通查询、浮标和统计仍走现有合并刷新。
 		void this.queueRefreshOpenViews().catch((error: unknown) => logContinuationFailure("view", "scheduled-refresh", error));
 	}

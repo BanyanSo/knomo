@@ -22,7 +22,8 @@ import { DiaryMemoParser } from "../../src/services/DiaryMemoParser";
 import { MemoCatalogService } from "../../src/services/MemoCatalogService";
 import { InMemoryMemoCatalogStore } from "../../src/services/MemoCatalogStore";
 import { CatalogReadService } from "../../src/services/CatalogReadService";
-import type { BeaconSnapshot } from "../../src/types/beacon";
+import { sameBeaconHandle, type BeaconSnapshot } from "../../src/types/beacon";
+import type { ObservationHandle } from "../../src/types/catalog";
 import { registerKnomoIcons } from "../../src/icons";
 import type { BeaconSource } from "../../src/services/BeaconService";
 import { toParsedCatalogMemoItem } from "../../src/services/CatalogReadService";
@@ -99,7 +100,8 @@ export async function beaconGeometry(options: { mobile: boolean; dark: boolean; 
 	let buoy = true, today = options.today, label = "Time buoy";
 	let snapshot: BeaconSnapshot = { state: "unset", selection: 0 };
 	Object.assign(view, {
-		beaconService: { getSnapshot: () => snapshot }, getPageFeedbackContext: () => "beacon",
+		beaconService: { getSnapshot: () => snapshot, isSelectedHandle: (handle: ObservationHandle) => snapshot.state === "ready"
+			&& !!snapshot.memo?.catalog && sameBeaconHandle(snapshot.memo.catalog.observationHandle, handle) }, getPageFeedbackContext: () => "beacon",
 		memos, getCardFlowViewStateKey: () => "default",
 		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => buoy && memo.id === selected.id ? { status: today ? "today" : "past", label } : undefined,
 	});
@@ -367,7 +369,8 @@ export async function beaconStylePreview(options: { mobile: boolean; dark: boole
 	beacon.catalog!.observation.time = "08:30"; buoy.catalog!.observation.time = "20:15"; ordinary.catalog!.observation.time = "09:18";
 	const snapshot: BeaconSnapshot = { state: "ready", selection: 1, memo: beacon };
 	Object.assign(view, {
-		beaconService: { getSnapshot: () => snapshot }, getPageFeedbackContext: () => "beacon-style", memos: [ordinary],
+		beaconService: { getSnapshot: () => snapshot, isSelectedHandle: (handle: ObservationHandle) => sameBeaconHandle(beacon.catalog!.observationHandle, handle) },
+		getPageFeedbackContext: () => "beacon-style", memos: [ordinary],
 		settingsService: { getSettings: () => ({ recentTimeFlowEnabled: true }) },
 		getTodayTimeBuoyItems: () => [{ memo: buoy }],
 		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => {
@@ -469,7 +472,8 @@ export async function beaconCardLayout(options: { mobile: boolean; dark: boolean
 		const memo = h.makeMemo(1, 0, content !== "long");
 		memo.contentSnapshot = content;
 		flow.replaceChildren(); view.renderedCardMemos.clear();
-		view.beaconService = { getSnapshot: (): BeaconSnapshot => top ? { state: "ready", selection: 1, memo } : { state: "unset", selection: 0 } };
+		view.beaconService = { getSnapshot: (): BeaconSnapshot => top ? { state: "ready", selection: 1, memo } : { state: "unset", selection: 0 },
+			isSelectedHandle: (handle: ObservationHandle) => top && sameBeaconHandle(memo.catalog!.observationHandle, handle) };
 		view.getVisibleMemoTimeBuoy = () => buoy ? { status: "today", label: "Time buoy" } : undefined;
 		view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: [memo] }, null);
 		await h.settle();

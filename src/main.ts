@@ -1,3 +1,6 @@
+import { FavoriteStore } from "./services/FavoriteStore";
+import { FavoriteService } from "./services/FavoriteService";
+import type { DailyAnchorSource } from "./services/DailyMemoAnchor";
 import { initializeCatalogRuntime } from "./services/CatalogStartup";
 import { getLanguage, Notice, Platform, Plugin, TFile, TFolder, Vault, View } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
@@ -62,6 +65,7 @@ import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
+	private favoriteService: FavoriteService | null = null;
 	private beaconService: BeaconService | null = null;
 	manualRefreshPromise: Promise<CatalogRefreshResult> | null = null;
 	private viewRefreshScheduler: ViewRefreshScheduler | null = null;
@@ -238,8 +242,14 @@ export default class KnomoPlugin extends Plugin {
 			() => Promise.resolve(getEffectiveDailyConfig()),
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
-				onPresentationSource: source => this.beaconService?.observeSource(source),
-				onSourceEvent: (path, kind, newPath) => this.beaconService?.sourceChanged(path, kind, newPath),
+				onPresentationSource: source => {
+					this.beaconService?.observeSource(source);
+					this.favoriteService?.observeSource(source);
+				},
+				onSourceEvent: (path, kind, newPath) => {
+					this.beaconService?.sourceChanged(path, kind, newPath);
+					this.favoriteService?.sourceChanged(path, kind, newPath);
+				},
 				isConfigurationComplete: () => dailyNotesProvider.getConfig() !== null,
 				onProgress: (coverage, scan) => this.updateOpenViewCatalogProgress(coverage, scan),
 				onDailyPeriodsChanged: (periods) => this.monthlyProjectionCoordinator?.invalidateChangedPeriods(periods),
@@ -268,6 +278,7 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseDailyNoteDateFromPath(presentation.change.sourcePath, getEffectiveDailyConfig());
 				if (date === null || formatDatePart(date) !== presentation.change.logicalDate) return;
 				this.beaconService?.confirmed(presentation);
+				this.favoriteService?.confirmed(presentation);
 				void this.beaconService?.refreshIfNeeded();
 				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 					if (!(leaf.view instanceof KnomoView)) continue;
@@ -305,7 +316,8 @@ export default class KnomoPlugin extends Plugin {
 		this.register(() => trashStore.dispose());
 		let trashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 		const trashService = new IndependentTrashService(this.app, trashStore, {
-			onDailyConfirmed: (presentation, target, anchors) => {
+			onDailyConfirmed: (presentation, target, anchors, snapshotId, restored) => {
+				if (snapshotId) this.favoriteService?.trashConfirmed(snapshotId, presentation, target, anchors, restored);
 				this.beaconService?.confirmed(presentation, target, anchors);
 				void this.beaconService?.refreshIfNeeded();
 			},
@@ -361,15 +373,15 @@ export default class KnomoPlugin extends Plugin {
 			markdownMutationService,
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
-		this.beaconService = new BeaconService(pluginDataStore, {
-			readSource: async path => {
+		const dailyAnchors = {
+			readSource: async (path: string) => {
 				// 灯标只依赖 Daily 范围和可读设置，不等待 Monthly 配置核验。
 				if (lowPriorityWorkQueue.signal.aborted || this.settingsService.getLoadStatus() !== "ready") throw new BeaconSourceUnavailableError();
 				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
 				if (date === null || !(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw new BeaconSourceUnlocatedError();
 				return this.catalogIndexCoordinator!.readPresentationSource(path, formatDatePart(date));
 			},
-			isSourceCurrent: async source => {
+			isSourceCurrent: async (source: DailyAnchorSource) => {
 				if (lowPriorityWorkQueue.signal.aborted || this.settingsService.getLoadStatus() !== "ready") return false;
 				const file = this.app.vault.getAbstractFileByPath(source.path);
 				if (!(file instanceof TFile)) return false;
@@ -380,7 +392,31 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseDailyNoteDateFromPath(source.path, getEffectiveDailyConfig());
 				return date !== null && formatDatePart(date) === source.logicalDate;
 			},
-			createBlockReference: observation => markdownMutationService.createBlockReference({ observation, sourcePath: observation.sourcePath }),
+			createBlockReference: (observation: import("./types/catalog").ObservationHandle) => markdownMutationService.createBlockReference({ observation, sourcePath: observation.sourcePath }),
+		};
+		const favoriteStore = new FavoriteStore(this.app, getTrashFolder, () => this.app.workspace.layoutReady && !lowPriorityWorkQueue.signal.aborted);
+		this.settingsService.setFavoriteStore(favoriteStore);
+		this.favoriteService = new FavoriteService(favoriteStore, {
+			...dailyAnchors,
+			getDate: path => {
+				const configuration = dailyNotesProvider.getConfig();
+				const date = configuration ? parseDailyNoteDateFromPath(path, configuration) : null;
+				return date === null ? null : formatDatePart(date);
+			},
+			getFileIdentity: path => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				return file instanceof TFile ? file : null;
+			},
+		});
+		this.register(() => this.favoriteService?.dispose());
+		this.register(this.memoCatalogService.onChange(path => this.favoriteService?.catalogChanged(path)));
+		this.registerEvent(this.app.vault.on("create", file => favoriteStore.fileChanged(file.path)));
+		this.registerEvent(this.app.vault.on("modify", file => favoriteStore.fileChanged(file.path)));
+		this.registerEvent(this.app.vault.on("delete", file => favoriteStore.fileChanged(file.path)));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => favoriteStore.fileChanged(file.path, oldPath)));
+		this.app.workspace.onLayoutReady(() => { if (!lowPriorityWorkQueue.signal.aborted) void this.favoriteService?.retry(); });
+		this.beaconService = new BeaconService(pluginDataStore, {
+			...dailyAnchors,
 			fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial",
 				coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
 			onFailure: (error, operation) => logContinuationFailure("view", `beacon-${operation}`, error),
@@ -431,6 +467,7 @@ export default class KnomoPlugin extends Plugin {
 				const nextDailyConfiguration = JSON.stringify(dailyNotesProvider.getConfig());
 				if (nextDailyConfiguration !== confirmedDailyConfiguration) {
 					this.beaconService?.configurationChanged();
+					this.favoriteService?.configurationChanged();
 					confirmedDailyConfiguration = nextDailyConfiguration;
 					for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
 						if (leaf.view instanceof KnomoView) leaf.view.invalidateConfirmedDailyMemos();
@@ -438,6 +475,7 @@ export default class KnomoPlugin extends Plugin {
 				}
 				const nextTrashConfiguration = JSON.stringify([this.settingsService.getLoadStatus(), this.settingsService.getSettings().monthlyMemoFolder]);
 				trashStore.invalidateConfiguration(nextTrashConfiguration !== trashConfiguration);
+				if (nextTrashConfiguration !== trashConfiguration) favoriteStore.configurationChanged();
 				trashConfiguration = nextTrashConfiguration;
 				if (knomoCurrentConfigService.getStatus() !== "ready") await knomoCurrentConfigService.initialize();
 				if (lowPriorityWorkQueue.signal.aborted) return;
@@ -483,6 +521,7 @@ export default class KnomoPlugin extends Plugin {
 			await initializeMonthly();
 			await this.legacyTrashMigrationService?.run();
 			await this.beaconService?.retry();
+			void this.favoriteService?.retry();
 		};
 		this.quickCommandController = new KnomoQuickCommandController({
 			getLeaves: () => this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE),
@@ -524,6 +563,7 @@ export default class KnomoPlugin extends Plugin {
 				},
 				() => this.quickCommandController?.cancel(),
 				this.beaconService,
+				this.favoriteService,
 			),
 		);
 		this.registerAttachmentEvents();

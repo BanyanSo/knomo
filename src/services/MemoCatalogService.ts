@@ -7,6 +7,7 @@ import type {
 	CatalogQuery,
 	MemoObservation,
 } from "../types/catalog";
+import { catalogObservationKey } from "../types/catalog";
 import { extractDailyExplicitReferenceTargets } from "./DiaryMemoParser";
 import type { MemoCatalogStore } from "./MemoCatalogStore";
 import type { CatalogChangeCursor } from "./CatalogFileChanges";
@@ -172,7 +173,7 @@ export function buildCatalogObservation(observation: MemoObservation): CatalogOb
 	const searchValues = [...searchBody, ...observation.tags.map(normalizeCatalogText), ...linkTargets, ...imagePaths];
 	return {
 		...observation,
-		observationKey: `${observation.sourcePath}\0${observation.startLine.toString().padStart(10, "0")}`,
+		observationKey: catalogObservationKey(observation),
 		createdAtKey: `${observation.logicalDate}T${normalizeMemoTime(observation.time)}`,
 		searchBody,
 		searchTokens: [...new Set(searchValues.flatMap(buildCatalogSearchTokens))],

@@ -1,3 +1,4 @@
+import type { FavoriteStore } from "./FavoriteStore";
 import type { Plugin } from "obsidian";
 
 import { DEFAULT_KNOMO_SETTINGS } from "../settings/defaults";
@@ -32,6 +33,7 @@ export class SettingsService {
 	private loadStatus: KnomoSettingsLoadStatus = "not_loaded";
 	private monthlyExcludeInitializationFailed = false;
 	private settingsWriteQueue: Promise<void> = Promise.resolve();
+	private favoriteStore?: FavoriteStore;
 	private readonly monthlyFolderMigrationService: MonthlyFolderMigrationService;
 	private readonly listeners = new Set<() => void>();
 	private loadedConfiguration: string | undefined;
@@ -191,6 +193,7 @@ export class SettingsService {
 	async saveSettings(settings: KnomoSettings): Promise<KnomoSettings> {
 		if (settings.monthlyMemoFolder !== this.settings.monthlyMemoFolder) {
 			const result = await this.migrateMonthlyMemoFolder(settings.monthlyMemoFolder, settings);
+			if (result.favoriteError) throw new Error("Monthly folder saved; Favorites relocation incomplete: " + result.favoriteError);
 			if (result.trashError) throw new Error(`Monthly folder saved; Trash relocation incomplete: ${result.trashError}`);
 			return this.getSettings();
 		}
@@ -200,6 +203,7 @@ export class SettingsService {
 	async updateSettings(patch: Partial<KnomoSettings>): Promise<KnomoSettings> {
 		if (patch.monthlyMemoFolder !== undefined && patch.monthlyMemoFolder !== this.settings.monthlyMemoFolder) {
 			const result = await this.migrateMonthlyMemoFolder(patch.monthlyMemoFolder, patch);
+			if (result.favoriteError) throw new Error("Monthly folder saved; Favorites relocation incomplete: " + result.favoriteError);
 			if (result.trashError) throw new Error(`Monthly folder saved; Trash relocation incomplete: ${result.trashError}`);
 			return this.getSettings();
 		}
@@ -284,11 +288,13 @@ export class SettingsService {
 		return isValidMonthlyMemoFileFormat(value);
 	}
 
+	setFavoriteStore(store: FavoriteStore): void { this.favoriteStore = store; }
+
 	async migrateMonthlyMemoFolder(nextMonthlyMemoFolder: string, patch: Partial<KnomoSettings> = {}): Promise<MonthlyFolderMigrationResult> {
 		const selectedSettings = this.settings;
 		return this.monthlyRuntime.runExclusive(() => this.runSettingsWriteExclusive(() => {
 			if (this.settings !== selectedSettings) throw new Error("Monthly configuration changed before relocation.");
-			return this.monthlyFolderMigrationService.migrateMonthlyMemoFolder(nextMonthlyMemoFolder, patch);
+			return this.monthlyFolderMigrationService.migrateMonthlyMemoFolder(nextMonthlyMemoFolder, patch, this.favoriteStore);
 		}));
 	}
 

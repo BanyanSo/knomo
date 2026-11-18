@@ -24,6 +24,7 @@ import type { CatalogReadService } from "../services/CatalogReadService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
 import type { LegacyTrashMigrationService } from "../services/LegacyTrashMigrationService";
+import { KnomoError } from "../types/serviceError";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart } from "../utils/date";
 import { formatServiceError } from "../utils/serviceText";
@@ -997,18 +998,34 @@ export class KnomoSettingTab extends PluginSettingTab {
 
 	private async saveMonthlyFolder(value: string, button: ButtonComponent): Promise<boolean> {
 		button.setDisabled(true);
-		button.setButtonText(t("settings.monthlyFolder.saving"));
 		try {
 			const plan = await this.settingsService.planMonthlyMemoFolderMigration(value);
 			if (plan.status !== "unchanged" && !await showKnomoConfirmModal(this.app, {
+				title: t("settings.monthlyFolder.confirmTitle"),
 				message: t("settings.monthlyFolder.confirm", { current: plan.oldMonthlyMemoFolder, next: plan.newMonthlyMemoFolder }),
+				confirmLabel: t("settings.monthlyFolder.confirmButton"),
 			})) return false;
+			button.setButtonText(t("settings.monthlyFolder.saving"));
 			const result = await this.settingsService.migrateMonthlyMemoFolder(value);
-			new Notice(result.trashError ? t("settings.monthlyFolder.trashFailed", { error: result.trashError }) : t("settings.monthlyFolder.saved"));
+			const notices: string[] = [];
+			if (result.status === "migrated") {
+				notices.push(t(result.trashError || result.favoriteError ? "settings.monthlyFolder.applied" : "settings.monthlyFolder.saved"));
+			}
+			if (result.trashError) {
+				logContinuationFailure("monthly-folder-setting", "trash-relocation", result.trashError);
+				notices.push(t("settings.monthlyFolder.trashFailed"));
+			}
+			if (result.favoriteError) notices.push(t("settings.monthlyFolder.favoriteFailed", {
+				change: t("settings.monthlyFolder.change"), apply: t("settings.monthlyFolder.apply"),
+			}));
+			if (notices.length === 0) notices.push(t("settings.monthlyFolder.favoriteChecked"));
+			new Notice(notices.join("\n"));
 			await this.refreshCurrentConfiguration();
 			return true;
 		} catch (error) {
-			new Notice(formatServiceError(error, t("settings.monthlyFolder.saveFailed")));
+			const pathError = error instanceof KnomoError && (error.code === "monthly_folder_invalid_path" || error.code === "monthly_folder_protected_path");
+			if (!pathError) logContinuationFailure("monthly-folder-setting", "apply", error);
+			new Notice(pathError ? formatServiceError(error) : t("settings.monthlyFolder.saveFailed"));
 			return false;
 		} finally {
 			button.setDisabled(false);

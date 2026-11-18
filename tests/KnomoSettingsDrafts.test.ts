@@ -72,3 +72,54 @@ test("invalid and failed text drafts survive rerender; valid blur draft saves on
 	assert.equal(pending.get("dailyHeading"), "Later heading");
 	assert.equal(render().value, "Later heading");
 });
+
+test("文件夹设置区分部分搬迁、原位置重试和无法确认保存", async context => {
+	await ensureObsidianStub();
+	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
+	const confirmation = await import("../src/ui/KnomoConfirmModal");
+	const { KnomoError } = await import("../src/types/serviceError");
+	const { Notice } = await import("obsidian");
+	const { t } = await import("../src/i18n");
+	const confirm = context.mock.method(confirmation, "showKnomoConfirmModal",
+		async (..._args: Parameters<typeof confirmation.showKnomoConfirmModal>) => true);
+	const notices: string[] = Reflect.get(Notice, "messages");
+	const start = notices.length;
+	const tab = Object.create(KnomoSettingTab.prototype);
+	let unchanged = false, failure: Error | undefined;
+	Object.assign(tab, {
+		settingsService: {
+			planMonthlyMemoFolderMigration: async () => {
+				if (failure instanceof KnomoError) throw failure;
+				return { status: unchanged ? "unchanged" : "planned", oldMonthlyMemoFolder: "Old", newMonthlyMemoFolder: "New" };
+			},
+			migrateMonthlyMemoFolder: async () => {
+				if (failure) throw failure;
+				return unchanged ? { status: "unchanged" } : { status: "migrated", trashError: "raw Trash error", favoriteError: "raw Favorites error" };
+			},
+		},
+		refreshCurrentConfiguration: async () => {},
+	});
+	const button = { setDisabled() {}, setButtonText() {} };
+	try {
+		assert.equal(await tab.saveMonthlyFolder("New", button), true);
+		assert.equal(notices.length - start, 1);
+		assert.deepEqual(notices.at(-1)?.split("\n"), [
+			t("settings.monthlyFolder.applied"), t("settings.monthlyFolder.trashFailed"),
+			t("settings.monthlyFolder.favoriteFailed", { change: t("settings.monthlyFolder.change"), apply: t("settings.monthlyFolder.apply") }),
+		]);
+		assert.equal(confirm.mock.calls[0]?.arguments[1].confirmLabel, t("settings.monthlyFolder.confirmButton"));
+		assert.match(confirm.mock.calls[0]?.arguments[1].message ?? "", /Old.*New/u);
+
+		unchanged = true;
+		assert.equal(await tab.saveMonthlyFolder("New", button), true);
+		assert.equal(confirm.mock.callCount(), 1);
+		assert.equal(notices.at(-1), t("settings.monthlyFolder.favoriteChecked"));
+
+		failure = new Error("raw settings save error");
+		assert.equal(await tab.saveMonthlyFolder("New", button), false);
+		assert.equal(notices.at(-1), t("settings.monthlyFolder.saveFailed"));
+		failure = new KnomoError("monthly_folder_invalid_path");
+		assert.equal(await tab.saveMonthlyFolder("New", button), false);
+		assert.equal(notices.at(-1), t("settings.monthlyFolder.invalidPath"));
+	} finally { notices.length = start; }
+});

@@ -7,8 +7,8 @@ import {
 } from "./viewFilters";
 import type { RecordStatsSearchFilter, ScopeFilter, SearchDateFilter } from "./viewFilters";
 
-export type SidebarNav = "things" | "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "time-buoy" | "record-stats" | "trash";
-export type TitleMode = "things" | "all" | "no-tag" | "with-link" | "with-image" | "referenced" | "anniversary" | "review" | "random" | "shuffleDay";
+export type SidebarNav = "favorites" | "things" | "all" | "wechat" | "review" | "ai" | "random" | "shuffleDay" | "time-buoy" | "record-stats" | "trash";
+export type TitleMode = "favorites" | "things" | "all" | "no-tag" | "with-link" | "with-image" | "referenced" | "anniversary" | "review" | "random" | "shuffleDay";
 
 export interface SearchDateOption {
 	filter: SearchDateFilter;
@@ -45,6 +45,7 @@ export interface ViewTitleState {
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 	{ nav: "all", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON },
 	{ nav: "things", label: t("nav.things"), icon: "list-todo" },
+	{ nav: "favorites", label: t("favorite.title"), icon: "star" },
 	{ nav: "review", label: t("nav.review"), icon: "calendar-check" },
 	{ nav: "random", label: t("nav.random"), icon: KNOMO_RANDOM_REUNION_ICON },
 	{ nav: "shuffleDay", label: t("nav.shuffleDay"), icon: "calendar-days" },
@@ -57,6 +58,7 @@ export const TRASH_NAV_ITEM: SidebarNavItem = { nav: "trash", label: t("nav.tras
 export const TITLE_MODE_OPTIONS: TitleModeOption[] = [
 	{ mode: "all", group: "views", label: t("nav.allNotes"), icon: KNOMO_ALL_NOTES_ICON, scope: "all" },
 	{ mode: "things", group: "views", label: t("nav.things"), icon: "list-todo", nav: "things" },
+	{ mode: "favorites", group: "views", label: t("favorite.title"), icon: "star", nav: "favorites" },
 	{ mode: "no-tag", group: "filters", label: t("filter.noTag"), icon: "tag", scope: "no-tag" },
 	{ mode: "with-link", group: "filters", label: t("filter.withLink"), icon: "link", scope: "with-link" },
 	{ mode: "with-image", group: "filters", label: t("filter.withImage"), icon: "image", scope: "with-image" },
@@ -133,7 +135,7 @@ export function getListTitleLabel(state: ViewTitleState): string {
 }
 
 export function getCurrentTitleMode(state: ViewTitleState): string {
-	if (state.activeNav === "things" || state.activeNav === "review" || state.activeNav === "random" || state.activeNav === "shuffleDay") {
+	if (state.activeNav === "favorites" || state.activeNav === "things" || state.activeNav === "review" || state.activeNav === "random" || state.activeNav === "shuffleDay") {
 		return state.activeNav;
 	}
 	if (state.activeTagKey !== null || state.activeNav !== "all") {

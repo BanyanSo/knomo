@@ -9,6 +9,7 @@ import { CatalogQueryCancelledError } from "../src/services/MemoCatalogStore";
 import { createCatalogCapabilities } from "../src/services/MemoCapabilityModel";
 import type { MobileSearchPage } from "../src/ui/MobileSearchController";
 import type { CatalogMemoCountResult } from "../src/types/catalogView";
+import { createReferenceMemo } from "./helpers/referenceMemo";
 
 type MobileSearchControllerConstructor = typeof import("../src/ui/MobileSearchController").MobileSearchController;
 type MobileSearchControllerInstance = InstanceType<MobileSearchControllerConstructor>;
@@ -231,6 +232,42 @@ test("移动搜索快速结果不闪加载提示，取消后旧延迟回调不�
 	h.controller.removePage();
 });
 
+test("移动拾星搜索等待本次结果，按当前可见卡片显示来源异常", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { t } = await import("../src/i18n");
+	let visible = true, reveal: (() => void) | undefined;
+	let release!: (page: MobileSearchPage) => void;
+	const pending = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	const view = Object.assign(Object.create(KnomoView.prototype), {
+		viewStateController: { activeNav: "favorites" },
+		favoriteService: { status: "ready", cardState: () => ({ favoriteId: visible ? "star" : undefined }) },
+		mobileFavoriteProgress: { persisted: 0, located: 0, matched: 0, waiting: 0, missing: 0 },
+	});
+	const { getScopedContext, getResultStatus, filterMemos, onResultsAccepted } = Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
+	const h = createControllerHarness(MobileSearchController, [], undefined, () => pending, {
+		getScopedContext, getResultStatus, filterMemos, onResultsAccepted,
+		getWindow: () => ({ setTimeout: (callback: () => void) => { reveal = callback; return 1; }, clearTimeout: () => { reveal = undefined; } } as unknown as Window),
+	});
+	const feedback = () => h.root.find(".knomo-search-result-feedback")?.getText();
+	try {
+		h.controller.openPage({ focusInput: false });
+		assert.equal(feedback(), undefined);
+		reveal?.();
+		assert.equal(feedback(), t("favorite.loading.title"));
+		release({ ...makeRemotePage([createReferenceMemo()]), favoriteProgress: { persisted: 2, located: 1, matched: 1, waiting: 1, missing: 0 } });
+		await settle();
+		assert.ok(h.root.find(".knomo-card"));
+		assert.equal(feedback(), t("favorite.partial.title"));
+
+		visible = false;
+		h.controller.renderResults();
+		assert.equal(h.root.find(".knomo-card"), null);
+		assert.equal(feedback(), `${t("favorite.missing.title")} ${t("favorite.missing.description")}`);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动搜索延迟出现无阶段文案的骨架；部分空结果不能冒充无匹配", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
@@ -345,8 +382,8 @@ test("Things 移动搜索显示组合摘要，关闭保留搜索与日期，标�
 	let tag = "project";
 	let saved: unknown;
 	const { controller, root } = createControllerHarness(MobileSearchController, [makeMemo("one", "release")], () => 1, undefined, {
-		getThingsContext: () => ({ activeNav: "things", activeTag: tag, activeTagKey: tag }),
-		syncThingsSearch: (query, date) => { saved = [query, date]; },
+		getScopedContext: () => ({ activeNav: "things", activeTag: tag, activeTagKey: tag }),
+		syncScopedSearch: (query, date) => { saved = [query, date]; },
 	});
 	controller.searchQuery = "release";
 	controller.searchDateFilter = "week";
@@ -1742,8 +1779,8 @@ test("B：移动快捷日期只替换手写日期，清空输入删除手写日�
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
 	let saved: unknown;
 	const { controller } = createControllerHarness(MobileSearchController, [], undefined, undefined, {
-		getThingsContext: () => ({ activeNav: "things", activeTag: "work", activeTagKey: "work" }),
-		syncThingsSearch: (query, date) => { saved = [query, date]; },
+		getScopedContext: () => ({ activeNav: "things", activeTag: "work", activeTagKey: "work" }),
+		syncScopedSearch: (query, date) => { saved = [query, date]; },
 	});
 	controller.openPage({ focusInput: false }); await settle();
 	const input = controller.input as unknown as TestElement;
@@ -1772,8 +1809,8 @@ test("移动端回退文字保留快捷区域，可切换日期并在 Things 范
 	let saved: unknown;
 	const { controller, root, dispatch } = createControllerHarness(MobileSearchController, [], undefined,
 		async filter => { filters.push(filter); }, {
-			getThingsContext: () => ({ activeNav: "things", activeTag: "work", activeTagKey: "work" }),
-			syncThingsSearch: (query, date) => { saved = [query, date]; },
+			getScopedContext: () => ({ activeNav: "things", activeTag: "work", activeTagKey: "work" }),
+			syncScopedSearch: (query, date) => { saved = [query, date]; },
 		});
 	controller.openPage({ focusInput: false }); await settle();
 	const input = controller.input as unknown as TestElement;

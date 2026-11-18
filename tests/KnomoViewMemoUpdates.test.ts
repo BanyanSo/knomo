@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 import type { TFile } from "obsidian";
+import type { ObservationHandle } from "../src/types/catalog";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoSaveResult } from "../src/types/catalogView";
 import type { MarkdownCatalogCommitInput } from "../src/services/MarkdownMutationService";
@@ -1987,6 +1988,69 @@ test("真实 Daily 编辑后的移动分页失效不会被等价输入及取消�
 	} finally {
 		pendingPage.resolve(firstPage); search.isOpen = false; timers.clear(); h.read.query = query;
 	}
+});
+
+test("拾星重读期间保留已展开窗口，取消当前卡片后接续相邻记录的阅读位置", async () => {
+	const h = await fixture({ immediate: true });
+	const dom = attachCardFlow(h.view);
+	try {
+		const view = h.view as TestView & {
+			favoriteWindow: { key: string; version: number; memos: MemoViewItem[]; cursor: null; progress: object };
+			loadFavorites(): Promise<boolean>;
+			renderEmptyCardFlow(presentation: { type: "empty"; title: string; description: string }): void;
+		};
+		const previous = [...h.memos];
+		const key = "[]";
+		const progress = { persisted: 3, located: 3, matched: 3, missing: 0, waiting: 0 };
+		let partial = false;
+		const service: { status: "ready" | "loading"; revision: number; cardState: (handle: ObservationHandle) => { favoriteId?: string } } = {
+			status: "loading", revision: 2,
+			cardState: handle => service.status === "ready" && (!partial || handle.startLine === previous[0]!.catalog!.observationHandle.startLine)
+				? { favoriteId: "star" } : {},
+		};
+		const renderCard = Reflect.get(view, "renderCardForMode");
+		const setGeometry = (card: HTMLElement) => {
+			card.getBoundingClientRect = () => new dom.window.DOMRect(0,
+				Array.from(dom.root.querySelectorAll(".knomo-card")).indexOf(card) * 100 - dom.root.scrollTop, 200, 100);
+		};
+		Object.assign(view, {
+			favoriteService: service, isPresentationHidden: () => false, clearLoadingIndicators: () => {},
+			revealLoadingAfterDelay: () => false,
+			mobileSearchController: { isOpen: false },
+			getCatalogQueryFingerprint: () => key, buildCatalogActiveQuery: () => ({}),
+			getInitialCardBatchSize: () => 1,
+			renderCardForMode: (...args: unknown[]) => {
+				const card: HTMLElement = renderCard(...args);
+				setGeometry(card);
+				return card;
+			},
+		});
+		Reflect.get(view, "cardFlowCoordinator").setPendingScrollRestore = () => {};
+		view.viewStateController.activeNav = "favorites";
+		view.favoriteWindow = { key, version: 1, memos: previous, cursor: null, progress };
+		dom.root.querySelectorAll<HTMLElement>(".knomo-card").forEach(setGeometry);
+		dom.root.scrollTop = 150;
+		const loading = view.getCurrentCardFlowPresentation();
+		if (loading.type !== "empty") assert.fail("未确认的收藏需要暂停展示");
+		view.renderEmptyCardFlow(loading);
+		dom.root.scrollTop = 0;
+		await view.loadFavorites();
+		assert.equal(view.favoriteWindow.memos.length, 3);
+
+		service.revision++;
+		service.status = "ready";
+		// 新收藏版本已读回，其他来源的旧卡片可以先显示，但完整的新查询还在等待。
+		partial = true;
+		dom.render();
+		assert.equal(dom.root.querySelectorAll(".knomo-card").length, 1);
+		dom.root.scrollTop = 0;
+
+		partial = false;
+		view.favoriteWindow = { key, version: service.revision, memos: [previous[0]!, previous[2]!], cursor: null, progress };
+		dom.render();
+		assert.equal(dom.root.querySelectorAll(".knomo-card").length, 2);
+		assert.equal(dom.root.scrollTop, 50);
+	} finally { dom.dispose(); }
 });
 
 async function fixture(options: { body?: string; otherBody?: string; immediate?: boolean; catalogGate?: Promise<void>;

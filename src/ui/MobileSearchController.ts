@@ -31,7 +31,7 @@ import { catalogCoverageKey } from "./KnomoViewStateKeys";
 import { renderResultCountSummary, syncResultCountSummary, type ResultCountSummary } from "./ResultCountSummary";
 
 type MobileSearchSurface = "mobile-search";
-type ThingsSearchContext = { activeNav: "things"; activeTag: string | null; activeTagKey: string | null };
+type ScopedSearchContext = { activeNav: "things" | "favorites"; activeTag: string | null; activeTagKey: string | null };
 
 export type MobileSearchPage = Omit<CatalogMemoPage, "items"> & {
 	items: MemoRecord[];
@@ -46,10 +46,12 @@ interface MobileSearchControllerOptions {
 	scheduleRenderTask?: (callback: () => void) => number;
 	cancelRenderTask?: (id: number) => void;
 	prioritizeMarkdown?: (root: HTMLElement, scrollTop: number) => void;
-	getResultStatus?: (filter: CatalogQueryFilter) => { headers: CardFlowHeader[]; complete: boolean; blocked: boolean };
-	getThingsContext?: () => ThingsSearchContext | undefined;
+	getResultStatus?: (filter: CatalogQueryFilter, result: { hasMemos: boolean; accepted: boolean }) => {
+		headers: CardFlowHeader[]; complete: boolean; blocked: boolean; loadingTitle?: string;
+	};
+	getScopedContext?: () => ScopedSearchContext | undefined;
 	getSourceScope?: () => ScopeFilter;
-	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
+	syncScopedSearch?: (query: string, date: SearchDateFilter | null) => void;
 	getCatalogRevision?: () => number;
 	getRelationRevision?: () => number;
 	getCoverageKey?: () => string;
@@ -57,7 +59,7 @@ interface MobileSearchControllerOptions {
 	projectResults?: (memos: readonly MemoRecord[], filter: CatalogQueryFilter) => MemoRecord[];
 	hasPendingMembershipChanges?: () => boolean;
 	prepareResultsAcceptance?: () => (consume?: boolean) => void;
-	onResultsAccepted?: (page: Omit<MobileSearchPage, "items" | "nextCursor">) => void;
+	onResultsAccepted?: (page: Omit<MobileSearchPage, "items">) => void;
 	batchSize: number;
 	debounceMs: number;
 	getWindow: () => Window;
@@ -99,7 +101,7 @@ export class MobileSearchController {
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
 	readonly session = new SearchSession();
-	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
+	private displayedContext: { view: ScopedSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
 	private displayedMemos: MemoRecord[] | null = null;
 	private revokedResults: { key: string; memos: Map<string, MemoRecord> } | null = null;
 	private displayedCount: number | null = null;
@@ -323,13 +325,13 @@ export class MobileSearchController {
 		const scrollTop = this.options.getCardFlowScrollTop();
 		this.open = false;
 		this.options.closeCardMenu();
-		if (this.options.getThingsContext?.()) {
+		if (this.options.getScopedContext?.()) {
 			this.cancelPendingRequest();
 			this.cancelRender();
 			this.clearDebounce();
 			this.session.close();
 			if (!composing) this.flushQuery();
-			this.options.syncThingsSearch?.(this.query, this.dateFilter);
+			this.options.syncScopedSearch?.(this.query, this.dateFilter);
 		} else {
 			this.resetState(true);
 		}
@@ -432,7 +434,7 @@ export class MobileSearchController {
 		this.clearDebounce();
 		if (!this.open || !this.session.submit()) { this.syncControls(); return; }
 		this.syncInput();
-		if (this.options.getThingsContext?.()) this.options.syncThingsSearch?.(this.query, this.dateFilter);
+		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
 		this.visibleCount = this.options.batchSize;
 		void this.refreshRemoteResults(true, "view-scope-change", true);
 	}
@@ -448,7 +450,7 @@ export class MobileSearchController {
 	}
 
 	getAppliedFilter(): CatalogQueryFilter {
-		const context = this.options.getThingsContext?.();
+		const context = this.options.getScopedContext?.();
 		const source = buildSearchSourceScope({
 			activeNav: context?.activeNav ?? "all", scopeFilter: this.options.getSourceScope?.() ?? "all",
 			activeTag: context?.activeTag ?? null, activeTagKey: context?.activeTagKey ?? null,
@@ -472,7 +474,7 @@ export class MobileSearchController {
 		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
 		if (!this.session.toggleShortcut(filter)) { this.syncControls(); return; }
 		this.recordStatsFilter = null;
-		if (this.options.getThingsContext?.()) this.options.syncThingsSearch?.(this.query, this.dateFilter);
+		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
 		this.invalidateDraft();
 		this.syncInput();
 		this.visibleCount = this.options.batchSize;
@@ -546,7 +548,7 @@ export class MobileSearchController {
 			this.renderResults(changeIntent);
 			return;
 		}
-		const context = { things: this.options.getThingsContext?.(), scope: this.options.getSourceScope?.() ?? "all", stats: this.recordStatsFilter,
+		const context = { view: this.options.getScopedContext?.(), scope: this.options.getSourceScope?.() ?? "all", stats: this.recordStatsFilter,
 			queryContextKey: this.options.getQueryContextKey?.() ?? "" };
 		const filter = this.getAppliedFilter();
 		const key = this.getRequestKey(filter);
@@ -603,7 +605,7 @@ export class MobileSearchController {
 				if (filter.hasReferrers) throw new CatalogDiscoveryInvalidatedError();
 				throw new Error(t("search.statusChanged"));
 			}
-			if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+			if (!page.favoriteProgress && page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 			const staged = new Map(page.items.map(memo => [getMemoRenderKey(memo), memo]));
 			const pageRevision = page.catalogRevision;
 			const relationsVersion = page.nextCursor?.relationsVersion ?? this.options.getRelationRevision?.();
@@ -626,7 +628,7 @@ export class MobileSearchController {
 					if (filter.hasReferrers) throw new CatalogDiscoveryInvalidatedError();
 					throw new Error(t("search.statusChanged"));
 				}
-				if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+				if (!page.favoriteProgress && page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 				for (const memo of page.items) staged.set(getMemoRenderKey(memo), memo);
 			}
 			if (filter.hasReferrers && page.status.relations?.complete === false && this.displayedMemos?.length
@@ -649,7 +651,11 @@ export class MobileSearchController {
 			this.displayedMemos = projected;
 			this.revokedResults = null;
 			this.cursor = page.nextCursor;
-			if (reset) {
+			if (page.favoriteProgress) {
+				this.acceptedResultsInvalidated = false;
+				this.displayedCount = page.nextCursor === null && page.favoriteProgress.waiting === 0 && page.favoriteProgress.missing === 0
+					? page.favoriteProgress.matched : null;
+			} else if (reset) {
 				this.acceptedResultsInvalidated = false;
 				this.displayedCount = !this.options.hasPendingMembershipChanges?.()
 					&& page.status.relations?.complete !== false
@@ -658,7 +664,7 @@ export class MobileSearchController {
 			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
 			this.rememberAcceptedWindow();
 			this.options.onResultsAccepted?.(page);
-			if (reset && this.displayedCount === null && !this.options.hasPendingMembershipChanges?.()
+			if (reset && !page.favoriteProgress && this.displayedCount === null && !this.options.hasPendingMembershipChanges?.()
 				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
@@ -746,8 +752,13 @@ export class MobileSearchController {
 		return this.open && this.revokedResults?.key === this.getViewStateKey() ? [...this.revokedResults.memos.values()] : [];
 	}
 	getDisplayedCount(): number | null {
-		return this.getDisplayedFilter().hasReferrers && (this.acceptedResultsInvalidated || this.options.getResultStatus?.(this.getDisplayedFilter()).complete === false)
+		return this.getDisplayedFilter().hasReferrers && (this.acceptedResultsInvalidated || this.getResultStatus(this.getMatchedMemos().length > 0)?.complete === false)
 			? null : this.displayedCount;
+	}
+	private getResultStatus(hasMemos: boolean) {
+		return this.options.getResultStatus?.(this.getDisplayedFilter(), {
+			hasMemos, accepted: this.session.result !== null && !this.acceptedResultsInvalidated,
+		});
 	}
 
 	private getRequestKey(filter: CatalogQueryFilter): string {
@@ -971,17 +982,20 @@ export class MobileSearchController {
 		const memos = this.getMatchedMemos();
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		const revisions = visibleMemos.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
-		const readStatus = this.options.getResultStatus?.(this.getDisplayedFilter());
-		const waiting = this.hasSearchConditions() && this.session.requestStatus === "pending" && !readStatus?.blocked
+		const readStatus = this.getResultStatus(visibleMemos.length > 0);
+		const loadingTitle = this.queryError === null ? readStatus?.loadingTitle : undefined;
+		const noResult = this.session.result === null || (loadingTitle !== undefined && memos.length === 0);
+		const waiting = this.hasSearchConditions() && (this.session.requestStatus === "pending" || (loadingTitle !== undefined && noResult)) && !readStatus?.blocked
 			&& this.options.isVisible?.() !== false && this.options.getDocument().visibilityState !== "hidden";
-		const visible = waiting && this.session.result === null ? this.loadingIndicator.pending(viewKey, () => {
+		const visible = waiting && noResult ? this.loadingIndicator.pending(viewKey, () => {
 			if (this.open && this.options.isVisible?.() !== false && this.options.getDocument().visibilityState !== "hidden") this.renderResults("content-change", true, true);
 			else this.loadingIndicator.clear();
 		}) : false;
-		if (!waiting || this.session.result !== null) this.loadingIndicator.clear();
+		if (!waiting || !noResult) this.loadingIndicator.clear();
 		const headers: CardFlowHeader[] = this.queryError !== null ? [] : [...(readStatus?.headers ?? [])];
 		const relationQuery = !!this.getDisplayedFilter().hasReferrers;
-		if (!relationQuery && this.session.result !== null && readStatus?.complete === false && headers.length === 0) {
+		if (loadingTitle !== undefined && visible) headers.push({ type: "summary", text: loadingTitle, feedback: true });
+		if (loadingTitle === undefined && !relationQuery && this.session.result !== null && readStatus?.complete === false && headers.length === 0) {
 			headers.push({ type: "summary", text: t("catalog.incompleteResults") });
 		}
 		const status = this.queryError !== null ? (memos.length > 0 ? t("feedback.refreshFailed") : this.queryError)
@@ -1110,8 +1124,8 @@ export class MobileSearchController {
 			return;
 		}
 		this.syncResultFeedback(resultsEl, status, headers, relationQuery, statusChanged);
-		if (this.session.result === null && this.queryError === null) {
-			if (waiting) renderKnomoLoadingPlaceholder(resultsEl, visible, !relationQuery);
+		if (noResult && this.queryError === null) {
+			if (waiting && loadingTitle === undefined) renderKnomoLoadingPlaceholder(resultsEl, visible, !relationQuery);
 			completeRender();
 			return;
 		}
@@ -1230,7 +1244,7 @@ export class MobileSearchController {
 		if (!results) return;
 		const total = matchedCount === 0 && this.acceptedResultsInvalidated ? null : this.getDisplayedCount();
 		const key = this.getDisplayedRequestKey();
-		const blocked = this.queryError !== null || this.options.getResultStatus?.(this.getDisplayedFilter()).blocked === true;
+		const blocked = this.queryError !== null || this.getResultStatus(visibleCount > 0)?.blocked === true;
 		const pending = !blocked && ((this.countController !== null && key === this.getRequestKey(this.getAppliedFilter()))
 			|| (this.queryController !== null && this.pendingQueryKey === key));
 		if (blocked || (total === 0 && !this.acceptedResultsInvalidated)) this.summaryPresentation = null;
@@ -1275,8 +1289,9 @@ export class MobileSearchController {
 	}
 
 	getStateKey(): string {
-		return JSON.stringify([this.open, this.getViewStateKey(), this.getVisibleMemos().map(getMemoRenderRevision),
-			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.acceptedResultsInvalidated, this.options.getResultStatus?.(this.getDisplayedFilter())]);
+		const visibleMemos = this.getVisibleMemos();
+		return JSON.stringify([this.open, this.getViewStateKey(), visibleMemos.map(getMemoRenderRevision),
+			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.acceptedResultsInvalidated, this.getResultStatus(visibleMemos.length > 0)]);
 	}
 
 	getViewStateKey(): string { return this.getRequestKey(this.getAppliedFilter()); }
@@ -1296,14 +1311,14 @@ export class MobileSearchController {
 	}
 
 	private hasSearchConditions(): boolean {
-		return !!this.options.getThingsContext?.() || (this.options.getSourceScope?.() ?? "all") !== "all"
+		return !!this.options.getScopedContext?.() || (this.options.getSourceScope?.() ?? "all") !== "all"
 			|| this.session.hasConditions || this.recordStatsFilter !== null;
 	}
 
 	private getResultCopy(count: number | null, pending = false) {
 		const query = (this.session.result?.input ?? this.query).trim();
 		const date = this.session.result ? this.session.result.shortcut : this.dateFilter;
-		const context = this.displayedContext ? this.displayedContext.things : this.options.getThingsContext?.();
+		const context = this.displayedContext ? this.displayedContext.view : this.options.getScopedContext?.();
 		const scope = this.displayedContext ? this.displayedContext.scope : this.options.getSourceScope?.() ?? "all";
 		const stats = this.displayedContext ? this.displayedContext.stats : this.recordStatsFilter;
 		return context || scope !== "all" ? getRegularFilterCopy({

@@ -33,6 +33,14 @@ export const KNOMO_ERROR_DEFINITIONS = {
 		messageKey: "service.autoExcludeUnsupported",
 		fallbackMessage: "This Obsidian environment does not support automatic exclude rule updates.",
 	},
+	monthly_folder_invalid_path: {
+		messageKey: "settings.monthlyFolder.invalidPath",
+		fallbackMessage: "Invalid Vault path.",
+	},
+	monthly_folder_protected_path: {
+		messageKey: "settings.monthlyFolder.protectedPath",
+		fallbackMessage: "Monthly folder overlaps plugin configuration.",
+	},
 } as const satisfies Record<string, KnomoErrorDefinition>;
 
 export type KnomoErrorCode = keyof typeof KNOMO_ERROR_DEFINITIONS;

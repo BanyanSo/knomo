@@ -10,6 +10,7 @@ import type {
 	ObservationHandle,
 	MemoObservation,
 } from "../types/catalog";
+import { catalogObservationKey } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
 	CatalogFeatureFilter,
@@ -484,7 +485,7 @@ export class CatalogReadService {
 	private async readMemoHandles(handles: readonly ObservationHandle[], signal?: AbortSignal): Promise<Array<CatalogMemoItem | null>> {
 		signal?.throwIfAborted();
 		if (handles.length === 0) return [];
-		const snapshot = await this.readObservationSnapshots(handles.map(handle => handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0")), signal);
+		const snapshot = await this.readObservationSnapshots(handles.map(catalogObservationKey), signal);
 		const capabilities = createCatalogCapabilities(snapshot.coverage);
 		return handles.map((handle, index) => {
 			const observation = snapshot.observations[index];
@@ -914,7 +915,7 @@ function applyReferrerFilter<T extends CatalogFeatureFilter>(request: T, snapsho
 		const node = snapshot.nodes.get(key);
 		if (!node || !referrers.length || (request.fromDate !== undefined && node.logicalDate < request.fromDate)
 			|| (request.toDate !== undefined && node.logicalDate > request.toDate)) continue;
-		const observationKey = node.handle.sourcePath + "\0" + String(node.handle.startLine).padStart(10, "0");
+		const observationKey = catalogObservationKey(node.handle);
 		if (selected === null || selected.has(observationKey)) observationKeys.push(observationKey);
 	}
 	return { ...request, hasReferrers: undefined, observationKeys };

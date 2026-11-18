@@ -37,6 +37,8 @@ export interface TrashCardActionMeta {
 
 const MEMO_CARD_ACTIONS: readonly MemoAction[] = ["reference", "edit", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"];
 export const MEMO_ACTION_ICONS: Readonly<Record<MemoAction, string>> = {
+	"star": "star",
+	"unstar": "star-off",
 	"set-beacon": KNOMO_BEACON_ICON,
 	"remove-beacon": KNOMO_BEACON_ICON,
 	"share-image": "share",
@@ -54,7 +56,7 @@ export const MEMO_WORD_COUNT_ICON = "text";
 
 export function getMemoCardActionSection(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-danger"
-		: ["share-image", "edit", "reference", "copy-text", "set-beacon", "remove-beacon"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
+		: ["share-image", "edit", "reference", "copy-text", "set-beacon", "remove-beacon", "star", "unstar"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
 }
 
 const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
@@ -93,7 +95,7 @@ export function getMemoActionClass(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-action is-danger" : "knomo-card-action";
 }
 
-export function getMemoCardActions(memo?: MemoRecord, randomCard = false, hasReferrers = false, beacon = false): MemoCardActionMeta[] {
+export function getMemoCardActions(memo?: MemoRecord, randomCard = false, hasReferrers = false, beacon = false, favorite?: { favoriteId?: string }): MemoCardActionMeta[] {
 	const available: readonly MemoAction[] = randomCard && memo?.catalog
 		? [...MEMO_CARD_ACTIONS.slice(0, 4), "view-day", ...MEMO_CARD_ACTIONS.slice(4)] : MEMO_CARD_ACTIONS;
 	const actions = available.filter((action) => (action !== "relations" || hasReferrers) && isMemoActionAvailable(memo, action)).map((action) => ({
@@ -103,6 +105,10 @@ export function getMemoCardActions(memo?: MemoRecord, randomCard = false, hasRef
 	if (memo?.status === "active" && memo.catalog?.observationHandle && memo.catalog.capabilities.markdown.view) {
 		const action = beacon ? "remove-beacon" : "set-beacon";
 		actions.splice(Math.min(4, actions.length), 0, { action, className: getMemoActionClass(action) });
+		if (favorite) {
+			const action = favorite.favoriteId ? "unstar" : "star";
+			actions.splice(Math.min(5, actions.length), 0, { action, className: getMemoActionClass(action) });
+		}
 	}
 	return actions;
 }

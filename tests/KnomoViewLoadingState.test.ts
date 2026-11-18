@@ -96,6 +96,43 @@ test("两端真实空库在首次结果确认后显示空态，不停留在加�
 	}
 });
 
+test("拾星集延迟显示加载提示，来源异常按实际卡片区分空态和列表提示", async () => {
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile);
+		try {
+			const favoriteService = { status: "loading", revision: 1, cardState: () => ({ favoriteId: "star" }) };
+			Object.assign(h.view, { favoriteService, getCatalogQueryFingerprint: () => "favorites-query" });
+			h.view.viewStateController.activeNav = "favorites";
+			h.view.renderCardFlow();
+			assert.equal(h.title(), null);
+			h.revealLoading();
+			assert.equal(h.title(), t("favorite.loading.title"));
+			const announcement = h.root.querySelector(".knomo-empty-state[aria-live='polite']");
+			h.view.renderCardFlow();
+			assert.ok(announcement);
+			assert.equal(h.root.querySelector(".knomo-empty-state[aria-live='polite']"), announcement);
+
+			favoriteService.status = "ready";
+			const progress = { persisted: 2, located: 1, matched: 0, waiting: 0, missing: 1 };
+			const window = h.view.favoriteWindow = { key: "favorites-query", version: 1, memos: [] as MemoViewItem[], cursor: null, progress };
+			h.view.renderCardFlow();
+			assert.equal(h.title(), t("favorite.missing.title"));
+			assert.equal(h.root.querySelector(".knomo-empty-description")?.textContent, t("favorite.missing.description"));
+
+			window.memos = [createReferenceMemo()];
+			window.progress = { ...progress, matched: 1, missing: 0, waiting: 1 };
+			h.view.renderCardFlow();
+			assert.equal(h.cards().length, 1);
+			assert.equal(h.root.querySelector(".knomo-list-summary")?.textContent, t("favorite.partial.title"));
+
+			window.memos = [];
+			window.progress = { ...progress, matched: 0, missing: 0 };
+			h.view.renderCardFlow();
+			assert.equal(h.title(), t("favorite.noMatch.title"));
+		} finally { h.close(); }
+	}
+});
+
 test("两端首次读取失败显示错误，重绘不遮盖错误，重试成功后显示内容", async () => {
 	for (const mobile of [false, true]) {
 		const h = await createLoadingHarness(mobile);

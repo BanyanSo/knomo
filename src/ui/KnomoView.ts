@@ -1,9 +1,14 @@
+import { FavoriteSelectionChangedError, type FavoriteCardState, type FavoriteService } from "../services/FavoriteService";
+import { queryFavorites } from "../services/FavoriteQuery";
+import type { FavoriteQueryProgress } from "../types/favorite";
+import { DailyAnchorChangedError, DailyAnchorNotSavedError, DailyAnchorSourceUnlocatedError } from "../services/DailyMemoAnchor";
+import { getFavoriteFeedback } from "./FavoritePresentation";
 import { MobileViewFocusRecovery } from "./MobileViewFocusRecovery";
 import { BeaconNotSavedError } from "../services/BeaconService";
 import type { BeaconService } from "../services/BeaconService";
 import { sameBeaconHandle, type BeaconSnapshot } from "../types/beacon";
 import { buildBeaconPresentation } from "./BeaconPresentation";
-import { syncMemoCardBeaconAction, syncMemoCardTimeBuoy } from "./KnomoCard";
+import { syncMemoCardBeaconAction, syncMemoCardFavorite, syncMemoCardTimeBuoy } from "./KnomoCard";
 import { KnomoMobileMenu } from "./KnomoMobileMenu";
 import { registerMobileFirstTapRecovery, registerMobileMenuTriggerTap } from "./MobileMenuTap";
 import { canFocusSurface, isKeyboardActivation, releaseNavigationFocus } from "./NavigationFocus";
@@ -439,6 +444,14 @@ export class KnomoView extends ItemView {
 	private catalogRevision = 0;
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private hasCommittedCatalogDesktopQuery = false;
+	private favoriteWindow?: { key: string; version: number; memos: MemoRecord[]; cursor: CatalogFeatureCursor | null; progress: FavoriteQueryProgress };
+	private favoriteReading?: { key: string; position: MemoReadingPosition; visibleCount: number };
+	private favoriteRequest?: AbortController;
+	private desktopFavoriteSelection?: { card: HTMLElement; memo: MemoRecord; state: FavoriteCardState };
+	private favoriteRefreshQueued = false;
+	private favoriteQueryError = false;
+	private mobileFavoriteProgress?: FavoriteQueryProgress;
+	private mobileFavoriteHasMore = false;
 	private initialCatalogQueryPending = false;
 	private libraryIndexRevision = -1;
 	private libraryIndexCoverageKey: string | null = null;
@@ -635,7 +648,10 @@ export class KnomoView extends ItemView {
 	private set activeNav(nav: SidebarNav) {
 		if (this.relationsPage?.isOpen) this.relationsPage.close(false);
 		if (nav !== "record-stats" && this.activeNav === "record-stats") this.stopRecordStatsPreparation();
-		if (nav !== this.viewStateController.activeNav) this.cancelCatalogDesktopQuery();
+		if (nav !== this.viewStateController.activeNav) {
+			this.cancelCatalogDesktopQuery();
+			this.cancelFavoriteRequest();
+		}
 		this.viewStateController.activeNav = nav;
 		if (nav !== "random") this.randomReunionController?.cancelPending();
 		if (nav !== "random") this.clearRandomDay();
@@ -671,7 +687,10 @@ export class KnomoView extends ItemView {
 	}
 
 	private set activeMenuMemoId(memoId: string | null) {
-		if (this.popupState.activeMenuMemoId !== memoId) this.mobileMenuController?.close("card");
+		if (this.popupState.activeMenuMemoId !== memoId) {
+			this.mobileMenuController?.close("card");
+			this.desktopFavoriteSelection = undefined;
+		}
 		this.popupState.activeMenuMemoId = memoId;
 	}
 
@@ -731,6 +750,7 @@ export class KnomoView extends ItemView {
 		private readonly onRebuildBasicData: (() => Promise<void>) | null = null,
 		private readonly onQuickCommandInteraction: (() => void) | null = null,
 		private readonly beaconService: BeaconService | null = null,
+		private readonly favoriteService: FavoriteService | null = null,
 	) {
 		super(leaf);
 		this.getDailyNotesStatus = getDailyNotesStatus;
@@ -967,21 +987,37 @@ export class KnomoView extends ItemView {
 
 	private createMobileSearchController(): MobileSearchController {
 		return new MobileSearchController({
-			getThingsContext: () => this.activeNav === "things"
-				? { activeNav: "things", activeTag: this.activeTag, activeTagKey: this.activeTagKey } : undefined,
-			syncThingsSearch: (query, date) => {
+			getScopedContext: () => {
+				const activeNav = this.activeNav;
+				return activeNav === "things" || activeNav === "favorites"
+					? { activeNav, activeTag: this.activeTag, activeTagKey: this.activeTagKey } : undefined;
+			},
+			syncScopedSearch: (query, date) => {
 				this.searchQuery = query;
 				this.searchDateFilter = date;
 			},
 			getCatalogRevision: () => this.catalogRevision,
 			getRelationRevision: () => this.catalogReadService?.relations.revision ?? 0,
 			getCoverageKey: () => catalogCoverageKey(this.catalogCoverage),
-			getResultStatus: filter => ({
+			getResultStatus: (filter, result) => {
+				if (this.activeNav === "favorites" && this.favoriteService) {
+					const status = this.favoriteService.status;
+					const feedback = getFavoriteFeedback(status, result.accepted ? this.mobileFavoriteProgress : undefined,
+						result.hasMemos, this.mobileFavoriteHasMore);
+					return {
+						headers: feedback && !feedback.loading ? [{ type: "summary", text: `${feedback.title} ${feedback.description}`.trim(), feedback: true }] : [],
+						loadingTitle: feedback?.loading ? feedback.title : undefined,
+						complete: !feedback,
+						blocked: status === "error" || status === "conflict",
+					};
+				}
+				return ({
 				headers: getCatalogReadStatusHeaders({ status: this.catalogStatus, coverage: this.catalogCoverage }),
 				complete: this.catalogCoverage !== null && isQueryCovered(this.catalogCoverage, filter)
 					&& this.catalogStatus.relations?.complete !== false,
 				blocked: hasCatalogReadBlocker(this.catalogStatus, this.catalogCoverage),
-			}),
+				});
+			},
 			batchSize: MOBILE_SEARCH_BATCH_SIZE,
 			debounceMs: SEARCH_DEBOUNCE_MS,
 			getWindow: () => this.containerEl.win,
@@ -991,10 +1027,15 @@ export class KnomoView extends ItemView {
 			isMobileLayout: () => this.currentLayout === "mobile",
 			getQueryContextKey: () => JSON.stringify([this.activeNav, this.activeTagKey, this.scopeFilter]),
 			getSourceScope: () => this.scopeFilter === "referenced" ? "referenced" : "all",
-			projectResults: (memos, filter) => this.confirmedDailyMemos?.merge(memos, filter) ?? mergeCatalogMemoPages(memos),
+			projectResults: (memos, filter) => this.activeNav === "favorites" ? [...memos] : this.confirmedDailyMemos?.merge(memos, filter) ?? mergeCatalogMemoPages(memos),
 			hasPendingMembershipChanges: () => this.confirmedDailyMemos?.affectsQueryMembership ?? false,
 			prepareResultsAcceptance: () => this.prepareCatalogResultAcceptance(),
 			onResultsAccepted: page => {
+				if (this.activeNav === "favorites") {
+					this.mobileFavoriteProgress = page.favoriteProgress;
+					this.mobileFavoriteHasMore = page.nextCursor !== null;
+					return;
+				}
 				this.catalogCoverage = page.coverage;
 				this.catalogReadState = page.readState;
 				this.catalogStatus = page.status;
@@ -1006,7 +1047,8 @@ export class KnomoView extends ItemView {
 				this.getRenderScope().registerDomEvent(target, type, listener);
 			},
 			createHiddenText: (container, name, text) => this.createHiddenText(container, name, text),
-			filterMemos: (memos, filter) => filterCatalogMemos(memos, filter),
+			filterMemos: (memos, filter) => filterCatalogMemos(this.activeNav === "favorites"
+				? memos.filter(memo => this.getMemoFavoriteState(memo)?.favoriteId) : memos, filter),
 			renderMemoCard: (container, memo, generation, index, reusedImagesEl, handoff) => {
 				return this.renderMemoCardInContainer(container, memo, generation, index, true, false, "mobile-search", null, reusedImagesEl, undefined, handoff);
 			},
@@ -1026,6 +1068,7 @@ export class KnomoView extends ItemView {
 			closeSurroundingChrome: () => {
 				// 移动搜索拥有自己的结果，打开时使底层旧列表请求失效。
 				this.cancelCatalogDesktopQuery();
+				this.cancelFavoriteRequest();
 				this.catalogDesktopQueryRun++;
 				this.cancelCatalogDesktopCount();
 				this.memoLoadingFingerprint = null;
@@ -1195,6 +1238,7 @@ export class KnomoView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		try {
+			if (this.favoriteService) this.getRenderScope().register(this.favoriteService.subscribe(refresh => this.handleFavoritesChanged(refresh)));
 			if (this.beaconService) {
 				this.register(this.beaconService.subscribe(() => this.handleBeaconChanged()));
 				void this.beaconService.retry();
@@ -1395,6 +1439,9 @@ export class KnomoView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.cancelFavoriteRequest();
+		this.favoriteReading = undefined;
+		this.desktopFavoriteSelection = undefined;
 		this.shareCardModal?.close(); this.shareCardModal = null;
 		if (this.rootEl) releaseNavigationFocus(this.rootEl);
 		if (this.relationQueryRefreshTimer !== null) this.containerEl.win.clearTimeout(this.relationQueryRefreshTimer);
@@ -2199,6 +2246,8 @@ export class KnomoView extends ItemView {
 		if (hidden === this.presentationHidden) return;
 		this.presentationHidden = hidden;
 		if (hidden) {
+			if (this.favoriteRequest) this.pendingViewRefresh ??= false;
+			this.cancelFavoriteRequest();
 			this.syncBeaconMotion(undefined);
 			this.presentationVisibilityRevision++;
 			this.resumePresentationAfterRefresh = false;
@@ -2329,6 +2378,7 @@ export class KnomoView extends ItemView {
 			await this.timeBuoyViewController.loadInitial();
 			return canContinue();
 		}
+		if (this.activeNav === "favorites") return this.loadFavorites();
 		if (this.activeNav === "trash") {
 			this.handleTrashRenderRequest("ui-state");
 			return true;
@@ -2461,6 +2511,7 @@ export class KnomoView extends ItemView {
 		if (this.trashViewClosed) return;
 		// 保存中的 DOM 重建延至提交归属已消费，避免留下可重复发送的副本。
 		if (this.isSaving) { this.composerRenderPending = true; return; }
+		this.favoriteReading = undefined;
 		this.clearLoadingIndicators();
 		this.cardImageCache.clear();
 		this.closeTimeBuoyPicker(false);
@@ -2958,7 +3009,7 @@ export class KnomoView extends ItemView {
 		this.syncSearchControls();
 		this.syncRootState();
 		const filter = this.buildCatalogActiveQuery(true);
-		const canReuseResult = session.requestStatus === "ready" && session.result?.key === getCatalogQueryKey(filter)
+		const canReuseResult = this.activeNav !== "favorites" && session.requestStatus === "ready" && session.result?.key === getCatalogQueryKey(filter)
 			&& session.result.catalogRevision === this.catalogRevision && session.result.coverageKey === catalogCoverageKey(this.catalogCoverage);
 		// 等价条件沿用已有数据；新查询先建立等待状态，再绘制对应摘要。
 		if (!canReuseResult) this.refreshCatalogActiveQuery();
@@ -2980,6 +3031,7 @@ export class KnomoView extends ItemView {
 
 	private async reloadMemos(loadAll: boolean, forceRebuild = false, preserveWindow = false): Promise<boolean> {
 		if (this.mobileSearchController?.isOpen) { await this.mobileSearchController.refreshAppliedResults(); return true; }
+		if (this.activeNav === "favorites") return this.loadFavorites();
 		const queryDate = new Date();
 		const acceptedKey = preserveWindow ? this.viewStateController.search.result?.key : undefined;
 		if (acceptedKey !== undefined && acceptedKey === this.getCatalogQueryFingerprint(true, queryDate)) loadAll = true;
@@ -3510,7 +3562,10 @@ export class KnomoView extends ItemView {
 
 	private async loadCatalogMobileSearchResults(query: CatalogFeatureFilter, cursor: CatalogFeatureCursor | null, signal: AbortSignal): Promise<MobileSearchPage> {
 		signal.throwIfAborted();
-		const page = await this.queryCatalogFeature({ ...query, limit: CATALOG_PAGE_SIZE, cursor }, signal);
+		const request = { ...query, limit: CATALOG_PAGE_SIZE, cursor };
+		const page = this.activeNav === "favorites" && this.favoriteService
+			? await queryFavorites(this.catalogReadService, this.favoriteService, request, signal)
+			: await this.queryCatalogFeature(request, signal);
 		signal.throwIfAborted();
 		return { ...page, items: page.items.map(toCatalogMemoView) };
 	}
@@ -4001,7 +4056,7 @@ export class KnomoView extends ItemView {
 		focusInput?: boolean;
 		changeIntent?: CardFlowChangeIntent;
 	} = {}): void {
-		if (this.activeNav === "things") {
+		if (this.activeNav === "things" || this.activeNav === "favorites") {
 			this.mobileSearchController.searchQuery = this.searchQuery;
 			this.mobileSearchController.searchDateFilter = this.searchDateFilter;
 			this.mobileSearchController.searchRecordStatsFilter = null;
@@ -4359,8 +4414,9 @@ export class KnomoView extends ItemView {
 	): void {
 		if (this.randomReunionContinuation) this.getRandomReunionContinuation();
 		if (this.preservingReadonlyMemoPresentation) return;
+		if (changeIntent === "view-scope-change") this.favoriteReading = undefined;
 		if (this.beaconMotion && !this.isDefaultListState()) this.syncBeaconMotion(undefined);
-		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
+		if (!["all", "things", "review", "favorites"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
 		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
 		const lifecycleKey = this.getCardFlowDecorationLifecycleKey();
 		const presentationChanged = this.recentLifecycleKey !== "" && this.recentLifecycleKey !== lifecycleKey;
@@ -4694,7 +4750,7 @@ export class KnomoView extends ItemView {
 	private forceRebuildCardFlow(changeIntent: CardFlowChangeIntent = "content-change"): void {
 		if (this.randomReunionContinuation) this.getRandomReunionContinuation();
 		if (this.preservingReadonlyMemoPresentation) return;
-		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
+		if (!["all", "things", "review", "favorites"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
 		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
 		if (this.deferMobileCardFlowRender(null, true, changeIntent)) {
 			return;
@@ -4778,7 +4834,137 @@ export class KnomoView extends ItemView {
 		});
 	}
 
+	private getMemoFavoriteState(memo: MemoRecord) {
+		return memo.status === "active" && memo.catalog ? this.favoriteService?.cardState(memo.catalog.observationHandle) : undefined;
+	}
+
+	private handleFavoritesChanged(refresh: boolean): void {
+		if (this.trashViewClosed) return;
+		const desktopSelection = this.desktopFavoriteSelection;
+		if (desktopSelection) {
+			const current = this.getMemoFavoriteState(desktopSelection.memo);
+			if (!desktopSelection.card.isConnected || current?.favoriteId !== desktopSelection.state.favoriteId
+				|| current?.disabled !== desktopSelection.state.disabled) this.closeCardMenu();
+		}
+		const openMenuMemo = this.mobileMenuController?.kind === "card" && this.activeMenuMemoId !== null
+			? this.findMemoById(this.activeMenuMemoId) : null;
+		if (openMenuMemo && this.getMemoFavoriteState(openMenuMemo)?.disabled) this.closeCardMenu();
+		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el]) {
+			for (const card of container?.findAll(".knomo-card") ?? []) {
+				const id = card.getAttr("data-memo-id");
+				const key = card.getAttr("data-memo-render-key");
+				const memo = id ? this.findMemoById(id, this.getMemoSurface(card)) : null;
+				const visible = memo ?? (key ? this.renderedCardMemos.get(key) : undefined);
+				if (visible?.catalog) this.favoriteService?.checkVisible(visible.dailyRef.path);
+				syncMemoCardFavorite(card, visible && this.getMemoFavoriteState(visible));
+			}
+		}
+		if (!refresh || this.activeNav !== "favorites" || this.favoriteRefreshQueued) return;
+		this.favoriteRefreshQueued = true;
+		queueMicrotask(() => {
+			this.favoriteRefreshQueued = false;
+			if (this.trashViewClosed || this.activeNav !== "favorites") return;
+			if (this.isPresentationHidden()) { this.pendingViewRefresh ??= false; return; }
+			if (this.mobileSearchPageOpen) {
+				this.mobileFavoriteProgress = undefined;
+				this.mobileSearchController.cancelPendingRequest();
+				this.mobileSearchController.renderResults();
+				void this.mobileSearchController.refreshAppliedResults();
+			} else {
+				this.renderCardFlow();
+				void this.loadFavorites();
+			}
+		});
+	}
+
+	private getCurrentFavoriteWindow() {
+		const current = this.favoriteWindow;
+		return current?.key === this.getCatalogQueryFingerprint(true) ? current : undefined;
+	}
+
+	private getVisibleFavorites(): MemoRecord[] {
+		return this.getCurrentFavoriteWindow()?.memos.filter(memo => this.getMemoFavoriteState(memo)?.favoriteId) ?? [];
+	}
+
+	private deferFavoriteReadingRestore(): boolean {
+		const service = this.favoriteService;
+		if (!service || this.activeNav !== "favorites") return false;
+		const window = this.getCurrentFavoriteWindow();
+		if (!window) return false;
+		const waiting = service.status === "loading"
+			|| (service.status === "ready" && !this.favoriteQueryError && window.version !== service.revision);
+		if (waiting && this.favoriteReading?.key !== window.key) {
+			const anchor = this.captureCardFlowReadingAnchor();
+			this.favoriteReading = anchor ? { key: window.key, position: anchor.position, visibleCount: this.getRenderedCardCount() } : undefined;
+		}
+		return waiting;
+	}
+
+	private cancelFavoriteRequest(): void {
+		this.favoriteRequest?.abort();
+		this.favoriteRequest = undefined;
+	}
+
+	private async loadFavorites(append = false, retries = 2): Promise<boolean> {
+		const service = this.favoriteService;
+		if (!service || this.activeNav !== "favorites" || this.trashViewClosed || this.isPresentationHidden() || this.mobileSearchPageOpen) return false;
+		if (service.status === "loading") {
+			this.cancelFavoriteRequest();
+			return true;
+		}
+		const filter = this.buildCatalogActiveQuery(true);
+		const key = getCatalogQueryKey(filter), version = service.revision;
+		const previous = this.getCurrentFavoriteWindow();
+		if (append && (!previous?.cursor || previous.version !== version || this.favoriteRequest)) return false;
+		this.cancelFavoriteRequest();
+		const request = this.favoriteRequest = new AbortController();
+		const current = () => !request.signal.aborted && !this.trashViewClosed && this.activeNav === "favorites"
+			&& !this.mobileSearchPageOpen && key === this.getCatalogQueryFingerprint(true) && version === service.revision;
+		this.favoriteQueryError = false;
+		try {
+			let cursor = append ? previous?.cursor : null;
+			const memos = append ? [...previous!.memos] : [];
+			const target = append ? memos.length + 1 : Math.max(1, previous?.memos.length ?? 0);
+			let page: CatalogMemoPage;
+			do {
+				page = await queryFavorites(this.catalogReadService, service, { ...filter, limit: CATALOG_PAGE_SIZE, cursor }, request.signal);
+				if (!current() || !page.favoriteProgress) return false;
+				if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
+				memos.push(...page.items.map(toCatalogMemoView));
+				cursor = page.nextCursor;
+			} while (cursor && memos.length < target);
+			this.favoriteWindow = { key, version, memos, cursor, progress: page.favoriteProgress };
+			return true;
+		} catch (error) {
+			if (current() && error instanceof CatalogDiscoveryInvalidatedError && retries > 0) return this.loadFavorites(false, retries - 1);
+			if (current() && !(error instanceof CatalogDiscoveryInvalidatedError) && !(error instanceof CatalogQueryCancelledError)) {
+				this.favoriteQueryError = true;
+				logContinuationFailure("view", "favorites-query", error);
+			}
+			return false;
+		} finally {
+			if (this.favoriteRequest === request) {
+				this.favoriteRequest = undefined;
+				if (current()) this.renderCardFlow();
+			}
+		}
+	}
+
+	private getFavoritePresentation(): CardFlowPresentation {
+		const window = this.getCurrentFavoriteWindow();
+		const memos = this.getVisibleFavorites();
+		const progress = window?.version === this.favoriteService?.revision ? window?.progress : undefined;
+		const status = this.favoriteService?.status ?? "loading";
+		const feedback = getFavoriteFeedback(status === "ready" && this.favoriteQueryError ? "error" : status,
+			progress, memos.length > 0, !!window?.cursor);
+		if (memos.length === 0 && feedback) return { type: "empty", ...feedback };
+		const headers: CardFlowHeader[] = feedback && !feedback.loading
+			? [{ type: "summary", text: `${feedback.title} ${feedback.description}`.trim(), feedback: true }] : [];
+		return { type: "items", mode: "memo", headers, memos };
+	}
+
 	private getCurrentCardFlowPresentation(): CardFlowPresentation {
+		if (this.activeNav === "favorites") return this.getFavoritePresentation();
 		// 焦点和可见性检查也会重绘；首批结果未确认时不能按空数组显示空库。
 		if (["all", "things", "review"].includes(this.activeNav)
 			&& !this.hasCommittedCatalogDesktopQuery && !this.hasVisibleConfirmedMemoPresentation() && this.cardFlowError === null) {
@@ -4976,11 +5162,15 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null) {
 			return;
 		}
+		if (!this.deferFavoriteReadingRestore()) this.favoriteReading = undefined;
 		let visible = false;
+		let showLoadingText = false;
 		if (presentation.loading) {
 			visible = this.revealLoadingAfterDelay("cards", `${this.memoSourceGeneration}:${this.getCardFlowViewStateKey()}`, () => this.renderCardFlow());
+			showLoadingText = visible && this.activeNav === "favorites";
 			const key = JSON.stringify([presentation, visible]);
-			if (this.pendingCardFlowKey === key && this.cardFlowEl.querySelector(".knomo-loading-placeholder")) return;
+			if (this.pendingCardFlowKey === key
+				&& this.cardFlowEl.querySelector(showLoadingText ? ".knomo-empty-state[aria-live]" : ".knomo-loading-placeholder")) return;
 			this.pendingCardFlowKey = key;
 		} else {
 			this.clearLoadingIndicators("cards");
@@ -4996,8 +5186,8 @@ export class KnomoView extends ItemView {
 			if (!headers.includes(child as HTMLElement)) child.remove();
 		}
 		this.renderedCardMemos.clear();
-		if (presentation.loading) renderKnomoLoadingPlaceholder(this.cardFlowEl, visible);
-		else renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description);
+		if (presentation.loading && !showLoadingText) renderKnomoLoadingPlaceholder(this.cardFlowEl, visible);
+		else renderKnomoEmptyState(this.cardFlowEl, presentation.title, presentation.description, showLoadingText);
 		this.renderHistoryLoadMore();
 	}
 
@@ -5023,8 +5213,14 @@ export class KnomoView extends ItemView {
 			const memo = this.renderedCardMemos.get(key);
 			return memo ? [{ memo, card }] : [];
 		});
+		// 重读后剩余的旧卡片可先显示。只有新查询接管列表后才使用暂存的锚点。
+		const deferFavoriteReading = this.deferFavoriteReadingRestore();
+		const savedReading = this.favoriteReading;
+		const favoriteReading = !deferFavoriteReading && !this.favoriteQueryError && savedReading && this.activeNav === "favorites"
+			&& savedReading.key === this.getCurrentFavoriteWindow()?.key ? savedReading : undefined;
+		if (!deferFavoriteReading) this.favoriteReading = undefined;
 		// 提升或移出的卡片改用相邻记录作阅读锚点，不能把当前位置跟随它跳到顶部。
-		const reading = new MemoReadingPosition(cardFlow, mounted.filter(({ memo, card }) =>
+		const reading = favoriteReading?.position ?? new MemoReadingPosition(cardFlow, mounted.filter(({ memo, card }) =>
 			card.hasAttribute("data-beacon-top") === this.isTopBeacon(memo))), focus = new MemoFocusRestore(cardFlow, mounted);
 		const pendingVisibleCount = this.cardFlowCoordinator.getPendingVisibleCount(this.renderGeneration);
 		const seedPlaceholder = createMemoRenderPlaceholders([...existingCards.entries()].flatMap(([key, card]) => {
@@ -5033,7 +5229,7 @@ export class KnomoView extends ItemView {
 		}));
 		const visibleCount = Math.min(
 			presentation.memos.length,
-			Math.max(this.getInitialCardBatchSize(), existingCards.size, pendingVisibleCount ?? 0),
+			Math.max(this.getInitialCardBatchSize(), existingCards.size, pendingVisibleCount ?? 0, favoriteReading?.visibleCount ?? 0),
 		);
 		const visibleMemos = presentation.memos.slice(0, visibleCount);
 		const desiredKeys = new Set(visibleMemos.map(getMemoRenderKey));
@@ -5400,12 +5596,14 @@ export class KnomoView extends ItemView {
 		if (surface === "card-flow" && this.beaconPlaceholder?.memo.id === memo.id) { container.appendChild(this.beaconPlaceholder.card); return this.beaconPlaceholder.card; }
 		const readonly = surface === "card-flow" && this.isRandomReunionMemoPending(memo);
 		const effectiveTimeBuoy = timeBuoy ?? this.getVisibleMemoTimeBuoy(memo);
+		if (memo.catalog) this.favoriteService?.checkVisible(memo.dailyRef.path);
 		const card = renderKnomoMemoCard(container, memo, {
 			generation,
 			renderIndex,
 			includeActions,
 			randomCard,
 			timeBuoy: effectiveTimeBuoy,
+			favorite: this.getMemoFavoriteState(memo),
 			beacon: this.isCurrentBeacon(memo) ? { selection: this.beaconService!.getSnapshot().selection, top: surface === "card-flow" && this.isTopBeacon(memo) } : undefined,
 			timePresentation: surface === "card-flow" && this.isDefaultListState() && !this.isTopBeacon(memo)
 				? getRecentMemoPresentation(memo, this.recentTimeFlowContext).time : { mode: "full" },
@@ -5542,6 +5740,7 @@ export class KnomoView extends ItemView {
 
 	private retainMemoCardPreviews(releasedRelations: ReadonlySet<string> = new Set()): void {
 		const memoIds = new Set([...this.memos, ...(this.mobileSearchController?.getDisplayedMemos() ?? []),
+			...(this.favoriteWindow?.memos ?? []),
 			...(this.relationsPage?.getMemos() ?? []).filter(memo => !releasedRelations.has(memo.id))].map(memo => memo.id));
 		const beacon = this.beaconService?.getSnapshot().memo;
 		if (beacon) memoIds.add(beacon.id);
@@ -5749,7 +5948,7 @@ export class KnomoView extends ItemView {
 		this.rememberHistoryBrowsePosition("all");
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		this.clearSearchDebounce();
-		if (this.activeNav !== "things") this.viewStateController.clearDesktopSearchState();
+		if (this.activeNav !== "things" && this.activeNav !== "favorites") this.viewStateController.clearDesktopSearchState();
 		if (this.activeTagKey === tagKey) {
 			this.viewStateController.clearActiveTag();
 		} else {
@@ -5757,7 +5956,7 @@ export class KnomoView extends ItemView {
 			this.activeTagKey = tagKey;
 		}
 		this.scopeFilter = "all";
-		if (this.activeNav !== "things") this.activeNav = "all";
+		if (this.activeNav !== "things" && this.activeNav !== "favorites") this.activeNav = "all";
 		this.mobileDrawerOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = null;
@@ -5884,6 +6083,15 @@ export class KnomoView extends ItemView {
 		sourceEl?: HTMLElement | null,
 		focusVisible = true,
 	): Promise<void> {
+		if (action === "star" || action === "unstar") {
+			const selection = this.desktopFavoriteSelection;
+			const expectedAction = selection?.state.favoriteId ? "unstar" : "star";
+			if (selection?.card.isConnected && !selection.state.disabled && action === expectedAction && memoId === this.activeMenuMemoId
+				&& sourceEl?.closest(".knomo-card") === selection.card) {
+				await this.handleMemoAction(action, selection.memo, focusVisible, undefined, selection.state.favoriteId);
+			}
+			return;
+		}
 		if (action === "remove-beacon") {
 			this.closeCardMenu();
 			const token = sourceEl?.closest<HTMLElement>("[data-beacon-selection]")?.getAttr("data-beacon-selection");
@@ -5985,6 +6193,12 @@ export class KnomoView extends ItemView {
 		this.compactSearchOpen = false;
 		this.scopeMenuOpen = false;
 		this.activeMenuMemoId = memoId;
+		const card = sourceEl?.closest<HTMLElement>(".knomo-card");
+		if (memoId && card && this.favoriteService) {
+			const memo = this.findMemoById(memoId, this.getMemoSurface(card));
+			const state = memo && this.getMemoFavoriteState(memo);
+			if (memo && state) this.desktopFavoriteSelection = { card, memo, state };
+		}
 		this.syncRootState();
 		this.syncCardMenuState();
 	}
@@ -6170,8 +6384,23 @@ export class KnomoView extends ItemView {
 		throw new Error("The current memo source changed; refresh and retry.");
 	}
 
-	private async handleMemoAction(action: MemoAction, memo: MemoRecord, focusVisible = true, beaconSelection?: number): Promise<void> {
+	private async handleMemoAction(action: MemoAction, memo: MemoRecord, focusVisible = true, beaconSelection?: number, favoriteId?: string): Promise<void> {
 		this.closeCardMenu();
+		if (action === "star" || action === "unstar") {
+			if (memo.status !== "active" || !memo.catalog || !this.favoriteService) return;
+			const handle = memo.catalog.observationHandle;
+			try {
+				if (action === "star") await this.favoriteService.star(handle);
+				else if (favoriteId) await this.favoriteService.unstar(handle, favoriteId);
+			} catch (error) {
+				const stale = error instanceof FavoriteSelectionChangedError || error instanceof MarkdownMutationStaleError
+					|| error instanceof DailyAnchorChangedError || error instanceof DailyAnchorSourceUnlocatedError;
+				const unconfirmed = action === "star" ? "favorite.starUnconfirmed" : "favorite.unstarUnconfirmed";
+				new Notice(t(error instanceof DailyAnchorNotSavedError ? "favorite.saveDailyFirst"
+					: stale ? "favorite.selectionChanged" : unconfirmed));
+			}
+			return;
+		}
 		if (action === "set-beacon" || action === "remove-beacon") {
 			try {
 				if (action === "set-beacon" && memo.catalog && memo.status === "active") await this.beaconService?.set(memo.catalog.observationHandle);
@@ -6654,10 +6883,11 @@ export class KnomoView extends ItemView {
 		this.relationsPage?.close(false);
 		this.rememberHistoryBrowsePosition(nav);
 		if (nav !== this.activeNav) {
-			const things = this.activeNav === "things";
+			this.cancelFavoriteRequest();
+			const scopedSearch = this.activeNav === "things" || this.activeNav === "favorites";
 			if (this.mobileSearchController?.isOpen) {
 				this.mobileSearchController.closePage();
-				if (things) this.mobileSearchController.resetState();
+				if (scopedSearch) this.mobileSearchController.resetState();
 			} else this.mobileSearchController?.resetState();
 		} else this.mobileSearchController?.cancelPendingRequest();
 		this.cancelCatalogDesktopCount();
@@ -6665,6 +6895,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		const result = this.viewStateController.setSidebarNav(nav);
+		if (nav === "favorites") void this.favoriteService?.retry();
 		if (nav === "record-stats") this.catalogReadService?.relations.beginReading();
 		this.applyViewStateTransitionEffects(result);
 		if (result.type === "already-default") {
@@ -6680,7 +6911,7 @@ export class KnomoView extends ItemView {
 		if (result.clearShuffleDay) {
 			this.shuffleDayController.clearSelection();
 		}
-		const shouldDeferReview = result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
+		const shouldDeferReview = this.activeNav !== "favorites" && result.reloadCatalogQuery && this.shouldDeferCardFlowForAllMemos();
 		if (result.reloadCatalogQuery) {
 			void this.reloadCurrentCatalogQuery(nav === "all");
 		}
@@ -6851,6 +7082,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private shouldDeferCardFlowForAllMemos(): boolean {
+		if (this.activeNav === "favorites") return false;
 		return !this.hasCommittedCatalogDesktopQuery && !this.hasVisibleConfirmedMemoPresentation() && this.catalogReadState === "history_building";
 	}
 
@@ -8139,6 +8371,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private getFilteredMemos(): MemoRecord[] {
+		if (this.activeNav === "favorites") return this.getVisibleFavorites();
 		if (this.activeNav === "trash" || this.activeNav === "record-stats") {
 			return [];
 		}
@@ -8162,6 +8395,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private closeCardMenu(): void {
+		this.desktopFavoriteSelection = undefined;
 		this.mobileMenuController?.close("card");
 		const memoId = this.popupState.closeCardMenu();
 		if (memoId !== null) {
@@ -8210,6 +8444,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private syncCardMenuState(): void {
+		if (this.desktopFavoriteSelection && this.desktopFavoriteSelection.memo.id !== this.activeMenuMemoId) this.desktopFavoriteSelection = undefined;
 		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el ?? null]) {
 			if (container === null) continue;
 			for (const card of container.findAll(".knomo-card")) {
@@ -8281,17 +8516,22 @@ export class KnomoView extends ItemView {
 		this.scopeMenuOpen = false;
 		this.closeCardMenu();
 		this.activeMenuMemoId = memo.id;
+		const favorite = this.getMemoFavoriteState(memo);
 		const beaconSelection = this.isCurrentBeacon(memo) ? this.beaconService!.getSnapshot().selection : undefined;
 		this.mobileMenuController ??= new KnomoMobileMenu();
 		this.mobileMenuController.open({
 			kind: "card", trigger,
 			onReturnToView: isCurrent => this.recoverMobileViewFocus(isCurrent, true),
 			build: (menu, select, createTitle) => {
-				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen, card?.hasAttribute("data-has-referrers") === true, beaconSelection !== undefined)) {
+				for (const { action } of getMemoCardActions(memo, surface === "card-flow" && this.activeNav === "random" && !this.randomDayOpen, card?.hasAttribute("data-has-referrers") === true, beaconSelection !== undefined, favorite)) {
 					const section = getMemoCardActionSection(action);
 					const focus = action === "edit" || action === "reference" || action === "open-daily" || action === "share-image" ? "action" : "view";
-					menu.addItem(item => item.setSection(section).setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference")).setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
-						.onClick(event => { const focusVisible = isKeyboardActivation(event); select(() => { void this.handleMemoAction(action, memo, focusVisible, beaconSelection); }, focus); }));
+					menu.addItem(item => {
+						item.setSection(section).setTitle(createTitle(getMemoActionLabel(action), action === "edit" || action === "reference"))
+							.setIcon(MEMO_ACTION_ICONS[action]).setWarning(action === "delete")
+							.onClick(event => { const focusVisible = isKeyboardActivation(event); select(() => { void this.handleMemoAction(action, memo, focusVisible, beaconSelection, favorite?.favoriteId); }, focus); });
+						if (favorite?.disabled && (action === "star" || action === "unstar")) item.setDisabled(true);
+					});
 				}
 				menu.addItem(item => item.setSection("knomo-card-info").setTitle(createTitle(t("card.wordCount", { count: getMemoContentStats(memo).wordCount }))).setIcon(MEMO_WORD_COUNT_ICON).setIsLabel(true));
 			},
@@ -8496,6 +8736,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private async reloadCurrentCatalogQuery(forceReload = false): Promise<boolean> {
+		if (this.activeNav === "favorites") return this.loadFavorites();
+		this.cancelFavoriteRequest();
 		// 同范围后台重查沿用已接受的全历史范围；真正导航由查询指纹区分。
 		if (this.viewStateController.search.result?.key === this.getCatalogQueryFingerprint(true)) forceReload = true;
 		const queryFingerprint = this.getCatalogQueryFingerprint(forceReload);
@@ -8658,7 +8900,7 @@ export class KnomoView extends ItemView {
 		if (this.cardFlowEl === null || !this.canLoadOlderMemoPeriods() || this.cardFlowCoordinator.remainingCount > 0) {
 			return;
 		}
-		const label = t(this.catalogTodayTimeBuoys?.todayCursor != null && this.shouldShowTodayTimeBuoys() ? "list.loadMoreUnknown" : "list.loadOlder");
+		const label = t(this.activeNav === "favorites" ? "list.loadMoreUnknown" : this.catalogTodayTimeBuoys?.todayCursor != null && this.shouldShowTodayTimeBuoys() ? "list.loadMoreUnknown" : "list.loadOlder");
 		this.cardFlowEl.createEl("button", {
 			cls: "knomo-load-more knomo-history-load-more",
 			text: label,
@@ -8671,6 +8913,11 @@ export class KnomoView extends ItemView {
 	}
 
 	private canLoadOlderMemoPeriods(): boolean {
+		if (this.activeNav === "favorites") {
+			const window = this.getCurrentFavoriteWindow();
+			return this.favoriteService?.status === "ready" && window?.version === this.favoriteService.revision
+				&& !!window.cursor && !this.favoriteRequest;
+		}
 		if (this.activeNav === "trash") return this.trashMemoController.hasMore();
 		return (this.catalogCursor !== null || this.catalogHistoryExpansionPending
 			|| (this.catalogTodayTimeBuoys?.todayCursor != null && this.shouldShowTodayTimeBuoys()))
@@ -8681,6 +8928,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private async loadOlderMemoPeriods(): Promise<boolean> {
+		if (this.activeNav === "favorites") return this.loadFavorites(true);
 		return this.activeNav === "trash"
 			? this.trashMemoController.loadNextPage()
 			: this.loadNextCatalogPage();
@@ -8822,8 +9070,12 @@ export class KnomoView extends ItemView {
 		if (surface === undefined && this.relationsPage?.isOpen) {
 			const relationMemo = this.relationsPage.findMemo(memoId); if (relationMemo) return relationMemo;
 		}
-		if (surface === "mobile-search") return this.mobileSearchController.getDisplayedMemos().find(memo => memo.id === memoId) ?? null;
+		if (surface === "mobile-search") {
+			const memo = this.mobileSearchController.getDisplayedMemos().find(item => item.id === memoId);
+			return memo && (this.activeNav !== "favorites" || this.getMemoFavoriteState(memo)?.favoriteId) ? memo : null;
+		}
 		if (this.randomDayOpen) return this.randomDayController.getSnapshot().memos.find(memo => memo.id === memoId) ?? null;
+		if (this.activeNav === "favorites") return this.getVisibleFavorites().find(memo => memo.id === memoId) ?? null;
 		return this.memos.find((memo) => memo.id === memoId)
 			?? (this.beaconService?.getSnapshot().memo?.id === memoId ? this.beaconService.getSnapshot().memo! : null)
 			?? this.catalogTodayTimeBuoys?.today.find((item) => item.memo.id === memoId)?.memo
@@ -8866,7 +9118,7 @@ export class KnomoView extends ItemView {
 			return;
 		}
 		if (this.mobileSearchPageOpen) { void this.mobileSearchController.refreshAppliedResults(); }
-		else if (this.activeNav === "review" || this.scopeFilter !== "all" || this.searchDateFilter !== null) {
+		else if (this.activeNav === "favorites" || this.activeNav === "review" || this.scopeFilter !== "all" || this.searchDateFilter !== null) {
 			void this.reloadCurrentCatalogQuery();
 		}
 		if (this.activeNav === "time-buoy") {

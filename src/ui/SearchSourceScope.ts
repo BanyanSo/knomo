@@ -9,7 +9,7 @@ export type SearchSourceContext = Omit<RegularFilterState, "searchQuery" | "sear
 
 export function buildSearchSourceScope(context: SearchSourceContext, today = new Date()): CatalogQueryFilter {
 	let filter: CatalogQueryFilter = {};
-	const supported = context.recordStatsSearchFilter !== null || ["all", "things", "review"].includes(context.activeNav ?? "all");
+	const supported = context.recordStatsSearchFilter !== null || ["all", "things", "review", "favorites"].includes(context.activeNav ?? "all");
 	if (!supported) return filter;
 	if (context.activeNav === "things") { filter.hasTask = true; }
 	if (context.activeNav === "review") { filter = buildReviewCatalogQuery(today); }

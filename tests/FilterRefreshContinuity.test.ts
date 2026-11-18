@@ -302,7 +302,7 @@ async function searchFixture(
 	const controller = new MobileSearchController({
 		batchSize: 20, debounceMs: 10, getWindow: () => h.win as unknown as Window, getDocument: () => h.win.document,
 		getRootEl: () => h.root, isMobileLayout: () => true,
-		getThingsContext: () => scenario.things ? { activeNav: "things", activeTag: "keep", activeTagKey: "keep" } : undefined,
+		getScopedContext: () => scenario.things ? { activeNav: "things", activeTag: "keep", activeTagKey: "keep" } : undefined,
 		getSourceScope: () => scenario.referenced ? "referenced" : "all",
 		registerDomEvent: () => {}, createHiddenText: (_container, name) => name, filterMemos: memos => [...memos],
 		renderMemoCard: (container, item) => {

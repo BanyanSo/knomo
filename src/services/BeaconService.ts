@@ -8,20 +8,10 @@ import { PluginDataStore } from "./PluginDataStore";
 import type { ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
-export interface BeaconSource {
-	path: string;
-	logicalDate: string;
-	sourceRevision: string;
-	observations: readonly MemoObservation[];
-	blockAnchors?: Readonly<Record<string, number>>;
-}
-
-export class BeaconSourceUnavailableError extends Error {}
-export class BeaconSourceUnlocatedError extends Error {}
-export class BeaconNotSavedError extends Error {}
-class BeaconAnchorError extends Error {
-	constructor(readonly reason: NonNullable<BeaconSnapshot["reason"]>) { super(reason); }
-}
+import { confirmDailyAnchor, findDailyAnchor, DailyAnchorError, DailyAnchorChangedError, DailyAnchorSourceUnavailableError as BeaconSourceUnavailableError,
+	DailyAnchorSourceUnlocatedError as BeaconSourceUnlocatedError, type DailyAnchorSource as BeaconSource } from "./DailyMemoAnchor";
+export { DailyAnchorSourceUnavailableError as BeaconSourceUnavailableError, DailyAnchorSourceUnlocatedError as BeaconSourceUnlocatedError,
+	DailyAnchorNotSavedError as BeaconNotSavedError, type DailyAnchorSource as BeaconSource } from "./DailyMemoAnchor";
 
 export interface BeaconServiceOptions {
 	readSource: (path: string) => Promise<BeaconSource>;
@@ -104,13 +94,11 @@ export class BeaconService {
 				const result = await this.options.createBlockReference(original);
 				if (!current()) throw new Error("Beacon selection changed.");
 				// 新建和复用 ID 都复核本次返回的 occurrence；编辑器事务本身不证明落盘。
-				const source = await this.options.readSource(original.sourcePath);
-				if (!result.observation || source.sourceRevision !== result.observation.sourceRevision) {
-					throw new BeaconNotSavedError("Save the Daily note and select its current card again.");
-				}
-				const observation = findAnchor(source, result.blockId);
-				if (!sameBeaconHandle(result.observation, observation) || source.path !== original.sourcePath
-					|| !await this.options.isSourceCurrent(source) || !current()) throw new Error("Beacon source changed.");
+				const { source, observation } = await confirmDailyAnchor(original, result, this.options.readSource, this.options.isSourceCurrent).catch(error => {
+					if (error instanceof DailyAnchorChangedError) throw new Error("Beacon source changed.");
+					throw error;
+				});
+				if (!current()) throw new Error("Beacon source changed.");
 				const reference = referenceFor(observation);
 				const saved = await this.store.mutate(data => {
 					const raw = getBeaconData(data);
@@ -265,7 +253,7 @@ export class BeaconService {
 			const sourceCurrent = await this.options.isSourceCurrent(source);
 			if (!current()) return;
 			if (!sourceCurrent) { this.source = null; this.publish("locating"); return; }
-			const observation = findAnchor(source, ref.blockId);
+			const observation = findDailyAnchor(source, ref.blockId);
 			this.source = source;
 			const next = referenceFor(observation);
 			if (fingerprint(next) !== fingerprint(this.raw)) this.pending = { reference: next, intent, selection, generation };
@@ -274,7 +262,7 @@ export class BeaconService {
 			if (this.pending) await this.persistPending();
 		} catch (error) {
 			if (!current()) return;
-			this.publish("unavailable", error instanceof BeaconAnchorError ? error.reason
+			this.publish("unavailable", error instanceof DailyAnchorError ? error.reason
 				: error instanceof BeaconSourceUnlocatedError ? "unlocated" : "unreadable");
 		}
 	}
@@ -357,14 +345,5 @@ export class BeaconService {
 
 function referenceFor(observation: MemoObservation): BeaconReference {
 	return { sourcePath: observation.sourcePath, blockId: observation.existingBlockId!, memoTime: observation.time };
-}
-function findAnchor(source: BeaconSource, blockId: string): MemoObservation {
-	if (!source.blockAnchors) throw new BeaconSourceUnavailableError("Complete block anchor counts are required.");
-	const count = source.blockAnchors[blockId] ?? 0;
-	if (count === 0) throw new BeaconAnchorError("missing-id");
-	if (count !== 1) throw new BeaconAnchorError("conflicting-id");
-	const matches = source.observations.filter(item => item.existingBlockId === blockId);
-	if (matches.length !== 1) throw new BeaconAnchorError("not-memo");
-	return matches[0]!;
 }
 function fingerprint(value: unknown): string { return JSON.stringify(value) ?? "undefined"; }

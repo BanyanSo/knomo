@@ -1,3 +1,4 @@
+import type { FavoriteQueryCursor, FavoriteQueryProgress } from "./favorite";
 import type {
 	CatalogCoverage,
 	CatalogCapabilities,
@@ -89,9 +90,11 @@ export interface MemoSaveOperation {
 export interface CatalogFeatureCursor {
 	catalog: CatalogCursor;
 	relationsVersion?: number;
+	favorites?: FavoriteQueryCursor;
 }
 
 export interface CatalogMemoPage {
+	favoriteProgress?: FavoriteQueryProgress;
 	items: CatalogMemoItem[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;

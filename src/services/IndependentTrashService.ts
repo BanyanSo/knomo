@@ -11,7 +11,7 @@ import { buildDailyMemoPresentationChange, type ConfirmedDailyMemoPresentation }
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
 
 export interface IndependentTrashOptions {
-	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation, deletedTarget?: MemoObservation, beforeBlockAnchors?: Readonly<Record<string, number>>) => void;
+	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation, deletedTarget?: MemoObservation, beforeBlockAnchors?: Readonly<Record<string, number>>, snapshotId?: string, restored?: MemoObservation) => void;
 	assertActive?: () => void;
 	getLogicalDateForPath: (path: string) => Promise<string>;
 	// 返回 null 表示原路径已不适用；配置不可读必须抛错，不能猜测。
@@ -59,7 +59,7 @@ export class IndependentTrashService {
 			await store.save(snapshot);
 			await this.commit(prepared, snapshot, store);
 			return { snapshotId: snapshot.snapshotId, state: "deleted", observation: null,
-				catalogUpdatePending: await this.updateCatalog(prepared, undefined, observation) };
+				catalogUpdatePending: await this.updateCatalog(prepared, snapshot.snapshotId, undefined, observation) };
 		});
 	}
 
@@ -123,7 +123,7 @@ export class IndependentTrashService {
 		if (!pending.confirmed) {
 			const state = await this.readDailyState(prepared);
 			if (state !== "after") throw new TrashDailyWriteError(snapshot.snapshotId, state, "Restored content is not confirmed on disk; cleanup only.");
-			pending.catalogUpdatePending = await this.updateCatalog(prepared, observation);
+			pending.catalogUpdatePending = await this.updateCatalog(prepared, snapshot.snapshotId, observation);
 			pending.confirmed = true;
 		}
 		const catalogUpdatePending = pending.catalogUpdatePending ?? false;
@@ -158,9 +158,9 @@ export class IndependentTrashService {
 		} catch { return "unreadable"; }
 	}
 
-	private async updateCatalog(prepared: PreparedDailyWrite, observation?: MemoObservation, deleted?: MemoObservation): Promise<boolean> {
+	private async updateCatalog(prepared: PreparedDailyWrite, snapshotId: string, observation?: MemoObservation, deleted?: MemoObservation): Promise<boolean> {
 		const presentationChange = buildDailyMemoPresentationChange(prepared, deleted ?? null, observation ?? null);
-		try { this.options.onDailyConfirmed?.({ change: presentationChange, observations: prepared.after.observations, blockAnchors: prepared.after.blockAnchors }, deleted, prepared.before.blockAnchors); }
+		try { this.options.onDailyConfirmed?.({ change: presentationChange, observations: prepared.after.observations, blockAnchors: prepared.after.blockAnchors }, deleted, prepared.before.blockAnchors, snapshotId, observation); }
 		catch (error) { logContinuationFailure("trash", "confirmed-render", error); }
 		try {
 			this.options.assertActive?.();

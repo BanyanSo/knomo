@@ -1,5 +1,6 @@
-import type { ObservationHandle } from "./catalog";
 import type { MemoViewItem } from "./memoView";
+
+export { sameObservationHandle as sameBeaconHandle } from "./catalog";
 
 export interface BeaconReference {
 	sourcePath: string;
@@ -15,9 +16,4 @@ export interface BeaconSnapshot {
 	previousSources?: ReadonlyArray<{ sourcePath: string; sourceRevision: string }>;
 	// 控件只可操作其呈现时的选择；此代数仅在当前 runtime 有效。
 	selection: number;
-}
-
-export function sameBeaconHandle(left: ObservationHandle, right: ObservationHandle): boolean {
-	return left.sourcePath === right.sourcePath && left.sourceRevision === right.sourceRevision
-		&& left.startLine === right.startLine && left.endLine === right.endLine && left.rawBlockHash === right.rawBlockHash;
 }

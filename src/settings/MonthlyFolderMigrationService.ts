@@ -1,7 +1,9 @@
+import type { FavoriteStore } from "../services/FavoriteStore";
 import { TFile } from "obsidian";
 import type { Plugin } from "obsidian";
 
 import { buildMonthlyFolderExcludeRule, ObsidianExcludeService } from "../services/ObsidianExcludeService";
+import { KnomoError } from "../types/serviceError";
 import type { KnomoSettings } from "../types/settings";
 import { normalizeVaultPath } from "../utils/path";
 import { isValidMonthlyMemoFileFormat } from "./normalizeSettings";
@@ -22,9 +24,12 @@ export class MonthlyFolderMigrationService {
 	async planMonthlyMemoFolderMigration(nextMonthlyMemoFolder: string): Promise<MonthlyFolderMigrationPlan> {
 		const settings = this.getSettings();
 		const newMonthlyMemoFolder = normalizeVaultPath(nextMonthlyMemoFolder);
-		assertVaultPath(newMonthlyMemoFolder);
+		try { assertVaultPath(newMonthlyMemoFolder); }
+		catch (error) { throw new KnomoError("monthly_folder_invalid_path", {}, error); }
 		const configDir = this.plugin.app.vault.configDir;
-		if (newMonthlyMemoFolder === configDir || newMonthlyMemoFolder.startsWith(`${configDir}/`)) throw new Error("Monthly folder overlaps plugin configuration.");
+		if (newMonthlyMemoFolder === configDir || newMonthlyMemoFolder.startsWith(`${configDir}/`)) {
+			throw new KnomoError("monthly_folder_protected_path");
+		}
 		return {
 			status: settings.monthlyMemoFolder === newMonthlyMemoFolder ? "unchanged" : "planned",
 			oldMonthlyMemoFolder: settings.monthlyMemoFolder,
@@ -33,15 +38,25 @@ export class MonthlyFolderMigrationService {
 		};
 	}
 
-	async migrateMonthlyMemoFolder(nextMonthlyMemoFolder: string, patch: Partial<KnomoSettings> = {}): Promise<MonthlyFolderMigrationResult> {
+	async migrateMonthlyMemoFolder(nextMonthlyMemoFolder: string, patch: Partial<KnomoSettings> = {}, favorites?: FavoriteStore): Promise<MonthlyFolderMigrationResult> {
 		const settings = this.getSettings();
 		const plan = await this.planMonthlyMemoFolderMigration(nextMonthlyMemoFolder);
 		this.assertActive();
 		if (this.getSettings() !== settings) throw new Error("Monthly configuration changed while planning relocation.");
+		const save = async (next?: KnomoSettings) => {
+			const apply = async () => {
+				this.assertActive();
+				if (this.getSettings() !== settings) throw new Error("Monthly configuration changed before saving.");
+				if (next) await this.saveSettings(next);
+			};
+			if (!favorites) { await apply(); return undefined; }
+			return (await favorites.relocate(plan.newMonthlyMemoFolder, apply)).favoriteError;
+		};
 		if (plan.status === "unchanged") {
-			if (Object.keys(patch).length) await this.saveSettings({ ...this.getSettings(), ...patch });
+			const favoriteError = await save(Object.keys(patch).length ? { ...settings, ...patch } : undefined);
 			return {
 				status: "unchanged",
+				favoriteError,
 				message: "Monthly projection folder did not change.",
 				plan,
 			};
@@ -82,7 +97,7 @@ export class MonthlyFolderMigrationService {
 		assertSourceActive();
 		const nextSettings = await this.prepareMonthlyMemoFolderSettings({ ...settings, ...patch }, plan.newMonthlyMemoFolder);
 		assertSourceActive();
-		await this.saveSettings({
+		const favoriteError = await save({
 			...nextSettings,
 			monthlyMemoFolder: plan.newMonthlyMemoFolder,
 		});
@@ -108,6 +123,7 @@ export class MonthlyFolderMigrationService {
 			message: "Monthly projection folder updated.",
 			plan,
 			trashError,
+			favoriteError,
 		};
 	}
 
@@ -154,6 +170,7 @@ export class MonthlyFolderMigrationService {
 }
 
 export interface MonthlyFolderMigrationResult {
+	favoriteError?: string;
 	trashError?: string;
 	status: "unchanged" | "migrated";
 	message: string;

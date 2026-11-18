@@ -32,6 +32,12 @@ async function fixture(files: Record<string, string> = { [OLD]: collection() }) 
 		data: () => data };
 }
 
+test("更改文件夹时区分无效路径与 Obsidian 配置目录", async () => {
+	const f = await fixture();
+	await assert.rejects(f.service.planMonthlyMemoFolderMigration("C:/Outside"), { code: "monthly_folder_invalid_path" });
+	await assert.rejects(f.service.planMonthlyMemoFolderMigration(`${f.vault.app.vault.configDir}/plugins`), { code: "monthly_folder_protected_path" });
+});
+
 test("Monthly 切换复制/合并完整集合，保存设置后才清理旧文件，不读取开发目录或 marker", async () => {
 	const marker = "Old/_knomo-data/legacy-index-completion.json";
 	const development = "Old/_knomo-data/trash/s1.json";

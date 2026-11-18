@@ -5,6 +5,8 @@ import { build } from "esbuild";
 import type { TranslationKey } from "../src/i18n";
 import { createMobilePopupFixture } from "./helpers/mobilePopupFixture";
 import { createCardMemo } from "./helpers/memoCardFixture";
+import { ensureObsidianStub } from "./helpers/obsidianStub";
+import { createReferenceMemo } from "./helpers/referenceMemo";
 
 test("桌面菜单的图标子节点、文字和行内空白均沿真实根路由执行一次，字数行不执行动作", async () => {
 	const f = await createMobilePopupFixture();
@@ -143,6 +145,71 @@ test("已打开的桌面卡片菜单随窗口和面板尺寸更新，未跨断�
 	} finally { h.close(); }
 });
 
+test("桌面已打开的拾星菜单不能操作同一张卡片的新收藏", async () => {
+	const h = await createDesktopMenuPositionFixture();
+	try {
+		const view = h.f.view as unknown as {
+			runMemoActionById(action: string, id: string, source: HTMLElement): Promise<void>;
+			toggleCardMenu(id: string, keyboard: boolean, source: HTMLElement): void;
+			handleFavoritesChanged(refresh: boolean): void;
+		};
+		const memo = createCardMemo({ id: "p0-memo" });
+		let favoriteId = "original";
+		const handled: (string | undefined)[] = [];
+		Object.assign(view, {
+			favoriteService: {},
+			findMemoById: () => memo,
+			getMemoFavoriteState: () => ({ disabled: false, favoriteId }),
+			handleMemoAction: async (_action: string, _memo: typeof memo, _focus: boolean, _beacon: number, token?: string) => { handled.push(token); },
+			runMemoActionById: Object.getPrototypeOf(view).runMemoActionById,
+		});
+		const row = h.menu.createEl("button", { attr: { "data-memo-id": memo.id, "data-memo-action": "unstar", "data-favorite-id": favoriteId } });
+		const trigger = h.f.card.querySelector<HTMLElement>(".knomo-card-menu")!;
+		h.view.activeMenuMemoId = null;
+		view.toggleCardMenu(memo.id, false, trigger);
+		assert.equal(h.view.activeMenuMemoId, memo.id);
+
+		favoriteId = "replacement";
+		view.handleFavoritesChanged(true);
+		assert.equal(h.view.activeMenuMemoId, null);
+		await view.runMemoActionById("unstar", memo.id, row);
+		assert.deepEqual(handled, []);
+
+		view.toggleCardMenu(memo.id, false, trigger);
+		await view.runMemoActionById("unstar", memo.id, row);
+		assert.deepEqual(handled, ["replacement"]);
+	} finally { h.close(); }
+});
+
+test("拾星操作提示区分日记尚未保存、选择失效和无法确认操作结果", async () => {
+	await ensureObsidianStub();
+	const { Notice } = await import("obsidian");
+	const { t } = await import("../src/i18n");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { DailyAnchorNotSavedError, DailyAnchorChangedError } = await import("../src/services/DailyMemoAnchor");
+	const notices: string[] = Reflect.get(Notice, "messages");
+	const start = notices.length;
+	let failure: Error;
+	const fail = async () => { throw failure; };
+	const view = Object.assign(Object.create(KnomoView.prototype), {
+		closeCardMenu: () => {}, favoriteService: { star: fail, unstar: fail },
+	});
+	const memo = createReferenceMemo();
+	try {
+		for (const [action, error, key] of [
+			["star", new DailyAnchorNotSavedError(), "favorite.saveDailyFirst"],
+			["unstar", new DailyAnchorChangedError(), "favorite.selectionChanged"],
+			["star", new Error("write result unknown"), "favorite.starUnconfirmed"],
+			["unstar", new Error("write result unknown"), "favorite.unstarUnconfirmed"],
+		] as const) {
+			failure = error;
+			await view.handleMemoAction(action, memo, false, undefined, "star");
+			assert.equal(notices.at(-1), t(key));
+		}
+		assert.equal(notices.length - start, 4);
+	} finally { notices.length = start; }
+});
+
 test("桌面滚动只重新定位打开的卡片菜单，保留其他卡片状态和分页入口", async () => {
 	const h = await createDesktopMenuPositionFixture();
 	try {
@@ -188,7 +255,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 		bundle: true, write: false, format: "iife", globalName: "DesktopMenuFixture",
 	});
 	const scopeKeys: Record<string, TranslationKey> = {
-		all: "nav.allNotes", things: "nav.things", "no-tag": "filter.noTag", "with-link": "filter.withLink",
+		all: "nav.allNotes", things: "nav.things", favorites: "favorite.title", "no-tag": "filter.noTag", "with-link": "filter.withLink",
 		referenced: "filter.referenced",
 		"with-image": "filter.withImage", anniversary: "filter.anniversary", review: "nav.review", random: "nav.random", shuffleDay: "nav.shuffleDay",
 	};
@@ -277,7 +344,7 @@ test("桌面菜单在宽窄面板、中英文、明暗主题、宿主字号覆�
 					const context = `${theme}/${font}/${scale}/${locale}/${width}/${kind}`;
 					assert.equal(result.within, true, context);
 					assert.equal(result.width, Math.min(168, result.boundWidth - 16), context);
-					assert.equal(result.icons, kind === "scope" ? 10 : 9, context);
+					assert.equal(result.icons, kind === "scope" ? 11 : 9, context);
 					if (kind === "scope") assert.deepEqual(result.scopeSeparators, ["filters", "revisit"].map(group => ({ group, border: "solid" })), context);
 					assert.ok(result.labels.every((label: string) => label.length > 0), `${context}: every menu row has text`);
 					if (kind === "card") {

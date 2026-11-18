@@ -1,3 +1,4 @@
+import type { FavoriteCardState } from "../services/FavoriteService";
 import { setIcon } from "obsidian";
 
 import { KNOMO_TIME_BUOY_ICON } from "../icons";
@@ -36,6 +37,7 @@ export interface RenderMemoCardOptions<TMemo extends MemoRecord = MemoRecord> {
 	randomCard: boolean;
 	timeBuoy?: MemoCardTimeBuoy;
 	beacon?: { selection: number; top: boolean };
+	favorite?: FavoriteCardState;
 	timePresentation?: MemoTimePresentation;
 	activeMenuMemoId: string | null;
 	formatDisplayTime: (value: string) => string;
@@ -108,7 +110,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 				attr: { role: "menu" },
 			});
 			let previousSection: string | null = null;
-			for (const action of getMemoCardActions(memo, options.randomCard, false, options.beacon !== undefined)) {
+			for (const action of getMemoCardActions(memo, options.randomCard, false, options.beacon !== undefined, options.favorite)) {
 				const section = getMemoCardActionSection(action.action);
 				if (previousSection !== null && previousSection !== section) {
 					renderCardMenuSeparator(actions, section);
@@ -121,6 +123,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 					getMemoActionLabel(action.action),
 					action.className,
 				);
+				if (action.action === "star" || action.action === "unstar") syncFavoriteButton(button, options.favorite!);
 				if (action.action === "remove-beacon") button.setAttr("data-beacon-selection", String(options.beacon!.selection));
 			}
 			renderCardMenuSeparator(actions, "knomo-card-info");
@@ -144,6 +147,7 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 	}
 	renderCardMeta(card, memo, options);
 	syncMemoCardTimeBuoy(card, options.timeBuoy);
+	syncMemoCardFavorite(card, options.favorite);
 	if (options.beacon?.top) card.createSpan({ cls: "knomo-visually-hidden", text: t("beacon.name") });
 	return card;
 }
@@ -166,7 +170,7 @@ function renderMemoCardBeaconTower(decoration: HTMLElement): void {
 }
 
 export function syncMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | undefined): void {
-	const indicator = card.querySelector<HTMLElement>(":scope > .knomo-card-time-buoy");
+	const indicator = card.querySelector<HTMLElement>(":scope > .knomo-card-status-icons > .knomo-card-time-buoy");
 	const previousStatus = indicator?.getAttr("data-time-buoy-status");
 	if (previousStatus !== timeBuoy?.status) {
 		if (previousStatus) card.removeClass(`is-time-buoy-${previousStatus}`);
@@ -178,13 +182,48 @@ export function syncMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBu
 		if (!card.hasAttribute("data-beacon-top") && timeBuoy?.status === "today") renderMemoCardTimeBuoyWave(card);
 	}
 	if (timeBuoy) {
-		const badge = indicator ?? card.createSpan({ cls: "knomo-card-time-buoy", attr: {
+		const badge = indicator ?? getMemoCardStatusIcons(card).createSpan({ cls: "knomo-card-time-buoy", attr: {
 			role: "img", "data-time-buoy-card": "true",
 		} });
 		if (!indicator) setIcon(badge, KNOMO_TIME_BUOY_ICON);
 		if (previousStatus !== timeBuoy.status) badge.setAttr("data-time-buoy-status", timeBuoy.status);
 		if (badge.getAttr("aria-label") !== timeBuoy.label) badge.setAttr("aria-label", timeBuoy.label);
-	} else indicator?.remove();
+	} else { indicator?.remove(); removeEmptyStatusIcons(card); }
+}
+
+export function syncMemoCardFavorite(card: HTMLElement, state?: FavoriteCardState): void {
+	if (card.hasAttribute("inert") || card.hasAttribute("data-knomo-readonly-transition")) return;
+	const badge = card.querySelector(":scope > .knomo-card-status-icons > .knomo-card-favorite");
+	if (state?.favoriteId && !badge) {
+		const icons = getMemoCardStatusIcons(card);
+		const star = icons.createSpan({ cls: "knomo-card-favorite", attr: { role: "img", "aria-label": t("favorite.starred") } });
+		setIcon(star, "star");
+		icons.prepend(star);
+	} else if (!state?.favoriteId) {
+		badge?.remove();
+		removeEmptyStatusIcons(card);
+	}
+	const button = card.querySelector<HTMLButtonElement>("[data-memo-action='star'], [data-memo-action='unstar']");
+	if (button && state) syncFavoriteButton(button, state);
+}
+
+function syncFavoriteButton(button: HTMLButtonElement, state: FavoriteCardState): void {
+	const action = state.favoriteId ? "unstar" : "star";
+	if (button.getAttr("data-memo-action") !== action) {
+		button.setAttr("data-memo-action", action);
+		button.querySelector(".knomo-menu-label")?.setText(getMemoActionLabel(action));
+		const icon = button.querySelector<HTMLElement>(".knomo-menu-icon");
+		if (icon) setIcon(icon, MEMO_ACTION_ICONS[action]);
+	}
+	button.disabled = state.disabled;
+}
+
+function getMemoCardStatusIcons(card: HTMLElement): HTMLElement {
+	return card.querySelector<HTMLElement>(":scope > .knomo-card-status-icons") ?? card.createSpan({ cls: "knomo-card-status-icons" });
+}
+
+function removeEmptyStatusIcons(card: HTMLElement): void {
+	card.querySelector(":scope > .knomo-card-status-icons:empty")?.remove();
 }
 
 export function syncMemoCardBeaconAction(card: HTMLElement, memo: MemoRecord, selection?: number): void {
@@ -392,6 +431,8 @@ function renderTrashAction(
 }
 
 export function getMemoActionLabel(action: MemoAction): string {
+	if (action === "star") return t("favorite.star");
+	if (action === "unstar") return t("favorite.unstar");
 	if (action === "set-beacon") return t("beacon.set");
 	if (action === "remove-beacon") return t("beacon.remove");
 	if (action === "share-image") return t("share.share");

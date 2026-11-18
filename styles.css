@@ -199,6 +199,9 @@ body {
 }
 
 .knomo-plugin .knomo-card-favorite svg {
+	width: 14px;
+	height: 14px;
+	margin: 2px;
 	fill: currentColor;
 }
 

@@ -56,7 +56,8 @@ export const MEMO_WORD_COUNT_ICON = "text";
 
 export function getMemoCardActionSection(action: MemoAction): string {
 	return action === "delete" ? "knomo-card-danger"
-		: ["share-image", "edit", "reference", "copy-text", "set-beacon", "remove-beacon", "star", "unstar"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
+		: ["star", "unstar", "set-beacon", "remove-beacon"].includes(action) ? "knomo-card-marks"
+		: ["share-image", "edit", "reference", "copy-text"].includes(action) ? "knomo-card-primary" : "knomo-card-navigation";
 }
 
 const TRASH_CARD_ACTIONS: readonly TrashAction[] = ["restore", "purge"];
@@ -107,7 +108,7 @@ export function getMemoCardActions(memo?: MemoRecord, randomCard = false, hasRef
 		actions.splice(Math.min(4, actions.length), 0, { action, className: getMemoActionClass(action) });
 		if (favorite) {
 			const action = favorite.favoriteId ? "unstar" : "star";
-			actions.splice(Math.min(5, actions.length), 0, { action, className: getMemoActionClass(action) });
+			actions.splice(Math.min(4, actions.length), 0, { action, className: getMemoActionClass(action) });
 		}
 	}
 	return actions;

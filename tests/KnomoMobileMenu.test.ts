@@ -42,7 +42,8 @@ test("移动端卡片菜单使用原生分区，删除独立成组且不插入�
 			const sections = new Map<string, string[]>();
 			for (const item of menu.items) sections.set(item.section, [...(sections.get(item.section) ?? []), item.icon]);
 			assert.deepEqual([...sections], [
-				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy", "knomo-beacon"]],
+				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy"]],
+				["knomo-card-marks", ["knomo-beacon"]],
 				["knomo-card-navigation", [...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : [])]],
 				["knomo-card-danger", ["trash-2"]],
 				["knomo-card-info", ["text"]],

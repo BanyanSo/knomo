@@ -1,6 +1,6 @@
 import { setIcon } from "obsidian";
 
-import { KNOMO_TIME_BUOY_ICON, KNOMO_BEACON_ICON } from "../icons";
+import { KNOMO_TIME_BUOY_ICON } from "../icons";
 import { t } from "../i18n";
 import type { MemoViewItem as MemoRecord } from "../types/memoView";
 import type { TimeBuoyDateStatus } from "../types/timeBuoy";
@@ -70,18 +70,18 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 		includeActions: options.includeActions,
 		activeMenuMemoId: cardMenuReady ? options.activeMenuMemoId : null,
 	});
-	const timeBuoyClass = options.timeBuoy === undefined
-		? ""
-		: ` has-time-buoy is-time-buoy-${options.timeBuoy.status}`;
 	const card = container.createEl("article", {
 		cls: isCjkMemoContent(memo.contentSnapshot)
-			? `${shell.className} is-cjk-content${timeBuoyClass}`
-			: `${shell.className}${timeBuoyClass}`,
+			? `${shell.className} is-cjk-content`
+			: shell.className,
 		attr: shell.attrs,
 	});
 	if (options.beacon?.top) {
-		card.addClass("has-beacon"); card.setAttr("data-beacon-top", "true");
-		card.setAttr("data-beacon-buoy", options.timeBuoy?.status ?? "none");
+		card.addClass("has-beacon");
+		card.setAttr("data-beacon-top", "true");
+		const decoration = card.createDiv({ cls: "knomo-card-beacon-decoration", attr: { "aria-hidden": "true" } });
+		decoration.createDiv({ cls: "knomo-card-beacon-sweep" });
+		renderMemoCardBeaconTower(decoration);
 	}
 	const head = card.createDiv({ cls: "knomo-card-head" });
 	card.setAttr("data-time-presentation", JSON.stringify(options.timePresentation ?? { mode: "full" }));
@@ -143,22 +143,48 @@ export function renderKnomoMemoCard<TMemo extends MemoRecord>(container: HTMLEle
 		});
 	}
 	renderCardMeta(card, memo, options);
-	renderMemoCardTimeBuoy(card, options.timeBuoy);
-	if (options.beacon?.top) renderMemoCardBeacon(card, options.timeBuoy?.status === "today");
+	syncMemoCardTimeBuoy(card, options.timeBuoy);
+	if (options.beacon?.top) card.createSpan({ cls: "knomo-visually-hidden", text: t("beacon.name") });
 	return card;
 }
 
-function renderMemoCardBeacon(card: HTMLElement, today: boolean): void {
-	if (!today) {
-		const light = card.createSvg("svg", { cls: "knomo-card-beacon-light", attr: {
-			viewBox: "0 0 100 12", preserveAspectRatio: "none", "aria-hidden": "true", focusable: "false",
-		} });
-		// 两束低透明度的浅光收拢到灯室，避免实色描边挤成卡片底边。
-		light.createSvg("path", { cls: "knomo-card-beacon-fill", attr: { d: "M0 0 L100 2 L0 8 Z" } });
-		light.createSvg("path", { cls: "knomo-card-beacon-ray", attr: { d: "M0 8 L100 2 L0 12 Z" } });
+function renderMemoCardBeaconTower(decoration: HTMLElement): void {
+	const tower = decoration.createSvg("svg", { cls: "knomo-card-beacon-tower", attr: {
+		viewBox: "0 0 116 174", "aria-hidden": "true", focusable: "false",
+	} });
+	tower.createSvg("path", { cls: "knomo-card-beacon-tower-shade", attr: {
+		d: "M31 39L58 17L85 39Z M43 64H73L91 169H100V174H16V169H24Z",
+	} });
+	tower.createSvg("path", { cls: "knomo-card-beacon-tower-face", attr: {
+		d: "M43 65H63L69 169H24Z M46 39H70V64H46Z M38 64H78V70H38Z",
+	} });
+	// 灯室中心 (58, 52) 与 CSS 中固定柔光、扫光的光源坐标对应。
+	tower.createSvg("rect", { cls: "knomo-card-beacon-tower-lamp", attr: { x: "49", y: "42", width: "18", height: "20", rx: "3" } });
+	tower.createSvg("path", { cls: "knomo-card-beacon-tower-shade", attr: {
+		d: "M58 92a8 8 0 0 1 8 8v18H50v-18a8 8 0 0 1 8-8Z M56 137a9 9 0 0 1 9 9v23H47v-23a9 9 0 0 1 9-9Z",
+	} });
+}
+
+export function syncMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | undefined): void {
+	const indicator = card.querySelector<HTMLElement>(":scope > .knomo-card-time-buoy");
+	const previousStatus = indicator?.getAttr("data-time-buoy-status");
+	if (previousStatus !== timeBuoy?.status) {
+		if (previousStatus) card.removeClass(`is-time-buoy-${previousStatus}`);
+		if (timeBuoy) {
+			card.addClass("has-time-buoy");
+			card.addClass(`is-time-buoy-${timeBuoy.status}`);
+		} else card.removeClass("has-time-buoy");
+		if (previousStatus === "today") card.querySelector(":scope > .knomo-card-time-buoy-wave")?.remove();
+		if (!card.hasAttribute("data-beacon-top") && timeBuoy?.status === "today") renderMemoCardTimeBuoyWave(card);
 	}
-	const indicator = card.createSpan({ cls: "knomo-card-beacon", attr: { role: "img", "aria-label": t("beacon.name") } });
-	setIcon(indicator, KNOMO_BEACON_ICON);
+	if (timeBuoy) {
+		const badge = indicator ?? card.createSpan({ cls: "knomo-card-time-buoy", attr: {
+			role: "img", "data-time-buoy-card": "true",
+		} });
+		if (!indicator) setIcon(badge, KNOMO_TIME_BUOY_ICON);
+		if (previousStatus !== timeBuoy.status) badge.setAttr("data-time-buoy-status", timeBuoy.status);
+		if (badge.getAttr("aria-label") !== timeBuoy.label) badge.setAttr("aria-label", timeBuoy.label);
+	} else indicator?.remove();
 }
 
 export function syncMemoCardBeaconAction(card: HTMLElement, memo: MemoRecord, selection?: number): void {
@@ -203,40 +229,25 @@ function renderMemoCardTime<TMemo extends MemoRecord>(container: HTMLElement, me
 	}
 }
 
-function renderMemoCardTimeBuoy(card: HTMLElement, timeBuoy: MemoCardTimeBuoy | undefined): void {
-	if (timeBuoy === undefined) {
-		return;
-	}
-	if (timeBuoy.status === "today") {
-		const wave = card.createSvg("svg", {
-			cls: "knomo-card-time-buoy-wave",
-			attr: {
-				viewBox: "0 0 100 10",
-				preserveAspectRatio: "none",
-				"aria-hidden": "true",
-				focusable: "false",
-			},
-		});
-		const wavePath = "M0 6 C10 2 20 10 30 6 C40 2 50 10 60 6 C70 2 80 10 90 6 C94 4.4 97 4.6 100 6";
-		wave.createSvg("path", {
-			cls: "knomo-card-time-buoy-wave-fill",
-			attr: { d: `${wavePath} L100 10 L0 10 Z` },
-		});
-		wave.createSvg("path", {
-			cls: "knomo-card-time-buoy-wave-line",
-			attr: { d: wavePath },
-		});
-	}
-	const indicator = card.createSpan({
-		cls: "knomo-card-time-buoy",
+function renderMemoCardTimeBuoyWave(card: HTMLElement): void {
+	const wave = card.createSvg("svg", {
+		cls: "knomo-card-time-buoy-wave",
 		attr: {
-			role: "img",
-			"aria-label": timeBuoy.label,
-			"data-time-buoy-card": "true",
-			"data-time-buoy-status": timeBuoy.status,
+			viewBox: "0 0 100 10",
+			preserveAspectRatio: "none",
+			"aria-hidden": "true",
+			focusable: "false",
 		},
 	});
-	setIcon(indicator, KNOMO_TIME_BUOY_ICON);
+	const wavePath = "M0 6 C10 2 20 10 30 6 C40 2 50 10 60 6 C70 2 80 10 90 6 C94 4.4 97 4.6 100 6";
+	wave.createSvg("path", {
+		cls: "knomo-card-time-buoy-wave-fill",
+		attr: { d: `${wavePath} L100 10 L0 10 Z` },
+	});
+	wave.createSvg("path", {
+		cls: "knomo-card-time-buoy-wave-line",
+		attr: { d: wavePath },
+	});
 }
 
 export function renderKnomoTrashMemoCard<TMemo extends MemoRecord>(container: HTMLElement, memo: TMemo, options: RenderTrashMemoCardOptions<TMemo>): HTMLElement {

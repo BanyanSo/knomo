@@ -138,6 +138,8 @@ test("View 完整同步删除与置顶组内最后卡片后移除空装饰，窗
 		};
 		Object.assign(view, { cardFlowEl: root.asHtml(), containerEl: { win: {} }, renderedCardMemos: new Map(),
 			cardImageCache: new MemoCardImageCache(),
+			settingsService: { getSettings: () => ({ timeBuoyEnabled: false }) },
+			isDefaultListState: () => true,
 			memoMarkdownRenderer: { releaseCard: () => {} },
 			cardFlowCoordinator: { generation: 1, clearMobileBatchContinuation: () => {}, removeSentinel: () => {}, getPendingVisibleCount: () => null, syncBatch: () => {} },
 			prepareRecentTimeFlow: () => { view.recentTimeFlowContext = context; view.recentDecorations = new RecentTimeFlowDecorations(context); },
@@ -409,7 +411,7 @@ test("renders Time buoy card states with the project icon and a today wave witho
 	assert.equal(past.find(".knomo-card-time-buoy-wave"), null);
 });
 
-test("灯标复用完整卡片与时间精度，今日浮标只显示一层波纹和双图标", async () => {
+test("灯标保留时间精度和读屏名称，合并态同时显示灯塔和浮标并沿用灯标光效", async () => {
 	await ensureObsidianStub();
 	const { renderKnomoMemoCard } = await import("../src/ui/KnomoCard");
 	for (const status of [undefined, "today", "upcoming", "past"] as const) for (const time of ["08:30", "08:30:45"]) {
@@ -424,11 +426,18 @@ test("灯标复用完整卡片与时间精度，今日浮标只显示一层波�
 			renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
 		});
 		assert.equal(root.find("article")?.hasClass("has-beacon"), true);
-		assert.equal(root.find(".knomo-card-beacon-light") !== null, status !== "today");
-		assert.equal(root.find(".knomo-card-time-buoy-wave") !== null, status === "today");
-		assert.equal(root.find(".knomo-card-time-buoy") !== null, status !== undefined);
-		assert.equal(root.find(".knomo-card-beacon")?.getAttr("aria-label"), "Beacon");
-		assert.equal(root.find(".knomo-card-beacon")?.getAttr("tabindex"), null);
+		assert.equal(root.findAll(".knomo-card-beacon-decoration").length, 1);
+		assert.equal(root.findAll(".knomo-card-beacon-sweep").length, 1);
+		assert.equal(root.find(".knomo-card-beacon-decoration")?.getAttr("aria-hidden"), "true");
+		assert.equal(root.findAll(".knomo-card-time-buoy-wave").length, 0);
+		assert.equal(root.findAll(".knomo-card-time-buoy").length, Number(status !== undefined));
+		assert.equal(root.findAll(".knomo-card-beacon-tower").length, 1);
+		assert.equal(root.find(".knomo-card-beacon-tower")?.getAttr("focusable"), "false");
+		assert.equal(root.find(".knomo-card-beacon-tower")?.getAttr("tabindex"), null);
+		if (status !== undefined) {
+			assert.equal(root.find(".knomo-card-time-buoy")?.getAttr("aria-label"), `Time buoy ${status}`);
+		}
+		assert.equal(root.find(".knomo-visually-hidden")?.getText(), "Beacon");
 		assert.equal(root.find("[data-memo-action='set-beacon']"), null);
 		assert.equal(root.find("[data-memo-action='remove-beacon']")?.getAttr("data-beacon-selection"), "7");
 		assert.match(root.find(".knomo-card-time")?.getText() ?? "", new RegExp(time + "$"));
@@ -454,7 +463,9 @@ test("灯标菜单仅接纳有效 Catalog Memo，筛选卡片只改变操作文�
 		renderMemoCardImages: () => {}, queueSourceReferenceMarkdown: () => {},
 	});
 	assert.equal(root.find("article")?.hasClass("has-beacon"), false);
-	assert.equal(root.find(".knomo-card-beacon"), null);
+	assert.equal(root.find(".knomo-card-beacon-decoration"), null);
+	assert.equal(root.find(".knomo-card-time-buoy"), null);
+	assert.equal(root.find(".knomo-visually-hidden"), null);
 	assert.equal(card.getAttr("data-beacon-top"), null);
 });
 
@@ -662,7 +673,12 @@ class TestElement {
 		return this.classes.has(cls);
 	}
 
-	querySelector(selector: string): TestElement | null { return this.find(selector); }
+	querySelector(selector: string): TestElement | null {
+		const childPrefix = ":scope > ";
+		return selector.startsWith(childPrefix)
+			? this.children.find(child => child.matches(selector.slice(childPrefix.length))) ?? null
+			: this.find(selector);
+	}
 
 	find(selector: string): TestElement | null {
 		return this.findAll(selector)[0] ?? null;

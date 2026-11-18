@@ -3,7 +3,7 @@ import { BeaconNotSavedError } from "../services/BeaconService";
 import type { BeaconService } from "../services/BeaconService";
 import { sameBeaconHandle, type BeaconSnapshot } from "../types/beacon";
 import { buildBeaconPresentation } from "./BeaconPresentation";
-import { syncMemoCardBeaconAction } from "./KnomoCard";
+import { syncMemoCardBeaconAction, syncMemoCardTimeBuoy } from "./KnomoCard";
 import { KnomoMobileMenu } from "./KnomoMobileMenu";
 import { registerMobileFirstTapRecovery, registerMobileMenuTriggerTap } from "./MobileMenuTap";
 import { canFocusSurface, isKeyboardActivation, releaseNavigationFocus } from "./NavigationFocus";
@@ -1413,6 +1413,7 @@ export class KnomoView extends ItemView {
 		this.confirmedDailyFileChecks?.clear();
 		this.readonlyMemoPresentation = undefined;
 		this.beaconPlaceholder = undefined;
+		this.syncBeaconMotion(undefined);
 		this.randomReunionContinuation = undefined;
 		this.mobileViewFocusRecovery?.cancel();
 		this.mobileMenuController?.close();
@@ -1661,6 +1662,30 @@ export class KnomoView extends ItemView {
 
 	private beaconPresentation: BeaconSnapshot | undefined;
 	private beaconPlaceholder: { memo: MemoRecord; card: HTMLElement; selection: number; scope: string } | undefined;
+	private beaconMotion: { card: HTMLElement; win: Window; observer: IntersectionObserver } | undefined;
+
+	private syncBeaconMotion(card: HTMLElement | undefined): void {
+		const win = this.containerEl.win as WindowWithIntersectionObserver;
+		const current = this.beaconMotion;
+		if (current && current.card === card && current.win === win) return;
+		current?.observer.disconnect();
+		current?.card.removeAttribute("data-knomo-beacon-in-view");
+		this.beaconMotion = undefined;
+		const Observer = win.IntersectionObserver;
+		if (!card || !Observer || this.isPresentationHidden() || card.hasAttribute("inert")) return;
+		// 每个视图只观察当前灯标，滚出卡片流或离开宿主视口时停止扫光。
+		const observer = new Observer(entries => {
+			if (this.beaconMotion?.observer !== observer) return;
+			if (!card.isConnected || card.hasAttribute("inert")) {
+				this.syncBeaconMotion(undefined);
+				return;
+			}
+			const entry = entries[entries.length - 1];
+			card.toggleAttribute("data-knomo-beacon-in-view", !!entry?.isIntersecting && entry.intersectionRatio > 0);
+		}, { threshold: Number.EPSILON });
+		this.beaconMotion = { card, win, observer };
+		observer.observe(card);
+	}
 
 	private handleBeaconChanged(): void {
 		if (this.trashViewClosed || !this.cardFlowEl) return;
@@ -1672,6 +1697,7 @@ export class KnomoView extends ItemView {
 			top.setAttr("data-beacon-placeholder", "");
 			top.setAttr("aria-hidden", "true");
 			top.setAttr("inert", "");
+			this.syncBeaconMotion(undefined);
 			const snapshot = this.beaconService?.getSnapshot();
 			if (previous && snapshot && snapshot.selection === this.beaconPresentation?.selection
 				&& (snapshot.state === "locating" || snapshot.state === "ready") && !this.beaconPlaceholder) {
@@ -2162,6 +2188,7 @@ export class KnomoView extends ItemView {
 		if (hidden === this.presentationHidden) return;
 		this.presentationHidden = hidden;
 		if (hidden) {
+			this.syncBeaconMotion(undefined);
 			this.presentationVisibilityRevision++;
 			this.resumePresentationAfterRefresh = false;
 			if (this.presentationRefreshRun || this.catalogDesktopCountController) this.pendingViewRefresh ??= false;
@@ -2183,6 +2210,7 @@ export class KnomoView extends ItemView {
 			this.syncBackgroundQueuePause();
 			return;
 		}
+		this.syncBeaconMotion(this.cardFlowEl?.querySelector<HTMLElement>("[data-beacon-top]:not([inert])") ?? undefined);
 		this.resumePresentationAfterRefresh = true;
 		const beacon = this.beaconService?.getSnapshot();
 		if (beacon && beacon.state !== "ready" && beacon.state !== "unset") void this.beaconService?.retry();
@@ -2467,6 +2495,7 @@ export class KnomoView extends ItemView {
 		const container = this.contentEl;
 		this.finishSidebarResize();
 		if (this.rootEl) this.layoutObserver?.unobserve(this.rootEl);
+		if (this.beaconMotion) this.syncBeaconMotion(undefined);
 		container.empty();
 		this.titleHosts = [];
 		this.statsEls = [];
@@ -4008,6 +4037,7 @@ export class KnomoView extends ItemView {
 		if (this.layoutWindow === win) return;
 		this.stopLayoutObserver();
 		this.layoutWindow = win;
+		if (this.beaconMotion) this.syncBeaconMotion(this.beaconMotion.card);
 		const measure = () => {
 			if (this.trashViewClosed || this.layoutWindow !== win) return;
 			this.syncPresentationVisibility();
@@ -4318,6 +4348,7 @@ export class KnomoView extends ItemView {
 	): void {
 		if (this.randomReunionContinuation) this.getRandomReunionContinuation();
 		if (this.preservingReadonlyMemoPresentation) return;
+		if (this.beaconMotion && !this.isDefaultListState()) this.syncBeaconMotion(undefined);
 		if (!["all", "things", "review"].includes(this.activeNav)) this.clearLoadingIndicators("cards");
 		if (this.activeNav !== "record-stats") this.clearLoadingIndicators("stats");
 		const lifecycleKey = this.getCardFlowDecorationLifecycleKey();
@@ -4711,6 +4742,7 @@ export class KnomoView extends ItemView {
 		this.cardImageLoadQueue.clear("card-flow");
 		this.cardFlowCoordinator.resetFlowRuntime(this.containerEl.win);
 		const headers = this.renderCardFlowHeaders(this.cardFlowEl, presentation.headers);
+		if (this.beaconMotion) this.syncBeaconMotion(undefined);
 		for (const child of Array.from(this.cardFlowEl.children)) {
 			if (!headers.includes(child as HTMLElement)) child.remove();
 		}
@@ -5007,6 +5039,7 @@ export class KnomoView extends ItemView {
 			}
 		}
 		const renderedCards: HTMLElement[] = [];
+		const syncTimeBuoy = presentation.mode === "memo" && this.isDefaultListState();
 
 		for (const [index, memo] of visibleMemos.entries()) {
 			const renderKey = getMemoRenderKey(memo);
@@ -5020,7 +5053,6 @@ export class KnomoView extends ItemView {
 				&& !existingCard.hasAttribute("data-knomo-readonly-transition")
 				&& !existingCard.hasAttribute("data-beacon-placeholder")
 				&& existingCard.hasAttribute("data-beacon-top") === this.isTopBeacon(memo)
-				&& (!this.isTopBeacon(memo) || existingCard.getAttr("data-beacon-buoy") === (this.getVisibleMemoTimeBuoy(memo)?.status ?? "none"))
 				&& (presentation.mode !== "memo" || existingCard.getAttr("data-time-presentation") === JSON.stringify(getRecentMemoPresentation(memo, this.recentTimeFlowContext).time))
 				&& (
 					preserveCardMemoId === memo.id
@@ -5028,6 +5060,8 @@ export class KnomoView extends ItemView {
 				)
 			) {
 				card = existingCard;
+				if (syncTimeBuoy) syncMemoCardTimeBuoy(card, this.getVisibleMemoTimeBuoy(memo));
+				if (card.hasAttribute("data-beacon-top")) this.syncBeaconMotion(card);
 				const content = card.querySelector<HTMLElement>(".knomo-card-content") ?? card.querySelector<HTMLElement>(".knomo-card-body");
 				if (content && presentation.mode === "memo") this.memoMarkdownRenderer.refreshSearchHits(memo, content, "card-flow");
 			} else if (existingCard !== null) {
@@ -5109,6 +5143,7 @@ export class KnomoView extends ItemView {
 		this.memoMarkdownRenderer.releaseCard(existingCard, "card-flow");
 		this.relationCards?.release(existingCard);
 		this.removeCardImageTargets(existingCard);
+		if (this.beaconMotion?.card === existingCard) this.syncBeaconMotion(undefined);
 		return replacement;
 	}
 
@@ -5155,6 +5190,7 @@ export class KnomoView extends ItemView {
 	}
 
 	private removeCardElement(card: HTMLElement, measureViewport = true): void {
+		if (this.beaconMotion?.card === card) this.syncBeaconMotion(undefined);
 		// 同批接续已按旧布局选好图片，不再读取分组重建期间的临时几何。
 		this.cardImageCache.capture(card, measureViewport && Platform.isMobile ? this.cardFlowEl : null);
 		this.memoMarkdownRenderer.releaseCard(card, "card-flow");
@@ -5381,6 +5417,7 @@ export class KnomoView extends ItemView {
 			reusedImagesEl,
 		});
 		if (readonly) return makeReadonlyMemoCard(card);
+		if (card.hasAttribute("data-beacon-top")) this.syncBeaconMotion(card);
 		const content = card.find(".knomo-card-content") ?? card.find(".knomo-card-body");
 		if (content && (reusedBodyEl !== null || !card.find(".knomo-card-content"))) this.memoMarkdownRenderer.refreshSearchHits(memo, content, surface);
 		if (this.catalogReadService?.relations) this.ensureRelationCards().observe(card, memo);
@@ -5435,7 +5472,8 @@ export class KnomoView extends ItemView {
 	}
 
 	private getVisibleMemoTimeBuoy(memo: MemoRecord): MemoCardTimeBuoy | undefined {
-		if (!this.settingsService.getSettings().timeBuoyEnabled || memo.status !== "active") {
+		if (memo.status !== "active" || (!memo.contentSnapshot.includes("@") && !memo.contentSnapshot.includes("＠"))
+			|| !this.settingsService.getSettings().timeBuoyEnabled) {
 			return undefined;
 		}
 		const dates = extractTimeBuoyDates(memo.contentSnapshot);

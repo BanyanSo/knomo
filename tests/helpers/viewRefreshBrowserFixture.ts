@@ -73,7 +73,8 @@ function prepareBeaconSurface(flow: HTMLElement, options: { mobile: boolean; dar
 	document.body.className = options.dark ? "theme-dark" : "theme-light";
 	const host = flow.parentElement!;
 	host.className = `knomo-plugin ${options.mobile ? "is-layout-mobile" : "is-layout-desktop-wide"}${options.reduce ? " knomo-reduce-glass" : ""}`;
-	host.style.width = flow.style.width = options.mobile ? "360px" : "700px";
+	host.style.width = flow.style.width = options.mobile ? "100%" : "min(100%, 700px)";
+	host.classList.toggle("is-mobile-compact", options.mobile);
 	document.body.style.setProperty("--background-primary", options.dark ? "#242424" : "#fff");
 	document.body.style.setProperty("--background-secondary", options.dark ? "#303030" : "#eee");
 	document.body.style.setProperty("--text-normal", options.dark ? "#eee" : "#222");
@@ -94,12 +95,13 @@ export async function beaconGeometry(options: { mobile: boolean; dark: boolean; 
 	const now = new Date(), date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 	const memos = Array.from({ length: 35 }, (_, i) => h.makeMemo(i, 0, false, date));
 	const selected = options.loaded ? memos[8]! : h.makeMemo(80, 0, false, "2025-01-01");
-	let today = options.today;
+	selected.images = h.makeMemo(80, 0, true).images;
+	let buoy = true, today = options.today, label = "Time buoy";
 	let snapshot: BeaconSnapshot = { state: "unset", selection: 0 };
 	Object.assign(view, {
 		beaconService: { getSnapshot: () => snapshot }, getPageFeedbackContext: () => "beacon",
 		memos, getCardFlowViewStateKey: () => "default",
-		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => memo.id === selected.id ? { status: today ? "today" : "past", label: "Time buoy" } : undefined,
+		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => buoy && memo.id === selected.id ? { status: today ? "today" : "past", label } : undefined,
 	});
 	// 使用生产分组和头部接线，卡片仍走真实 KnomoCard。
 	delete view.prepareRecentTimeFlow;
@@ -114,35 +116,56 @@ export async function beaconGeometry(options: { mobile: boolean; dark: boolean; 
 		const rect = flow.getBoundingClientRect();
 		const anchor = cards.find(card => !card.hasAttribute("data-beacon-top") && card.getBoundingClientRect().bottom > rect.top)!;
 		const top = flow.querySelector<HTMLElement>("[data-beacon-top]");
-		const beacon = top?.querySelector<HTMLElement>(".knomo-card-beacon");
-		const buoy = top?.querySelector<HTMLElement>(".knomo-card-time-buoy");
 		return { anchor: anchor?.getAttribute("data-memo-id"), offset: anchor ? anchor.getBoundingClientRect().top - rect.top : 0,
 			scroll: flow.scrollTop, count: cards.length, topCount: flow.querySelectorAll("[data-beacon-top]").length,
 			selectedCount: cards.filter(card => card.getAttribute("data-memo-id") === selected.id).length,
 			wave: top?.querySelectorAll(".knomo-card-time-buoy-wave").length ?? 0,
-			light: top?.querySelectorAll(".knomo-card-beacon-light").length ?? 0,
+			light: top?.querySelectorAll(".knomo-card-beacon-decoration").length ?? 0,
+			tower: top?.querySelectorAll(".knomo-card-beacon-tower").length ?? 0,
+			buoy: top?.querySelector(".knomo-card-time-buoy")?.getAttribute("data-time-buoy-status"),
+			label: top?.querySelector(".knomo-card-time-buoy")?.getAttribute("aria-label"),
 			time: top?.querySelector(".knomo-card-time")?.textContent,
-			doubleGap: beacon && buoy ? buoy.getBoundingClientRect().left - beacon.getBoundingClientRect().right : null,
 			decorations: Array.from(flow.querySelectorAll(".knomo-recent-flow-decoration")).map(item => item.textContent),
-			lightHeight: top?.querySelector(".knomo-card-beacon-light")?.getBoundingClientRect().height,
 			position: top ? getComputedStyle(top).position : null,
+			animating: top?.querySelector(".knomo-card-beacon-sweep")?.getAnimations().length ?? 0,
 		};
 	};
 	render(); await frames(); flow.scrollTop = 1400; const before = sample();
-	snapshot = { state: "ready", selection: 1, memo: selected }; render(); await frames(); const pinned = sample();
+	snapshot = { state: "ready", selection: 1, memo: selected }; render(); await h.settle(); const pinned = sample();
 	flow.scrollTop = 0; await frames();
 	const visual = sample();
+	const top = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
+	const layer = top.querySelector(".knomo-card-beacon-decoration")!;
+	const tower = layer.querySelector(".knomo-card-beacon-tower")!;
+	const image = top.querySelector(".knomo-card-images img");
+	const sweep = top.querySelector(".knomo-card-beacon-sweep")!;
+	const animation = sweep.getAnimations()[0];
+	label = "Two dates"; render(); const labelOnly = sample();
 	today = !today; render(); const dateFlip = sample();
-	today = options.today; render();
+	buoy = false; render(); const disabled = sample();
+	const retained = {
+		card: flow.querySelector("[data-beacon-top]") === top,
+		layer: top.querySelector(".knomo-card-beacon-decoration") === layer,
+		tower: layer.querySelector(".knomo-card-beacon-tower") === tower,
+		image: !!image && top.querySelector(".knomo-card-images img") === image,
+		animation: !!animation && sweep.getAnimations()[0] === animation,
+	};
+	buoy = true; today = options.today; render();
 	const oldTop = flow.querySelector<HTMLElement>("[data-beacon-top]")!, oldHeight = oldTop.getBoundingClientRect().height;
 	const input = document.createElement("input"); document.body.append(input); input.focus();
 	view.renderCardFlow = () => {};
 	snapshot = { state: "locating", selection: 1 }; view.handleBeaconChanged();
 	const waitingTop = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
 	const deferred = { hidden: getComputedStyle(waitingTop.querySelector<HTMLElement>(".knomo-card-body")!).visibility === "hidden",
-		inert: waitingTop.hasAttribute("inert"), heightChange: waitingTop.getBoundingClientRect().height - oldHeight, focused: document.activeElement === input };
+		inert: waitingTop.hasAttribute("inert"), heightChange: waitingTop.getBoundingClientRect().height - oldHeight, focused: document.activeElement === input,
+		animating: waitingTop.querySelector(".knomo-card-beacon-sweep")?.getAnimations().length };
 	snapshot = { state: "ready", selection: 1, memo: selected }; render(); input.remove();
 	snapshot = { state: "unset", selection: 2 }; render(); await frames(); const removed = sample();
+	const releasedCard = Array.from(flow.querySelectorAll("article[data-memo-id]"))
+		.find(card => card.getAttribute("data-memo-id") === selected.id);
+	const released = { wave: !!releasedCard?.querySelector(".knomo-card-time-buoy-wave"),
+		buoy: releasedCard?.querySelector(".knomo-card-time-buoy")?.getAttribute("data-time-buoy-status"),
+		decoration: !!releasedCard?.querySelector(".knomo-card-beacon-decoration") };
 	// 相关旧源普通卡/浮标卡未跟上时，新旧正文不能双显。
 	const changed = { ...selected, id: selected.id + "-new", contentSnapshot: "New confirmed Beacon", catalog: {
 		...selected.catalog!, renderKey: selected.id + "-new", key: selected.id + "-new", observationHandle: {
@@ -154,7 +177,7 @@ export async function beaconGeometry(options: { mobile: boolean; dark: boolean; 
 		new: Array.from(flow.querySelectorAll(".knomo-card-content")).filter(item => item.textContent === changed.contentSnapshot).length };
 	// 恢复纯视觉状态用于截图；不增加功能标题或扩大普通分页窗口。
 	snapshot = { state: "ready", selection: 4, memo: selected }; render(); flow.scrollTop = 0; await frames();
-	return { before, pinned, visual, dateFlip, removed, delayed, deferred, ordinaryCount: memos.length };
+	return { before, pinned, visual, labelOnly, dateFlip, disabled, retained, removed, released, delayed, deferred, ordinaryCount: memos.length };
 }
 
 export async function beaconSourceRefresh(options: { mobile: boolean; loaded: boolean }) {
@@ -236,10 +259,20 @@ export async function beaconSourceRefresh(options: { mobile: boolean; loaded: bo
 
 export async function beaconTwoViews(mobile: boolean) {
 	const left = fixture(mobile);
-	const host = document.createElement("main"); host.className = "knomo-plugin"; document.body.append(host);
+	const leftHost = left.flow.parentElement!;
+	const split = document.createElement("div");
+	split.style.display = "flex";
+	leftHost.replaceWith(split);
+	const host = document.createElement("main"); host.className = "knomo-plugin";
+	split.append(leftHost, host);
 	const rightFlow = host.createDiv({ cls: "knomo-card-flow" });
 	const right = fixture(mobile, false, rightFlow);
-	for (const h of [left, right]) prepareBeaconSurface(h.flow, { mobile, dark: mobile, reduce: mobile });
+	for (const h of [left, right]) {
+		prepareBeaconSurface(h.flow, { mobile, dark: mobile, reduce: mobile });
+		h.flow.parentElement!.style.width = "50%";
+		h.flow.style.width = "100%";
+		h.flow.style.height = "500px";
+	}
 	const path = "Daily/2026-11-16.md", logicalDate = "2026-11-16", parser = new DiaryMemoParser();
 	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore()); await catalog.open();
 	const read = new CatalogReadService({ catalog });
@@ -270,6 +303,12 @@ export async function beaconTwoViews(mobile: boolean) {
 	});
 	const lists = async (i: number) => { const h = [left, right][i]!; h.view.memos = (await read.query({ limit: i === 0 ? 35 : 5 })).items.map(toCatalogMemoView); renderers[i]!(); };
 	const off = [left, right].map(h => service.subscribe(() => h.view.handleBeaconChanged()));
+	const animationCount = () => [left, right].map(h => Array.from(h.flow.querySelectorAll(".knomo-card-beacon-sweep"))
+		.flatMap(sweep => sweep.getAnimations()).length);
+	const waitForMotion = async (expected: number[]) => {
+		for (let frame = 0; frame < 8 && animationCount().some((count, index) => count !== expected[index]); frame++) await frames();
+		return animationCount();
+	};
 	const samples: Array<{ phase: string; counts: number[]; tops: number[] }> = [];
 	const sample = (phase: string) => samples.push({ phase, counts: [left, right].map(h => Array.from(h.flow.querySelectorAll<HTMLElement>(".knomo-card"))
 		.filter(card => /Memo 8|Edited selected/u.test(card.querySelector(".knomo-card-content")?.textContent ?? "")
@@ -277,7 +316,10 @@ export async function beaconTwoViews(mobile: boolean) {
 		tops: [left, right].map(h => h.flow.querySelectorAll("[data-beacon-top]:not([inert])").length) });
 	try {
 		await service.reload(); await lists(0); await lists(1); await service.set(source.observations[8]!); sample("initial");
+		const initialMotion = await waitForMotion([1, 1]);
 		hidden = true;
+		host.style.display = "none";
+		const hiddenMotion = await waitForMotion([1, 0]);
 		content = content.replace("Memo 0", "neighbor changed\n  extra"); await publish(); service.sourceChanged(path);
 		service.observeSource(source); await lists(0); sample("query first");
 		await Promise.all([service.refresh(), service.refresh()]); sample("binding after query");
@@ -287,17 +329,28 @@ export async function beaconTwoViews(mobile: boolean) {
 			replacements: before.observations.map((item, i) => ({ before: item, after: source.observations[i]! })), inserted: null, changed: source.observations[8]! },
 			observations: source.observations, blockAnchors: source.blockAnchors });
 		await service.refresh(); sample("binding first"); await lists(0); sample("query after binding");
-		hidden = false; await lists(1); sample("hidden resumed");
+		hidden = false; host.style.removeProperty("display"); await lists(1); sample("hidden resumed");
+		const resumedMotion = await waitForMotion([1, 1]);
 		defaultScope = false; renderers[0]!(); const filteredTop = left.flow.querySelectorAll("[data-beacon-top]").length;
 		defaultScope = true; renderers[0]!(); await service.remove(service.getSnapshot().selection); sample("removed");
 		await left.settle(); await right.settle();
-		return { samples, filteredTop, writes, sizes: [left.view.memos.length, right.view.memos.length] };
-	} finally { for (const dispose of off) dispose(); service.dispose(); catalog.close(); host.remove(); }
+		return { samples, filteredTop, writes, sizes: [left.view.memos.length, right.view.memos.length],
+			initialMotion, hiddenMotion, resumedMotion, removedMotion: animationCount() };
+	} finally {
+		for (const h of [left, right]) h.view.syncBeaconMotion(undefined);
+		for (const dispose of off) dispose();
+		service.dispose(); catalog.close();
+		split.replaceWith(leftHost);
+	}
 }
 
-export async function beaconStylePreview(options: { mobile: boolean; dark: boolean; today: boolean }) {
+export async function beaconStylePreview(options: { mobile: boolean; dark: boolean; tall?: boolean; status?: "today" | "upcoming" | "past" }) {
 	const h = fixture(options.mobile), { view, flow } = h;
 	prepareBeaconSurface(flow, { ...options, reduce: options.mobile });
+	if (!options.mobile && innerWidth < 600) {
+		flow.parentElement!.classList.replace("is-layout-desktop-wide", "is-layout-desktop-narrow");
+		view.currentLayout = "desktop-narrow";
+	}
 	for (const name of ["--font-text", "--font-interface", "--font-text-theme", "--font-interface-theme"]) {
 		document.body.style.setProperty(name, 'Arial, "Microsoft YaHei", sans-serif');
 	}
@@ -308,6 +361,7 @@ export async function beaconStylePreview(options: { mobile: boolean; dark: boole
 	const now = new Date(), date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 	const beacon = h.makeMemo(50, 0, false, "2026-11-12"), buoy = h.makeMemo(51, 0, false, "2026-11-10"), ordinary = h.makeMemo(52, 0, false, date);
 	beacon.contentSnapshot = "每天留一点时间，做真正重要的事。\n先完成，再完善。保持记录，也保持行动。 #长期主义 #专注";
+	if (options.tall) beacon.contentSnapshot += ("\n今天也把一件小事认真做完。").repeat(14);
 	buoy.contentSnapshot = "今天，重新看见之前留给自己的提醒。\n保持记录，也保持行动。 #提醒";
 	ordinary.contentSnapshot = "读完一章书，记下一个值得实践的想法。 #阅读";
 	beacon.catalog!.observation.time = "08:30"; buoy.catalog!.observation.time = "20:15"; ordinary.catalog!.observation.time = "09:18";
@@ -316,7 +370,10 @@ export async function beaconStylePreview(options: { mobile: boolean; dark: boole
 		beaconService: { getSnapshot: () => snapshot }, getPageFeedbackContext: () => "beacon-style", memos: [ordinary],
 		settingsService: { getSettings: () => ({ recentTimeFlowEnabled: true }) },
 		getTodayTimeBuoyItems: () => [{ memo: buoy }],
-		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => memo === buoy || (memo === beacon && options.today) ? { status: "today", label: "今日时光浮标" } : undefined,
+		getVisibleMemoTimeBuoy: (memo: MemoViewItem) => {
+			const status = memo === buoy ? "today" : memo === beacon ? options.status : undefined;
+			return status ? { status, label: "时光浮标" } : undefined;
+		},
 	});
 	delete view.prepareRecentTimeFlow;
 	view.memoMarkdownRenderer.queueMemoMarkdown = (memo: MemoViewItem, container: HTMLElement) => {
@@ -332,17 +389,102 @@ export async function beaconStylePreview(options: { mobile: boolean; dark: boole
 	hydrateKnomoIcons(flow); await frames();
 	for (const menu of Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card-menu"))) menu.setText("···");
 	const card = flow.querySelector<HTMLElement>("[data-beacon-top]")!;
-	const light = card.querySelector<SVGSVGElement>(".knomo-card-beacon-light");
-	const paths = Array.from(light?.querySelectorAll("path") ?? []).map(path => {
-		const style = getComputedStyle(path);
-		return { opacity: Number(style.opacity), stroke: style.stroke, fill: style.fill };
-	});
-	return { paths, height: light?.getBoundingClientRect().height ?? 0,
-		clearance: (light ?? card.querySelector(".knomo-card-time-buoy-wave")!).getBoundingClientRect().top - card.querySelector(".knomo-card-body")!.getBoundingClientRect().bottom,
-		pointerEvents: getComputedStyle(light ?? card.querySelector(".knomo-card-time-buoy-wave")!).pointerEvents,
-		beaconCount: card.querySelectorAll(".knomo-card-beacon").length, waveCount: card.querySelectorAll(".knomo-card-time-buoy-wave").length,
+	const layer = card.querySelector<HTMLElement>(".knomo-card-beacon-decoration")!;
+	const sweep = layer.querySelector<HTMLElement>(".knomo-card-beacon-sweep")!;
+	const tower = layer.querySelector(".knomo-card-beacon-tower");
+	const badge = card.querySelector(".knomo-card-time-buoy");
+	if (matchMedia("(prefers-reduced-motion: no-preference)").matches) {
+		for (let frame = 0; frame < 8 && !card.hasAttribute("data-knomo-beacon-in-view"); frame++) await frames();
+	}
+	const animation = sweep.getAnimations()[0];
+	const duration = animation?.effect?.getComputedTiming().duration;
+	const sample = (progress: number) => {
+		animation.currentTime = Number(duration) * progress;
+		const style = getComputedStyle(sweep);
+		const matrix = new DOMMatrixReadOnly(style.transform);
+		const [originX, originY] = style.transformOrigin.split(" ").map(parseFloat);
+		const leftHeight = sweep.offsetTop + originY - matrix.b / matrix.a * (sweep.offsetLeft + originX);
+		return { opacity: Number(style.opacity), angle: Math.atan2(matrix.b, matrix.a) * 180 / Math.PI,
+			leftHeight: leftHeight / layer.offsetHeight, staticGlow: getComputedStyle(layer).backgroundImage, cardHeight: card.offsetHeight };
+	};
+	animation?.pause();
+	const keyframes = animation ? [0, 0.06, 0.12, 0.72, 0.91, 0.999, 1].map(sample) : [];
+	const lampOffset = () => {
+		const lamp = tower?.querySelector("rect");
+		if (!lamp || !animation) return null;
+		const center = lamp.getBoundingClientRect();
+		const layerRect = layer.getBoundingClientRect();
+		const [originX, originY] = getComputedStyle(sweep).transformOrigin.split(" ").map(parseFloat);
+		return [layerRect.x + sweep.offsetLeft + originX - center.x - center.width / 2,
+			layerRect.y + sweep.offsetTop + originY - center.y - center.height / 2];
+	};
+	const originalLamp = lampOffset();
+	const badgeGap = () => badge && tower ? tower.getBoundingClientRect().left - badge.getBoundingClientRect().right : null;
+	const originalBadgeGap = badgeGap();
+	if (tower && animation) {
+		card.style.setProperty("--knomo-beacon-tower-width", "40px");
+		card.style.setProperty("--knomo-beacon-tower-right", "15px");
+		layer.style.setProperty("--knomo-beacon-tower-bottom", "3px");
+	}
+	const movedLamp = lampOffset();
+	const movedBadgeGap = badgeGap();
+	card.style.removeProperty("--knomo-beacon-tower-width");
+	card.style.removeProperty("--knomo-beacon-tower-right");
+	layer.style.removeProperty("--knomo-beacon-tower-bottom");
+	if (animation) sample(0.72);
+	const style = getComputedStyle(layer);
+	const rect = card.getBoundingClientRect(), layerRect = layer.getBoundingClientRect();
+	const button = card.querySelector<HTMLElement>(".knomo-card-menu")!;
+	const buttonRect = button.getBoundingClientRect();
+	return { keyframes, duration, originalLamp, movedLamp, originalBadgeGap, movedBadgeGap, staticGlow: style.backgroundImage, radius: style.borderRadius,
+		pointerEvents: style.pointerEvents, coversCard: rect.width === layerRect.width && rect.height === layerRect.height,
+		buttonHit: document.elementFromPoint(buttonRect.x + buttonRect.width / 2, buttonRect.y + buttonRect.height / 2)?.closest("button") === button,
+		towerCount: layer.querySelectorAll(".knomo-card-beacon-tower").length, waveCount: card.querySelectorAll(".knomo-card-time-buoy-wave").length,
 		cardCount: flow.querySelectorAll(".knomo-card").length, time: card.querySelector(".knomo-card-time")!.textContent,
-		accent: getComputedStyle(card.querySelector(".knomo-card-beacon")!).color };
+		badgeColor: badge ? getComputedStyle(badge).color : undefined };
+}
+
+export async function beaconCardLayout(options: { mobile: boolean; dark: boolean }) {
+	const h = fixture(options.mobile, true), { view, flow } = h;
+	prepareBeaconSurface(flow, { ...options, reduce: false });
+	flow.style.width = "100%";
+	flow.parentElement!.style.width = "100%";
+	flow.parentElement!.classList.toggle("is-mobile-compact", options.mobile);
+	flow.parentElement!.classList.toggle("is-layout-desktop-narrow", !options.mobile && innerWidth < 600);
+	flow.parentElement!.classList.toggle("is-layout-desktop-wide", !options.mobile && innerWidth >= 600);
+	view.memoMarkdownRenderer.queueMemoMarkdown = (memo: MemoViewItem, content: HTMLElement) => {
+		content.replaceChildren();
+		if (memo.contentSnapshot === "short") content.createEl("p", { text: "A short Memo." });
+		else {
+			content.createEl("p", { text: "A longer Memo with enough text to wrap naturally in a narrow panel. ".repeat(4) });
+			const task = content.createEl("ul").createEl("li");
+			task.createEl("input", { cls: "task-list-item-checkbox", attr: { type: "checkbox" } });
+			task.append("One task with ");
+			task.createEl("a", { text: "a link", attr: { href: "#example" } });
+			content.createEl("blockquote", { text: "A quoted paragraph in the same Memo." });
+		}
+	};
+	const states = [];
+	for (const top of [false, true]) for (const buoy of [false, true]) for (const content of ["short", "long", ""]) {
+		const memo = h.makeMemo(1, 0, content !== "long");
+		memo.contentSnapshot = content;
+		flow.replaceChildren(); view.renderedCardMemos.clear();
+		view.beaconService = { getSnapshot: (): BeaconSnapshot => top ? { state: "ready", selection: 1, memo } : { state: "unset", selection: 0 } };
+		view.getVisibleMemoTimeBuoy = () => buoy ? { status: "today", label: "Time buoy" } : undefined;
+		view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos: [memo] }, null);
+		await h.settle();
+		const card = flow.querySelector("article")!;
+		const rect = card.getBoundingClientRect();
+		const relative = (r: DOMRect) => [r.x - rect.x, r.y - rect.y, r.width, r.height];
+		const text = card.querySelector(".knomo-card-content p");
+		const range = document.createRange();
+		if (text) range.selectNodeContents(text);
+		states.push({ top, buoy, content, card: [rect.width, rect.height],
+			padding: getComputedStyle(card).padding, margin: getComputedStyle(card).margin,
+			children: Array.from(card.querySelectorAll(".knomo-card-head, .knomo-card-body, .knomo-card-menu, .knomo-card-images, .knomo-card-content"), el => relative(el.getBoundingClientRect())),
+			lines: Array.from(range.getClientRects(), relative) });
+	}
+	return states;
 }
 
 const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));

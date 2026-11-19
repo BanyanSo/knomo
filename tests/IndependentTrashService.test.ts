@@ -39,6 +39,23 @@ test("灯标删除通知只来自已确认落盘的原目标，Catalog 失败也
 	}
 });
 
+test("已经导入的旧回收站记录可直接查看、恢复和永久删除", async () => {
+	const f = await fixture();
+	const restored = { snapshotId: "legacy_" + "a".repeat(64), deletedAt: "2026-09-08T12:00:00Z",
+		sourcePath: PATH, logicalDate: "2026-09-08", section: "## Memos", rawBlock: "- 11:30 previously imported" };
+	const purged = { ...restored, snapshotId: "legacy_" + "b".repeat(64), rawBlock: "- 12:30 discard" };
+	await f.vault.app.vault.create(f.store.path, JSON.stringify({ kind: "knomo-trash", items: [restored, purged] }));
+
+	assert.equal((await f.store.query()).items.length, 2);
+	assert.equal((await f.service.restore(await f.store.read(restored.snapshotId))).state, "restored");
+	assert.ok(f.vault.read(PATH)!.includes(restored.rawBlock));
+	assert.deepEqual((await f.store.query()).items, [purged]);
+	const afterRestore = f.vault.read(PATH);
+	await f.service.purge(await f.store.read(purged.snapshotId));
+	assert.equal(f.vault.read(PATH), afterRestore);
+	assert.deepEqual((await f.store.query()).items, []);
+});
+
 test("snapshot-first 删除不越过历史裸空行范围，子块 ID 展示与 raw 恢复保持一致", async () => {
 	for (const rawBlock of ["- 10:30 body", "- 10:30 intro\n  \n  - child ^child \t", "- 10:30 ^main\n  > quote"]) {
 		const suffix = "\n\n  outside\n- 11:00 neighbor\n";

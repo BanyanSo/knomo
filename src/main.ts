@@ -29,12 +29,10 @@ import { MonthlyProjectionInputBuilder } from "./services/MonthlyProjectionInput
 import { IndexedDbMemoCatalogStore } from "./services/IndexedDbMemoCatalogStore";
 import { KnomoCurrentConfigService } from "./services/KnomoCurrentConfigService";
 import { KnomoStartupBootstrapService } from "./services/KnomoStartupBootstrapService";
-import { LegacyTrashMigrationService } from "./services/LegacyTrashMigrationService";
 import { IndependentTrashService } from "./services/IndependentTrashService";
 import { TrashSnapshotStore } from "./services/TrashSnapshotStore";
 import { showKnomoConfirmModal } from "./ui/KnomoConfirmModal";
 import { createClearTrashAction } from "./ui/clearTrashAction";
-import { LegacyIndexReader } from "./services/LegacyIndexReader";
 import { LowPriorityWorkQueue } from "./services/LowPriorityWorkQueue";
 import { MemoCatalogService } from "./services/MemoCatalogService";
 import { MemoCommandService } from "./services/MemoCommandService";
@@ -75,7 +73,6 @@ export default class KnomoPlugin extends Plugin {
 	private memoCommandService: MemoCommandService | null = null;
 	private catalogReadService: CatalogReadService | null = null;
 	private monthlyProjectionCoordinator: MonthlyProjectionCoordinator | null = null;
-	private legacyTrashMigrationService: LegacyTrashMigrationService | null = null;
 	private memoCatalogService: MemoCatalogService | null = null;
 	private runtimeInitializationPromise: Promise<boolean> | null = null;
 	private quickCommandController: KnomoQuickCommandController<WorkspaceLeaf> | null = null;
@@ -98,10 +95,7 @@ export default class KnomoPlugin extends Plugin {
 		const dailyInventory = new DailyInventoryIndex();
 		const pluginDataStore = new PluginDataStore(this);
 		this.settingsService = new SettingsService(this, pluginDataStore, {
-			runExclusive: async (action) => {
-				await this.legacyTrashMigrationService?.waitForIdle();
-				return this.memoCommandService === null ? action() : this.memoCommandService.runWithMutationsPaused(action);
-			},
+			runExclusive: (action) => this.memoCommandService === null ? action() : this.memoCommandService.runWithMutationsPaused(action),
 			assertActive: () => { if (lowPriorityWorkQueue.signal.aborted) throw new Error("Monthly relocation cancelled."); },
 		});
 		this.vaultTagIndex = this.addChild(new VaultTagIndex(this.app));
@@ -123,11 +117,10 @@ export default class KnomoPlugin extends Plugin {
 		this.register(this.cancelStartup);
 		// 三路独立 I/O 同步发起并立即汇合；时间浮标默认值仍串行等待设置。
 		// 工作区恢复可能早于布局就绪，视图注册必须等待 DB（含降级）打开终态。
-		const [settingsLoaded] = await Promise.all([
+		await Promise.all([
 			(async () => {
 				const loaded = await this.loadSettingsSafely();
 				if (loaded && !lowPriorityWorkQueue.signal.aborted) await this.initializeTimeBuoyDefaultSafely();
-				return loaded;
 			})(),
 			this.refreshDailyStatusSafely(dailyNoteService),
 			memoCatalogService.open().finally(() => {
@@ -362,8 +355,6 @@ export default class KnomoPlugin extends Plugin {
 				getScanSnapshot: () => this.catalogIndexCoordinator!.getScanSnapshot(),
 				getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 				rebuildLocalCatalog: () => this.catalogIndexCoordinator?.rebuildLocalCatalog() ?? Promise.resolve(),
-				getLegacyImportStatus: () => this.legacyTrashMigrationService?.getReport().status ?? "idle",
-				getLegacyCleanupPending: () => Boolean(this.legacyTrashMigrationService?.getReport().cleanupCandidate),
 				getCurrentConfigurationStatus: () => knomoCurrentConfigService.getStatus(),
 				getSettingsStatus: () => this.settingsService.getLoadStatus(),
 				getStartupBootstrapSnapshot: getStartupSnapshot,
@@ -440,33 +431,6 @@ export default class KnomoPlugin extends Plugin {
 			isActive: () => !lowPriorityWorkQueue.signal.aborted,
 		});
 
-		const legacyIndexReader = new LegacyIndexReader(
-			this.app,
-			() => this.settingsService.getSettings().monthlyMemoFolder,
-		);
-		this.legacyTrashMigrationService = new LegacyTrashMigrationService(this.app, legacyIndexReader, {
-			pluginDataStore,
-			runExclusive: (action) => this.memoCommandService!.runWithMutationsPaused(action),
-			onReportChanged: async () => {
-				if (lowPriorityWorkQueue.signal.aborted) return;
-				await this.queueRefreshOpenViews();
-				settingTab?.refreshAttentionIfVisible();
-			},
-			getTrashFolder,
-			isReady: () => this.settingsService.getLoadStatus() === "ready",
-			scheduleRetry: (action, delayMs) => {
-				const win = this.app.workspace.containerEl.win;
-				const timer = win.setTimeout(action, delayMs);
-				return () => win.clearTimeout(timer);
-			},
-			migrateSettings: async () => {
-				await knomoCurrentConfigService.initialize();
-				await this.settingsService.persistLegacyConfiguration();
-			},
-			signal: lowPriorityWorkQueue.signal,
-			yieldControl: () => new Promise((resolve) => this.app.workspace.containerEl.win.setTimeout(resolve, 0)),
-		});
-
 		this.app.workspace.onLayoutReady(() => {
 			if (lowPriorityWorkQueue.signal.aborted) return;
 			let confirmedDailyConfiguration = JSON.stringify(dailyNotesProvider.getConfig());
@@ -526,7 +490,6 @@ export default class KnomoPlugin extends Plugin {
 				await refreshCatalogInventory();
 			}
 			await initializeMonthly();
-			await this.legacyTrashMigrationService?.run();
 			await this.beaconService?.retry();
 			void this.favoriteService?.retry();
 		};
@@ -617,7 +580,6 @@ export default class KnomoPlugin extends Plugin {
 			this.catalogReadService,
 			this.monthlyProjectionCoordinator,
 			knomoCurrentConfigService,
-			this.legacyTrashMigrationService,
 			startupBootstrapService,
 			retryRuntimeState,
 		);
@@ -627,17 +589,13 @@ export default class KnomoPlugin extends Plugin {
 
 		// 前台默认值已完成；后台配置串行链与 inventory 同步启动。
 		const configurationInitialization = knomoCurrentConfigService.initialize();
-		const bootstrapInitialization = startupBootstrapService.initialize(configurationInitialization).catch(() => undefined);
+		void startupBootstrapService.initialize(configurationInitialization).catch(() => undefined);
 		void trackCatalogInventory(this.catalogIndexCoordinator.initialize());
 		this.runtimeInitializationPromise = initializeCatalogRuntime({
 			initializeCatalog: () => catalogInitialization,
 			primeCatalog: async () => { await this.catalogReadService?.prime(); },
 			initializeConfiguration: () => configurationInitialization,
 			initializeMonthly,
-			initializeRecovery: async () => {
-				if (settingsLoaded) await bootstrapInitialization;
-				if (!lowPriorityWorkQueue.signal.aborted) await this.legacyTrashMigrationService?.run();
-			},
 			isCancelled: () => lowPriorityWorkQueue.signal.aborted,
 			onAuxiliaryError: () => settingTab?.refreshAttentionIfVisible(),
 		}).catch(() => {

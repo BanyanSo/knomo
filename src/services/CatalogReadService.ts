@@ -28,7 +28,6 @@ import type {
 	MonthlyProjectionState,
 	CatalogTagFacet,
 } from "../types/catalogView";
-import type { LegacyMigrationStatus } from "../types/legacyMigration";
 import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
 import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
@@ -62,8 +61,6 @@ export interface CatalogReadServiceOptions {
 	catalog: MemoCatalogService;
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
-	getLegacyImportStatus?: () => LegacyMigrationStatus;
-	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getScanSnapshot?: () => CatalogScanSnapshot;
@@ -146,17 +143,9 @@ export class CatalogReadService {
 			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
 		let currentConfiguration: KnomoRuntimeAttentionSnapshot["currentConfiguration"] = "unavailable";
-		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "pending";
-		let legacyCleanupPending = false;
 		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
 			currentConfiguration = this.options.getCurrentConfigurationStatus?.() ?? "missing";
-		} catch {
-			// 保留 unavailable。
-		}
-		try {
-			legacyMigration = this.options.getLegacyImportStatus?.() ?? "idle";
-			legacyCleanupPending = this.options.getLegacyCleanupPending?.() ?? false;
 		} catch {
 			// 保留 unavailable。
 		}
@@ -170,8 +159,6 @@ export class CatalogReadService {
 			catalogLifecycle,
 			currentConfiguration,
 			monthly: this.getProjectionState(),
-			legacyMigration,
-			legacyCleanupPending,
 		};
 	}
 

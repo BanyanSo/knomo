@@ -3,14 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-test("生产装配保留 Catalog、迁移和恢复入口", async () => {
+test("生产装配保留 Catalog 和当前回收站入口", async () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	assert.equal(main.includes("initializeMonthlyExcludeDefaultSafely"), true);
 	for (const serviceName of [
 		"CatalogReadService",
 		"MemoCommandService",
-		"LegacyIndexReader",
-		"LegacyTrashMigrationService",
 		"IndependentTrashService",
 	]) {
 		assert.equal(main.includes(serviceName), true, `main.ts should wire ${serviceName}.`);
@@ -132,16 +130,10 @@ test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取�
 	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
 });
 
-test("普通事件和手动刷新不触发旧源导入，生产 runtime 无身份恢复队列", () => {
+test("生产 runtime 无旧迁移入口和身份恢复队列", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
+	assert.doesNotMatch(main, /LegacyIndexReader|LegacyTrashMigrationService|initializeRecovery/iu);
 	assert.doesNotMatch(main, /identityRecoveryCoordinator|snapshotRevisionTransitionQueue|reconcileIdentityLedger/u);
-	const settled = checkedSourceSlice(main, "onCatalogSettled: async () =>", "const markdownMutationService");
-	assert.doesNotMatch(settled, /legacyTrashMigrationService/u);
-	const refresh = checkedSourceSlice(main, "private runManualRefresh()");
-	assert.doesNotMatch(refresh, /legacyTrashMigrationService/u);
-	assert.doesNotMatch(main, /legacyTrashMigrationService\.start/u);
-	const migration = fs.readFileSync("src/services/LegacyTrashMigrationService.ts", "utf8");
-	assert.doesNotMatch(migration, /vault\.on\(|getCatalogCoverage|getObservationBatches|completionStore/u);
 });
 
 function checkedSourceSlice(source: string, startMarker: string, endMarker?: string): string {

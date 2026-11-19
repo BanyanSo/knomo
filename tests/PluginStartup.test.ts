@@ -7,6 +7,7 @@ import type { CatalogQueryPage } from "../src/types/catalog";
 import type { FavoriteService } from "../src/services/FavoriteService";
 import type { BeaconService } from "../src/services/BeaconService";
 import type { MemoCommandService } from "../src/services/MemoCommandService";
+import { DEFAULT_DAILY_HEADING } from "../src/constants";
 
 let Plugin: typeof import("../src/main").default;
 let Settings: typeof import("../src/services/SettingsService").SettingsService;
@@ -262,46 +263,57 @@ for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {
 	});
 }
 
-test("启动读取旧迁移 completion 挂起时，生产命令仍可提交 Daily 编辑", async t => {
-	const h = harness(t, "ready", true);
-	const loading = h.plugin.onload();
-	h.release();
-	await loading;
-	h.layout();
-	h.monthly.resolve();
-	await h.getBootstrap().initialize();
+const savedSettings = { monthlyMemoFolder: "Archive", dailyHeading: "## Capture" };
+const completedMarker = { completed: true, legacySystemRoot: "Archive/_knomo-system", sourceRevision: "a".repeat(64) };
+for (const [state, marker, settings] of [
+	["缺失", undefined, savedSettings],
+	["已完成", completedMarker, savedSettings],
+	["损坏", { completed: false }, savedSettings],
+	["是唯一字段", completedMarker, undefined],
+] as const) {
+	test(`旧迁移标记${state}时，启动和设置重试不处理旧目录`, async t => {
+		const h = harness(t, "ready", true);
+		const { InMemoryVault } = await import("./helpers/InMemoryVault");
+		const original = { "Archive/_knomo-system/indexes/memo-index-2026-08.json": "{}" };
+		const vault = new InMemoryVault(original);
+		const oldFolderAccesses: string[] = [];
+		const lookup = vault.app.vault.getAbstractFileByPath;
+		vault.app.vault.getAbstractFileByPath = path => {
+			if (path.startsWith("Archive/_knomo-system")) oldFolderAccesses.push(path);
+			return lookup(path);
+		};
+		Object.assign(h.plugin.app.vault, vault.app.vault);
+		let retryRuntimeState!: () => Promise<void>;
+		Object.assign(h.plugin, {
+			addSettingTab: (tab: { retryRuntimeState(): Promise<void> }) => {
+				retryRuntimeState = () => tab.retryRuntimeState();
+			},
+		});
+		await h.plugin.saveData({
+			...(settings === undefined ? {} : { settings }),
+			...(marker === undefined ? {} : { legacyMigration: marker }),
+		});
 
-	const { TFile } = await import("obsidian");
-	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md" });
-	let content = "- 09:00 before\n";
-	const parsed = await new DiaryMemoParser().parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(content) });
-	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
-	Object.assign(h.plugin.app.vault, {
-		getAbstractFileByPath: (path: string) => path === file.path ? file : null,
-		read: async () => content,
-		process: async (_file: unknown, update: (value: string) => string) => { content = update(content); return content; },
+		const loading = h.plugin.onload();
+		h.release();
+		await loading;
+		h.layout();
+		h.monthly.resolve();
+		await h.getBootstrap().initialize();
+		h.background.resolve();
+		await turn();
+		await retryRuntimeState();
+
+		assert.equal((await h.queries[0])!.lifecycle.state, "ready");
+		assert.equal(h.getBootstrap().getSnapshot().status, "ready");
+		assert.equal(h.plugin.settingsService.getSettings().dailyHeading, settings?.dailyHeading ?? DEFAULT_DAILY_HEADING);
+		const persisted = h.saved() as { settings?: { timeBuoyEnabled?: boolean }; legacyMigration?: unknown };
+		assert.equal(persisted.settings?.timeBuoyEnabled, true);
+		assert.deepEqual(persisted.legacyMigration, marker);
+		assert.deepEqual(oldFolderAccesses, []);
+		assert.deepEqual(vault.snapshot(), original);
 	});
-	Object.assign(h.plugin, { updateCommittedCatalogPartition: async () => {} });
-	const entered = deferred(), release = deferred();
-	t.after(() => release.resolve());
-	h.plugin.loadData = async () => { entered.resolve(); await release.promise; return h.saved(); };
-	h.background.resolve();
-	await entered.promise;
-	const { memoCommandService, legacyTrashMigrationService } = h.plugin as unknown as {
-		memoCommandService: import("../src/services/MemoCommandService").MemoCommandService;
-		legacyTrashMigrationService: import("../src/services/LegacyTrashMigrationService").LegacyTrashMigrationService;
-	};
-	const editing = memoCommandService.startEdit({ observationHandle: parsed.observations[0]! } as unknown as import("../src/types/catalogView").CatalogMemoItem, "after");
-	const settled = Promise.all([editing.dailyCommitted, editing.settled]);
-	try {
-		await settled;
-		assert.equal(content, "- 09:00 after\n");
-	} finally {
-		release.resolve();
-		await legacyTrashMigrationService.waitForIdle();
-	}
-});
+}
 
 for (const stage of ["read", "process", "committed"] as const) {
 	test(`普通 Daily 写入在 ${stage} 阶段卸载插件，取消未提交写入并保留已提交正文`, async t => {
@@ -354,22 +366,20 @@ for (const stage of ["read", "process", "committed"] as const) {
 	});
 }
 
-test("生产手动刷新仅刷新 Catalog 和视图，不运行旧源迁移", async () => {
-	let refreshed = 0, views = 0, imported = 0;
+test("生产手动刷新合并重复请求并刷新 Catalog 和视图", async () => {
+	let refreshed = 0, views = 0;
 	const result = { scannedFiles: 1, created: 0, updated: 0, deleted: 0, skipped: 1, failed: 0, errors: [] };
 	const plugin = Object.create(Plugin.prototype) as { runManualRefresh(): Promise<unknown> };
 	Object.assign(plugin, {
 		manualRefreshPromise: null,
 		memoCommandService: { refreshLocalCatalog: async () => { refreshed++; return result; } },
 		refreshOpenViews: async () => { views++; },
-		legacyTrashMigrationService: { run: async () => { imported++; } },
 	});
 	const first = plugin.runManualRefresh();
 	assert.equal(plugin.runManualRefresh(), first);
 	assert.equal(await first, result);
 	assert.equal(refreshed, 1);
 	assert.equal(views, 1);
-	assert.equal(imported, 0);
 });
 
 function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable" = "ready", p2 = false) {

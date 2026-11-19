@@ -603,7 +603,7 @@ Knomo writes to Markdown files. To reduce risk:
 
 - back up your Vault before first use;
 - make sure Obsidian Sync, Git, or other sync tools are working normally;
-- back up before migrating legacy Knomo data;
+- to import Trash from Knomo 1.2.9 or earlier, complete the import in a version that offers legacy Trash recovery, such as 1.14.8, before upgrading. Imported records remain available in the current Trash;
 - check the original Markdown if the card flow looks inconsistent;
 - use repair / rebuild tools if the index becomes outdated;
 - treat Markdown files as the long-term trusted source.

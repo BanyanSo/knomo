@@ -40,8 +40,6 @@ export interface MemoCommandServiceOptions {
 	getProjectionState?: () => MonthlyProjectionState;
 	getMemoTimeFormat: () => "HH:mm" | "HH:mm:ss";
 	rebuildLocalCatalog: () => Promise<void>;
-	getLegacyImportStatus?: () => import("../types/legacyMigration").LegacyMigrationStatus;
-	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getScanSnapshot?: () => CatalogScanSnapshot;
@@ -91,8 +89,6 @@ export class MemoCommandService {
 			catalog,
 			requestObservationScan: async () => { await options.refreshLocalCatalog(); },
 			getProjectionState: options.getProjectionState,
-			getLegacyImportStatus: options.getLegacyImportStatus,
-			getLegacyCleanupPending: options.getLegacyCleanupPending,
 			getCurrentConfigurationStatus: options.getCurrentConfigurationStatus,
 			getSettingsStatus: options.getSettingsStatus,
 			getScanSnapshot: options.getScanSnapshot,

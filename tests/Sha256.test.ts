@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sha256Bytes, sha256Text } from "../src/utils/sha256";
 import { canonicalJson as monthlyJson } from "../src/services/CanonicalJson";
-import { canonicalJson as legacyJson } from "../src/utils/canonicalJson";
 
 const EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const UNICODE_DIGEST = "980dbb99782196a90dd8d093974da8b0528ba1979eb224cc51a3a21361a76d4b";
@@ -53,10 +52,8 @@ test("SHA-256 原样传播 Web Crypto digest 的拒绝", async t => {
 	await assert.rejects(sha256Text("text"), error => error === failure);
 });
 
-test("两套 canonical JSON 保持补充平面键的历史排序及固定摘要", async () => {
+test("Monthly canonical JSON 保持补充平面键的排序及固定摘要", async () => {
 	const value = { "\u{10000}": { z: true, a: "备忘" }, "\uE000": [1, "🌱"] };
 	assert.equal(monthlyJson(value), '{"\uE000":[1,"🌱"],"\u{10000}":{"a":"备忘","z":true}}');
-	assert.equal(legacyJson(value), '{"\u{10000}":{"a":"备忘","z":true},"\uE000":[1,"🌱"]}');
 	assert.equal(await sha256Text(monthlyJson(value)), "87f40526efc69549740d203ac0736ce94715e0d3b265b6c769eb478ae0a7e757");
-	assert.equal(await sha256Text(legacyJson(value)), "72637bbb8bb92414f305c963cb27e745953d253fd01015ae2eb4df42ce65f79d");
 });

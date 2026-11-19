@@ -1525,8 +1525,7 @@ test("P8 Daily 先到 B，后到 Trash、marker 和旧开发文件的事件不�
 	const catalog = new MemoCatalogService(store);
 	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
-	const read = new CatalogReadService({ catalog, now: () => new Date(2026, 8, 8),
-		getLegacyImportStatus: () => "idle" });
+	const read = new CatalogReadService({ catalog, now: () => new Date(2026, 8, 8) });
 	try {
 		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
 		const before = await store.query({ limit: 10 });

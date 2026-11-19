@@ -11,7 +11,6 @@ import type {
 	ResolvedMemo,
 } from "./catalog";
 import type { KnomoCurrentConfigStatus } from "./knomoConfig";
-import type { LegacyMigrationStatus } from "./legacyMigration";
 import type { KnomoSettingsLoadStatus } from "./settings";
 
 export type CatalogReadState = "ready" | "history_building" | "storage_unavailable";
@@ -41,8 +40,6 @@ export interface KnomoRuntimeAttentionSnapshot {
 	catalogLifecycle: CatalogStoreLifecycle;
 	currentConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
-	legacyMigration: LegacyMigrationStatus;
-	legacyCleanupPending?: boolean;
 }
 
 export interface CatalogMemoItem {

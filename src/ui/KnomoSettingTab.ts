@@ -23,7 +23,6 @@ import type {
 import type { CatalogReadService } from "../services/CatalogReadService";
 import type { MemoCommandService } from "../services/MemoCommandService";
 import type { MonthlyProjectionCoordinator } from "../services/MonthlyProjectionCoordinator";
-import type { LegacyTrashMigrationService } from "../services/LegacyTrashMigrationService";
 import { KnomoError } from "../types/serviceError";
 import type { DailyInsertPosition, MemoTimeFormat, MonthlyDateOrder } from "../types/settings";
 import { formatDatePart } from "../utils/date";
@@ -65,7 +64,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 	private rebuildRunning = false;
 	private runtimeRetryRunning = false;
 	private monthlyRetryRunning = false;
-	private legacyMigrationRunning = false;
 	private currentConfigRetryRunning = false;
 	private monthlyFileFormatMigrationRunning = false;
 	private timeBuoyToggleRunning = false;
@@ -96,7 +94,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 		private readonly catalogReadService: CatalogReadService,
 		private readonly monthlyProjectionCoordinator: MonthlyProjectionCoordinator,
 		private readonly knomoCurrentConfigService: Pick<KnomoCurrentConfigService, "getStatus" | "getLastError" | "reloadConfiguration" | "refreshLocalConfig">,
-		private readonly legacyTrashMigrationService: Pick<LegacyTrashMigrationService, "getReport"> & { run(mode: "manual"): Promise<unknown> },
 		private readonly startupBootstrapService: KnomoStartupBootstrapService | null,
 		private readonly retryRuntimeState: () => Promise<void>,
 	) {
@@ -229,7 +226,7 @@ export class KnomoSettingTab extends PluginSettingTab {
 		parent.empty();
 		const currentKinds = this.getAttentionKinds();
 		const running = this.rebuildRunning || this.runtimeRetryRunning || this.monthlyRetryRunning
-			|| this.legacyMigrationRunning || this.currentConfigRetryRunning;
+			|| this.currentConfigRetryRunning;
 		const kinds = running
 			? [...new Set([...currentKinds, ...this.renderedAttentionKinds])]
 			: currentKinds;
@@ -753,56 +750,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			});
 	}
 
-	private renderLegacyMigration(setting: Setting): void {
-		setting
-			.setName(t("settings.legacyMigration.name"))
-			.setDesc(this.getLegacyMigrationDescription());
-		setting.addButton((button) => {
-			button.setButtonText(t(this.legacyMigrationRunning
-				? "settings.attention.retrying"
-				: this.legacyTrashMigrationService.getReport().cleanupCandidate
-					? "settings.legacyMigration.retryCleanup" : "settings.legacyMigration.retry"));
-			button.setDisabled(this.legacyMigrationRunning);
-			button.onClick(() => {
-				void this.runLegacyMigration(button);
-			});
-		});
-	}
-
-	private async runLegacyMigration(button: { setDisabled(disabled: boolean): void }): Promise<void> {
-		if (this.legacyMigrationRunning) return;
-		this.legacyMigrationRunning = true;
-		const session = this.settingsSession;
-		button.setDisabled(true);
-		try {
-			await this.legacyTrashMigrationService.run("manual");
-			const report = this.legacyTrashMigrationService.getReport();
-			const complete = ["ready", "not_applicable", "idle"].includes(report.status) && report.cleanupCandidate === null;
-			const message = complete ? t("settings.legacyMigration.completed") : report.cleanupCandidate || report.status === "recovery_required"
-				? this.getLegacyMigrationDescription() : t("settings.attention.retryFailed");
-			this.showAttentionResult(message, !complete, session);
-		} catch (error) {
-			this.showAttentionResult(formatServiceError(error, t("settings.attention.retryFailed")), true, session);
-		} finally {
-			this.legacyMigrationRunning = false;
-			if (session === this.settingsSession && this.settingsVisible) button.setDisabled(false);
-			if (this.settingsVisible) this.refreshSettingTab();
-		}
-	}
-
-	private getLegacyMigrationDescription(): string {
-		const report = this.legacyTrashMigrationService.getReport();
-		if (report.cleanupCandidate) {
-			const diagnostic = report.diagnostics[0];
-			return t("settings.legacyMigration.cleanupDescription", {
-				path: diagnostic?.sourcePath ?? report.cleanupCandidate.legacySystemRoot,
-				reason: diagnostic?.code === "legacy_cleanup_unknown_file"
-					? t("settings.legacyMigration.unknownFile") : diagnostic?.detail ?? "",
-			});
-		}
-		return t("settings.legacyMigration.description");
-	}
-
 	private rememberSettingNoticeValue(key: SettingNoticeKey, value: string): void {
 		this.latestSettingNoticeValues.set(key, value);
 	}
@@ -1252,7 +1199,6 @@ export class KnomoSettingTab extends PluginSettingTab {
 			case "current-config": this.renderCurrentConfigSetting(setting); break;
 			case "catalog": this.renderCatalogAttentionSetting(setting); break;
 			case "monthly": this.renderMonthlyAttentionSetting(setting); break;
-			case "legacy": this.renderLegacyMigration(setting); break;
 		}
 	}
 

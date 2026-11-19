@@ -48,21 +48,6 @@ test("does not expose permanent runtime, maintenance, or monthly locale rows", (
 	assert.doesNotMatch(source, /renderRuntimeStatusSetting|renderMonthlyRebuildSetting|renderMonthlyLocaleSetting/u);
 });
 
-test("legacy attention exposes retry actions and scoped cleanup details", () => {
-	const source = readSettingTabSource();
-	const legacySource = getSourceBetween(
-		source,
-		"\tprivate renderLegacyMigration(",
-		"\n\tprivate rememberSettingNoticeValue(",
-	);
-
-	assert.doesNotMatch(legacySource, /memoId|item\.code|item\.detail/u);
-	assert.match(legacySource, /if \(report\.cleanupCandidate\)/u);
-	assert.doesNotMatch(legacySource, /legacyTrashMigrationService\.run\(\)/u);
-	assert.match(legacySource, /legacyTrashMigrationService\.run\("manual"\)/u);
-	assert.doesNotMatch(legacySource, /explicit/u);
-});
-
 test("settings load failure is routed through the shared retry action", () => {
 	const source = readSettingTabSource();
 	assert.match(source, /case "settings": this\.renderSettingsAttentionSetting\(setting\)/u);

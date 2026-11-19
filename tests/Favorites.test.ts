@@ -155,6 +155,34 @@ test("invalid, duplicate, hidden and known missing collections suspend commands 
 	assert.equal(hidden.store.getState().status, "error");
 });
 
+test("拾星集健康重进复用发现结果，文件事件和显式重试仍核对来源", async t => {
+	const f = await fixture({ [DAILY]: anchoredBody, [FILE]: JSON.stringify(collection([item()])) });
+	const enumerate = t.mock.method(f.app.vault, "getFiles");
+	await f.service.retry(false);
+	await f.service.retry(false);
+	assert.equal(enumerate.mock.callCount(), 0);
+
+	const data = f.favorites();
+	data.items = [];
+	f.vault.replace(FILE, JSON.stringify(data));
+	f.store.fileChanged(FILE);
+	await f.service.retry(false);
+	assert.equal(f.service.persistedCount, 0);
+	assert.equal(enumerate.mock.callCount(), 0);
+	await f.service.retry();
+	assert.equal(enumerate.mock.callCount(), 1);
+
+	// 目录同步或改名可以只触发父目录事件。
+	const { InMemoryVault } = await import("./helpers/InMemoryVault");
+	const { TFolder } = await import("obsidian");
+	f.vault.deliverFrom(new InMemoryVault({ "Arrived/knomo-favorite.json": JSON.stringify(data) }));
+	const folder = f.app.vault.getAbstractFileByPath("Arrived");
+	assert.ok(folder instanceof TFolder);
+	f.store.fileChanged(folder.path, ".trash/Previous", folder);
+	await f.service.retry(false);
+	assert.equal(f.service.status, "conflict");
+});
+
 test("reserved folders do not join live file discovery", async () => {
 	const text = JSON.stringify(collection([item()]));
 	const f = await fixture({ [FILE]: text });
@@ -371,7 +399,7 @@ test("a matching Trash delete and restore transfer a favorite to the new Daily w
 		let restoration = false;
 		const destination = "NewDaily/" + DATE + ".md";
 		const trash = new IndependentTrashService(f.app, snapshots, {
-			getLogicalDateForPath: async () => DATE,
+			getLogicalDateForPath: () => DATE,
 			getOriginalDailyFile: async () => null,
 			getDailyFileForDate: async () => f.app.vault.create(destination, "## Memos\n"),
 			updateCatalogPartition: f.index, refreshCatalogPaths: f.index,
@@ -456,4 +484,49 @@ test("Favorites query keeps same-revision candidates, combines search and tags, 
 	assert.equal(stale.items.length, 0);
 	assert.equal(stale.favoriteProgress.waiting, 1);
 	catalog.close();
+});
+
+test("拾星查询在空批次也返回日期续页，同一范围可继续找到较早的命中", async t => {
+	const paths = Array.from({ length: 73 }, (_, day) =>
+		`Daily/${new Date(Date.UTC(2026, 6, 1 + day)).toISOString().slice(0, 10)}.md`);
+	const files = Object.fromEntries(paths.map((path, index) => [path, `- 10:00 ${index === 0 ? "needle" : "other"} ^first\n`]));
+	const f = await fixture({ ...files, [FILE]: JSON.stringify(collection(paths.map(path => item("first", path)))) });
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { queryFavorites } = await import("../src/services/FavoriteQuery");
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+	t.after(() => catalog.close());
+	const read = new CatalogReadService({ catalog });
+	for (const path of paths) {
+		const source = await f.readSource(path);
+		await catalog.replaceFile({ ...source, blockAnchors: { ...source.blockAnchors }, inventory: {
+			sourcePath: path, logicalDate: source.logicalDate, mtime: 1, size: files[path].length,
+		}, parserVersion: 1, settingsFingerprint: "test", auditedAt: 1 });
+	}
+
+	const resolve = t.mock.method(f.service, "resolve");
+	const query = { text: "needle", limit: 30 };
+	const first = await queryFavorites(read, f.service, query);
+	assert.equal(first.items.length, 0);
+	assert.ok(first.nextCursor);
+	assert.equal(first.nextCursor.catalog, null);
+	const checked = first.favoriteProgress.located;
+	assert.ok(checked > 0 && checked < paths.length);
+	assert.equal(resolve.mock.callCount(), checked);
+	assert.equal((await queryFavorites(read, f.service, { ...query, text: "other", cursor: first.nextCursor })).invalidated, true);
+	let page = first;
+	for (let request = 0; page.nextCursor && request < paths.length; request++) {
+		const calls = resolve.mock.callCount();
+		page = await queryFavorites(read, f.service, { ...query, cursor: page.nextCursor });
+		assert.equal(page.invalidated, false);
+		assert.ok(resolve.mock.callCount() - calls <= checked);
+	}
+	assert.equal(page.nextCursor, null);
+	assert.equal(resolve.mock.callCount(), paths.length);
+	assert.deepEqual(page.items.map(memo => memo.sourcePath), [paths[0]]);
+	assert.equal(page.favoriteProgress.matched, 1);
+
+	f.service.sourceChanged(paths[0]!, "change");
+	assert.equal((await queryFavorites(read, f.service, { ...query, cursor: first.nextCursor })).invalidated, true);
 });

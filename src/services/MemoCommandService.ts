@@ -110,6 +110,10 @@ export class MemoCommandService {
 		return this.mutationBarrier.runPaused(action);
 	}
 
+	runDailyMutation<T>(action: () => Promise<T>): Promise<T> {
+		return this.mutationBarrier.run(action);
+	}
+
 	async rebuildLocalCatalog(): Promise<void> {
 		await this.options.rebuildLocalCatalog();
 	}

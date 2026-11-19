@@ -31,6 +31,7 @@ export class SettingsService {
 	private timeBuoySettingPersisted = false;
 	private monthlyExcludeSettingPersisted = false;
 	private loadStatus: KnomoSettingsLoadStatus = "not_loaded";
+	private loadGeneration = 0;
 	private monthlyExcludeInitializationFailed = false;
 	private settingsWriteQueue: Promise<void> = Promise.resolve();
 	private favoriteStore?: FavoriteStore;
@@ -59,8 +60,10 @@ export class SettingsService {
 	}
 
 	async loadSettings(): Promise<KnomoSettings> {
+		const generation = ++this.loadGeneration;
 		try {
 			const savedData = await this.pluginDataStore.read();
+			if (generation !== this.loadGeneration) return this.getSettings();
 			const settingsData = extractSettingsData(savedData);
 			if (savedData !== null && savedData !== undefined && (!isRecord(settingsData)
 				|| isRecord(savedData) && "settings" in savedData && !isRecord(savedData.settings))) throw new Error("Knomo settings are unreadable.");
@@ -89,6 +92,7 @@ export class SettingsService {
 			this.notifyChanged();
 			return this.getSettings();
 		} catch (error) {
+			if (generation !== this.loadGeneration) return this.getSettings();
 			this.loadStatus = "unavailable";
 			this.notifyChanged();
 			throw error;
@@ -235,6 +239,8 @@ export class SettingsService {
 		const nextSettings = this.migrateSettings(settings);
 		const storedSettings = { ...nextSettings };
 		for (const key of PREFERENCE_KEYS) delete (storedSettings as unknown as Record<string, unknown>)[key];
+		// 较早的读取可能还在等宿主 I/O，之后的读取会等待这次 Vault 写入。
+		this.loadGeneration++;
 		try {
 			await this.pluginDataStore.mutate((savedData) => {
 				if (this.loadedConfiguration !== undefined && this.loadedConfiguration !== configurationFingerprint(extractSettingsData(savedData))) {

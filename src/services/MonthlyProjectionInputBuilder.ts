@@ -179,7 +179,7 @@ export class MonthlyProjectionInputBuilder {
 	async updateDailyFile(file: TFile): Promise<string[]> {
 		const dailyConfig = await this.ensureDailyInventory();
 		const previous = this.dailyInventory.get(file.path);
-		const date = parseDailyNoteDateFromPath(file.path, dailyConfig);
+		const date = file.extension.toLowerCase() === "md" ? parseDailyNoteDateFromPath(file.path, dailyConfig) : null;
 		if (date === null) {
 			this.dailyInventory.remove(file.path);
 			return previous === null ? [] : [previous.logicalDate.slice(0, 7)];
@@ -196,6 +196,7 @@ export class MonthlyProjectionInputBuilder {
 		const dailyConfig = await this.ensureDailyInventory();
 		const removed = this.dailyInventory.remove(path);
 		if (removed !== null) return [removed.logicalDate.slice(0, 7)];
+		if (!path.toLowerCase().endsWith(".md")) return [];
 		const date = parseDailyNoteDateFromPath(path, dailyConfig);
 		return date === null ? [] : [formatDatePart(date).slice(0, 7)];
 	}

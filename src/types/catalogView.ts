@@ -88,7 +88,7 @@ export interface MemoSaveOperation {
 }
 
 export interface CatalogFeatureCursor {
-	catalog: CatalogCursor;
+	catalog: CatalogCursor | null;
 	relationsVersion?: number;
 	favorites?: FavoriteQueryCursor;
 }

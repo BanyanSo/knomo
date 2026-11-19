@@ -268,6 +268,39 @@ test("移动拾星搜索等待本次结果，按当前可见卡片显示来源�
 	} finally { h.controller.removePage(); }
 });
 
+test("移动拾星搜索保留空批次的续页按钮，继续加载后可显示更早的结果", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { t } = await import("../src/i18n");
+	const view = Object.assign(Object.create(KnomoView.prototype), {
+		viewStateController: { activeNav: "favorites" },
+		favoriteService: { status: "ready", cardState: () => ({ favoriteId: "star" }) },
+	});
+	const { getScopedContext, getResultStatus, filterMemos, onResultsAccepted } = Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
+	const progress = { persisted: 33, located: 32, matched: 0, missing: 0, waiting: 0 };
+	const nextCursor = { catalog: null, favorites: { version: 1, catalogRevision: 0, date: "2026-01-01", filter: "favorites", progress } };
+	let pages = 0;
+	const h = createControllerHarness(MobileSearchController, [], undefined, async (_filter, cursor) => {
+		pages++;
+		if (cursor === null) return { ...makeRemotePage([]), nextCursor, favoriteProgress: progress };
+		assert.deepEqual(cursor, nextCursor);
+		return { ...makeRemotePage([createReferenceMemo()]), favoriteProgress: { ...progress, located: 33, matched: 1 } };
+	}, { getScopedContext, getResultStatus, filterMemos, onResultsAccepted });
+	try {
+		h.controller.openPage({ focusInput: false });
+		await settle();
+		assert.equal(pages, 1);
+		assert.equal(h.root.find(".knomo-search-result-feedback")?.getText(), t("favorite.more.title"));
+		assert.ok(h.root.find(".knomo-mobile-search-more"));
+		h.controller.loadMore();
+		await settle();
+		assert.equal(pages, 2);
+		assert.ok(h.root.find(".knomo-card"));
+		assert.equal(h.root.find(".knomo-mobile-search-more"), null);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动搜索延迟出现无阶段文案的骨架；部分空结果不能冒充无匹配", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

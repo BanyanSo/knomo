@@ -131,7 +131,7 @@ test("Monthly 实际搬迁保留同一会话 Restore cleanupOnly，重试不会�
 	const { IndependentTrashService } = await import("../src/services/IndependentTrashService");
 	const store = new TrashSnapshotStore(f.vault.app, () => f.service.getSettings().monthlyMemoFolder);
 	const trash = new IndependentTrashService(f.vault.app, store, {
-		getLogicalDateForPath: async () => "2026-09-09",
+		getLogicalDateForPath: () => "2026-09-09",
 		getOriginalDailyFile: async () => f.vault.app.vault.getAbstractFileByPath("Daily/2026-09-09.md") as TFile,
 		getDailyFileForDate: async () => { throw new Error("unexpected target"); },
 		updateCatalogPartition: async () => undefined, refreshCatalogPaths: async () => undefined,

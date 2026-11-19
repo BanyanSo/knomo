@@ -10,6 +10,7 @@ export const zhCN = {
 	"favorite.unstarUnconfirmed": "暂时无法确认是否已取消拾星。请重新打开拾星集查看。",
 	"favorite.empty.title": "还没有拾星",
 	"favorite.empty.description": "在 Memo 的卡片菜单中选择「拾星」，下次就能在这里找到它。",
+	"favorite.more.title": "本批暂无可显示的拾星",
 	"favorite.noMatch.title": "拾星集中没有匹配的 Memo",
 	"favorite.noMatch.description": "试试更换关键词或清除筛选。",
 	"favorite.loading.title": "正在加载拾星集…",

@@ -3,7 +3,7 @@ import { FavoriteService } from "./services/FavoriteService";
 import type { DailyAnchorSource } from "./services/DailyMemoAnchor";
 import { initializeCatalogRuntime } from "./services/CatalogStartup";
 import { getLanguage, Notice, Platform, Plugin, TFile, TFolder, Vault, View } from "obsidian";
-import type { WorkspaceLeaf } from "obsidian";
+import type { TAbstractFile, WorkspaceLeaf } from "obsidian";
 
 import { KNOMO_VIEW_TYPE } from "./constants";
 import { AttachmentService } from "./services/AttachmentService";
@@ -63,6 +63,7 @@ import { formatDatePart } from "./utils/date";
 import { parseDailyNoteDateFromPath } from "./utils/dailyNotes";
 
 const OPEN_VIEWS_REFRESH_DEBOUNCE_MS = 150;
+const FAVORITES_STARTUP_WORK_PRIORITY = 30;
 export default class KnomoPlugin extends Plugin {
 	settingsService!: SettingsService;
 	private favoriteService: FavoriteService | null = null;
@@ -186,6 +187,11 @@ export default class KnomoPlugin extends Plugin {
 			if (config === null) throw new Error("Obsidian Daily configuration is unknown.");
 			return config;
 		};
+		const getLogicalDateForPath = (path: string) => {
+			const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
+			if (date === null) throw new Error("Daily path does not match the active configuration: " + path);
+			return formatDatePart(date);
+		};
 		const getEffectiveWriteHeading = () => knomoCurrentConfigService.getEffectiveConfig().daily.headings[0] ?? null;
 		const getEffectiveMonthlySettings = () => {
 			const monthly = knomoCurrentConfigService.getEffectiveConfig().monthly;
@@ -266,6 +272,7 @@ export default class KnomoPlugin extends Plugin {
 			},
 		);
 
+		const dailyWriteGateway = new DailyMemoWriteGateway(this.app, diaryMemoParser, { cancellationSignal: lowPriorityWorkQueue.signal });
 		const markdownMutationService = new MarkdownMutationService(this.app, {
 			onCatalogUpdateSettled: change => {
 				if (lowPriorityWorkQueue.signal.aborted) return;
@@ -292,11 +299,7 @@ export default class KnomoPlugin extends Plugin {
 				const date = parseLogicalDate(logicalDate);
 				return dailyNoteService.getOrCreateDailyNoteForDateWithConfig(date, getEffectiveDailyConfig());
 			},
-			getLogicalDateForPath: (sourcePath) => {
-				const date = parseDailyNoteDateFromPath(sourcePath, getEffectiveDailyConfig());
-				if (date === null) throw new Error("Daily path does not match the active configuration: " + sourcePath);
-				return formatDatePart(date);
-			},
+			getLogicalDateForPath,
 			getMemoTimeFormat: () => { if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable."); return this.settingsService.getSettings().memoTimeFormat; },
 			getInsertPosition: () => this.settingsService.getSettings().dailyInsertPosition,
 			updateCatalogPartition: (input) => {
@@ -304,7 +307,7 @@ export default class KnomoPlugin extends Plugin {
 				return this.updateCommittedCatalogPartition(input);
 			},
 			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator?.refreshPaths(paths) ?? Promise.resolve(),
-		}, new DailyMemoWriteGateway(this.app, diaryMemoParser, { cancellationSignal: lowPriorityWorkQueue.signal }));
+		}, dailyWriteGateway);
 
 		const getTrashFolder = () => {
 			if (this.settingsService.getLoadStatus() !== "ready") throw new Error("Knomo settings unavailable.");
@@ -325,11 +328,7 @@ export default class KnomoPlugin extends Plugin {
 				if (lowPriorityWorkQueue.signal.aborted
 					|| this.settingsService.getLoadStatus() !== "ready") throw new Error("Trash operation cancelled or configuration changed.");
 			},
-			getLogicalDateForPath: async (path) => {
-				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
-				if (date === null) throw new Error("Daily path does not match current configuration.");
-				return formatDatePart(date);
-			},
+			getLogicalDateForPath,
 			getOriginalDailyFile: async (path, logicalDate) => {
 				const date = parseDailyNoteDateFromPath(path, getEffectiveDailyConfig());
 				const file = this.app.vault.getAbstractFileByPath(path);
@@ -338,7 +337,7 @@ export default class KnomoPlugin extends Plugin {
 			getDailyFileForDate: (date) => dailyNoteService.getOrCreateDailyNoteForDateWithConfig(parseLogicalDate(date), getEffectiveDailyConfig()),
 			updateCatalogPartition: (input) => this.updateCommittedCatalogPartition(input),
 			refreshCatalogPaths: (paths) => this.catalogIndexCoordinator!.refreshPaths(paths),
-		}, new DailyMemoWriteGateway(this.app, diaryMemoParser));
+		}, dailyWriteGateway);
 		const getTrashService = () => {
 			getTrashFolder();
 			return trashService;
@@ -373,6 +372,7 @@ export default class KnomoPlugin extends Plugin {
 			markdownMutationService,
 		);
 		this.catalogReadService = this.memoCommandService.getReadService();
+		const runDailyMutation = this.memoCommandService.runDailyMutation.bind(this.memoCommandService);
 		const dailyAnchors = {
 			readSource: async (path: string) => {
 				// 灯标只依赖 Daily 范围和可读设置，不等待 Monthly 配置核验。
@@ -407,20 +407,27 @@ export default class KnomoPlugin extends Plugin {
 				const file = this.app.vault.getAbstractFileByPath(path);
 				return file instanceof TFile ? file : null;
 			},
-		});
+		}, runDailyMutation);
 		this.register(() => this.favoriteService?.dispose());
 		this.register(this.memoCatalogService.onChange(path => this.favoriteService?.catalogChanged(path)));
-		this.registerEvent(this.app.vault.on("create", file => favoriteStore.fileChanged(file.path)));
+		const favoriteFileChanged = (file: TAbstractFile, oldPath?: string) =>
+			favoriteStore.fileChanged(file.path, oldPath, file instanceof TFolder ? file : undefined);
+		this.registerEvent(this.app.vault.on("create", favoriteFileChanged));
 		this.registerEvent(this.app.vault.on("modify", file => favoriteStore.fileChanged(file.path)));
-		this.registerEvent(this.app.vault.on("delete", file => favoriteStore.fileChanged(file.path)));
-		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => favoriteStore.fileChanged(file.path, oldPath)));
-		this.app.workspace.onLayoutReady(() => { if (!lowPriorityWorkQueue.signal.aborted) void this.favoriteService?.retry(); });
+		this.registerEvent(this.app.vault.on("delete", favoriteFileChanged));
+		this.registerEvent(this.app.vault.on("rename", favoriteFileChanged));
+		this.app.workspace.onLayoutReady(() => {
+			if (lowPriorityWorkQueue.signal.aborted) return;
+			void lowPriorityWorkQueue.run(FAVORITES_STARTUP_WORK_PRIORITY, () => this.favoriteService!.retry(false)).catch(error => {
+				if (!lowPriorityWorkQueue.signal.aborted) logContinuationFailure("view", "favorites-startup", error);
+			});
+		});
 		this.beaconService = new BeaconService(pluginDataStore, {
 			...dailyAnchors,
 			fromObservation: observation => toParsedCatalogMemoItem(observation, createCatalogCapabilities({ kind: "partial",
 				coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 })),
 			onFailure: (error, operation) => logContinuationFailure("view", `beacon-${operation}`, error),
-		});
+		}, runDailyMutation);
 		this.register(() => this.beaconService?.dispose());
 		this.register(() => this.catalogReadService?.relations.dispose());
 		this.registerTrashEvents(trashStore);

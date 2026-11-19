@@ -276,6 +276,37 @@ test("restore 以完整 block ID 判断冲突，保留连字符和下划线边�
 	}
 });
 
+test("恢复带锚点的 Memo 时，同页引用和代码中的字面文本不构成冲突", async () => {
+	const f = await fixture("## Memos\n- 10:30 memo ^anchor\n- 11:00 [[#^anchor]]\n");
+	const deleted = await f.service.delete(f.initial[0]!);
+	f.vault.replace(PATH, f.vault.read(PATH)! + "\n```md\nexample ^anchor\n```\n");
+	const snapshot = await f.store.read(deleted.snapshotId);
+	const restored = await f.service.restore(snapshot);
+	assert.equal(restored.state, "restored");
+	assert.equal(restored.observation?.existingBlockId, "anchor");
+	assert.match(f.vault.read(PATH)!, /\[\[#\^anchor\]\]/u);
+	assert.equal((await f.store.query()).items.length, 0);
+});
+
+for (const operation of ["delete", "restore"] as const) test(`Trash ${operation} 提交时 Daily 范围变化，保留原文件和快照`, async () => {
+	const f = await fixture();
+	const selected = operation === "restore" ? await f.store.read((await f.service.delete(f.initial[0]!)).snapshotId) : null;
+	const before = f.vault.read(PATH);
+	let current = true;
+	f.options.getLogicalDateForPath = () => {
+		if (!current) throw new Error("Daily scope changed");
+		return "2026-09-08";
+	};
+	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+	f.vault.app.vault.process = (file, update) => {
+		if (file.path === PATH) current = false;
+		return process(file, update);
+	};
+	await assert.rejects(selected ? f.service.restore(selected) : f.service.delete(f.initial[0]!), /Daily/u);
+	assert.equal(f.vault.read(PATH), before);
+	assert.equal((await f.store.query()).items.length, 1);
+});
+
 test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追加或旧 Catalog 覆盖", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);
@@ -403,7 +434,7 @@ async function fixture(body = BODY) {
 	const refreshes: unknown[] = [];
 	let id = 0;
 	const options: import("../src/services/IndependentTrashService").IndependentTrashOptions = {
-		getLogicalDateForPath: async () => "2026-09-08",
+		getLogicalDateForPath: () => "2026-09-08",
 		getOriginalDailyFile: async (path) => vault.app.vault.getAbstractFileByPath(path) as TFile | null,
 		getDailyFileForDate: async (date) => vault.app.vault.create(`NewDaily/${date}.md`, "## Memos\n"),
 		updateCatalogPartition: async (input) => { catalog.push(input); }, refreshCatalogPaths: async (paths) => { refreshes.push(paths); },

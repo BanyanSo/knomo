@@ -131,6 +131,7 @@ export class MobileSearchController {
 	private open = false;
 	private renderGeneration = 0;
 	private debounceTimeoutId: number | null = null;
+	private favoritePageCount = 0;
 
 	private renderTaskId: number | null = null;
 	private renderedRevisions: string[] = [];
@@ -522,8 +523,9 @@ export class MobileSearchController {
 			void this.refreshAppliedResults();
 			return;
 		}
-		this.visibleCount += this.options.batchSize;
 		const matchedCount = this.getMatchedMemos().length;
+		if (this.cursor?.favorites) this.visibleCount = Math.min(this.visibleCount, matchedCount);
+		this.visibleCount += this.options.batchSize;
 		if (this.visibleCount >= matchedCount && this.cursor !== null) {
 			void this.refreshRemoteResults(false);
 			return;
@@ -610,7 +612,9 @@ export class MobileSearchController {
 			const pageRevision = page.catalogRevision;
 			const relationsVersion = page.nextCursor?.relationsVersion ?? this.options.getRelationRevision?.();
 			const seenCursors = new Set<string>();
-			while (staged.size < windowSize && page.nextCursor !== null && page.status.relations?.complete !== false) {
+			const pageBudget = page.favoriteProgress ? Math.max(1, this.favoritePageCount) : Infinity;
+			let pages = 1;
+			while (staged.size < windowSize && pages < pageBudget && page.nextCursor !== null && page.status.relations?.complete !== false) {
 				const cursor = page.nextCursor;
 				const cursorKey = JSON.stringify(cursor);
 				if (seenCursors.has(cursorKey)) throw new Error(t("search.statusChanged"));
@@ -630,6 +634,7 @@ export class MobileSearchController {
 				}
 				if (!page.favoriteProgress && page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 				for (const memo of page.items) staged.set(getMemoRenderKey(memo), memo);
+				pages++;
 			}
 			if (filter.hasReferrers && page.status.relations?.complete === false && this.displayedMemos?.length
 				&& this.getDisplayedRequestKey() === key) {
@@ -651,6 +656,7 @@ export class MobileSearchController {
 			this.displayedMemos = projected;
 			this.revokedResults = null;
 			this.cursor = page.nextCursor;
+			this.favoritePageCount = page.favoriteProgress ? (reset ? 0 : this.favoritePageCount) + pages : 0;
 			if (page.favoriteProgress) {
 				this.acceptedResultsInvalidated = false;
 				this.displayedCount = page.nextCursor === null && page.favoriteProgress.waiting === 0 && page.favoriteProgress.missing === 0
@@ -748,6 +754,9 @@ export class MobileSearchController {
 	suspendLoadingFeedback(): void { this.loadingIndicator.clear(); }
 
 	getDisplayedMemos(): readonly MemoRecord[] { return this.displayedMemos ?? []; }
+	forEachRenderedCard(action: (card: HTMLElement, memo: MemoRecord) => void): void {
+		for (const { card, memo } of this.renderedCards) action(card, memo);
+	}
 	getRevokedMemos(): MemoRecord[] {
 		return this.open && this.revokedResults?.key === this.getViewStateKey() ? [...this.revokedResults.memos.values()] : [];
 	}
@@ -1129,7 +1138,12 @@ export class MobileSearchController {
 			completeRender();
 			return;
 		}
-		if (memos.length === 0 && status) { this.syncResultMetadata(0, 0, false, false); completeRender(); return; }
+		if (memos.length === 0 && status) {
+			const canContinueFavorites = !!this.cursor?.favorites && !readStatus?.blocked && this.queryError === null && !this.acceptedResultsInvalidated;
+			this.syncResultMetadata(0, 0, canContinueFavorites, false);
+			completeRender();
+			return;
+		}
 		if (memos.length === 0 && relationQuery && (readStatus?.complete === false || this.acceptedResultsInvalidated)) { completeRender(); return; }
 		if (memos.length === 0) {
 			const confirmedEmpty = this.getDisplayedCount() === 0 && !this.acceptedResultsInvalidated;

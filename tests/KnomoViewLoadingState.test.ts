@@ -102,6 +102,7 @@ test("拾星集延迟显示加载提示，来源异常按实际卡片区分空�
 		try {
 			const favoriteService = { status: "loading", revision: 1, cardState: () => ({ favoriteId: "star" }) };
 			Object.assign(h.view, { favoriteService, getCatalogQueryFingerprint: () => "favorites-query" });
+			Reflect.deleteProperty(h.view, "renderHistoryLoadMore");
 			h.view.viewStateController.activeNav = "favorites";
 			h.view.renderCardFlow();
 			assert.equal(h.title(), null);
@@ -114,7 +115,8 @@ test("拾星集延迟显示加载提示，来源异常按实际卡片区分空�
 
 			favoriteService.status = "ready";
 			const progress = { persisted: 2, located: 1, matched: 0, waiting: 0, missing: 1 };
-			const window = h.view.favoriteWindow = { key: "favorites-query", version: 1, memos: [] as MemoViewItem[], cursor: null, progress };
+			const window = h.view.favoriteWindow = { key: "favorites-query", version: 1, memos: [] as MemoViewItem[],
+				cursor: null as import("../src/types/catalogView").CatalogFeatureCursor | null, progress };
 			h.view.renderCardFlow();
 			assert.equal(h.title(), t("favorite.missing.title"));
 			assert.equal(h.root.querySelector(".knomo-empty-description")?.textContent, t("favorite.missing.description"));
@@ -127,8 +129,16 @@ test("拾星集延迟显示加载提示，来源异常按实际卡片区分空�
 
 			window.memos = [];
 			window.progress = { ...progress, matched: 0, missing: 0 };
+			window.cursor = { catalog: null, favorites: { date: "2026-01-01", version: 1, catalogRevision: 0,
+				filter: "favorites-query", progress: window.progress } };
+			h.view.renderCardFlow();
+			assert.equal(h.title(), t("favorite.more.title"));
+			assert.ok(h.root.querySelector(".knomo-history-load-more"));
+
+			window.cursor = null;
 			h.view.renderCardFlow();
 			assert.equal(h.title(), t("favorite.noMatch.title"));
+			assert.equal(h.root.querySelector(".knomo-history-load-more"), null);
 		} finally { h.close(); }
 	}
 });

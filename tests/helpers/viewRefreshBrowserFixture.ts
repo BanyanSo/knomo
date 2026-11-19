@@ -826,7 +826,7 @@ export async function mobileRevisionGeometry(options: {
 		cancelRenderTask: id => { callbacks.delete(id); },
 		loadRemoteResults: async (_filter, cursor) => {
 			if (unavailable) throw new Error("Catalog unavailable");
-			const offset = cursor ? Number(cursor.catalog.observationKey) : 0;
+			const offset = cursor?.catalog ? Number(cursor.catalog.observationKey) : 0;
 			requests.push(offset);
 			const limit = options.expanded ? 50 : memos.length;
 			return { items: memos.slice(offset, offset + limit), catalogRevision: 1, coverage, readState: "ready", invalidated: false, degraded: false,

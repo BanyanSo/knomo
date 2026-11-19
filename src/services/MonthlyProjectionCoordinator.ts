@@ -209,14 +209,12 @@ export class MonthlyProjectionCoordinator {
 		periods: readonly string[],
 		priority = MONTHLY_URGENT_PRIORITY,
 	): Promise<void> {
-		for (const period of [...new Set(periods)].sort()) {
-			if (/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)) this.markPending(period, priority);
-		}
-		if (this.pendingPeriods.size > 0) {
-			await this.persistCheckpoint();
-			this.notifyStateChanged();
-			this.scheduleRun(this.getNextDelay());
-		}
+		const validPeriods = [...new Set(periods)].filter(period => /^\d{4}-(?:0[1-9]|1[0-2])$/u.test(period)).sort();
+		if (validPeriods.length === 0) return;
+		for (const period of validPeriods) this.markPending(period, priority);
+		await this.persistCheckpoint();
+		this.notifyStateChanged();
+		this.scheduleRun(this.getNextDelay());
 	}
 
 	invalidateChangedPeriods(periods: readonly string[]): Promise<void> {

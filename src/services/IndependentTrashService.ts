@@ -3,17 +3,18 @@ import { t } from "../i18n";
 import type { App } from "obsidian";
 import type { MemoObservation, ObservationHandle } from "../types/catalog";
 import type { TrashSnapshot, TrashWriteResult } from "../types/trash";
-import { DailyMemoWriteGateway, type PreparedDailyWrite } from "./DailyMemoWriteGateway";
-import { findObservation, findAppendedObservation, getRawBlock, replaceObservation, insertRawBlock, hasBlockId,
+import { DailyMemoWriteGateway, StaleDailyWriteError, type PreparedDailyWrite } from "./DailyMemoWriteGateway";
+import { findObservation, findAppendedObservation, getRawBlock, replaceObservation, insertRawBlock,
 	type MarkdownCatalogCommitInput } from "./MarkdownMutationService";
 import { TrashSnapshotStore, assertVaultPath, type TrashOperationStore } from "./TrashSnapshotStore";
 import { buildDailyMemoPresentationChange, type ConfirmedDailyMemoPresentation } from "./DailyMemoPresentationChange";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
+import { collectRelationBlockAnchors } from "../utils/memoRelations";
 
 export interface IndependentTrashOptions {
 	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation, deletedTarget?: MemoObservation, beforeBlockAnchors?: Readonly<Record<string, number>>, snapshotId?: string, restored?: MemoObservation) => void;
 	assertActive?: () => void;
-	getLogicalDateForPath: (path: string) => Promise<string>;
+	getLogicalDateForPath: (path: string) => string;
 	// 返回 null 表示原路径已不适用；配置不可读必须抛错，不能猜测。
 	getOriginalDailyFile: (path: string, date: string) => Promise<TFile | null>;
 	getDailyFileForDate: (date: string) => Promise<TFile>;
@@ -44,8 +45,9 @@ export class IndependentTrashService {
 			assertVaultPath(original.sourcePath);
 			const file = this.app.vault.getAbstractFileByPath(original.sourcePath);
 			if (!(file instanceof TFile)) throw new Error("Daily file unavailable.");
-			const logicalDate = await this.options.getLogicalDateForPath(file.path);
+			const logicalDate = this.options.getLogicalDateForPath(file.path);
 			const prepared = await this.gateway.prepare({ file, logicalDate, expectedRevision: original.sourceRevision, requireDiskMatch: true,
+				validateTarget: (path, date) => this.assertDailyTarget(path, date),
 				update: (content, parsed) => {
 					store.assertActive();
 					this.options.assertActive?.();
@@ -81,14 +83,20 @@ export class IndependentTrashService {
 			assertVaultPath(file.path);
 			if (!(file instanceof TFile) || !file.path.endsWith(".md")) throw new Error("Restore Daily target unavailable.");
 			const prepared = await this.gateway.prepare({ file, logicalDate: snapshot.logicalDate, expectedRevision: null, requireDiskMatch: true,
+				validateTarget: (path, date) => this.assertDailyTarget(path, date),
 				update: (content, parsed) => {
 					store.assertActive();
 					this.options.assertActive?.();
-					// 包括 Memo 外部锚点；不能制造同文件 blockId 冲突。
-					const ids = snapshot.rawBlock.match(/\^[A-Za-z0-9_-]+(?=\s|$)/gu) ?? [];
-					if (ids.some((id) => hasBlockId(content, id.slice(1)))) throw new Error("Restore block ID already exists in target Daily.");
 					return insertRawBlock(content, snapshot.rawBlock, snapshot.section, "bottom", parsed.observations, file.path);
 				} });
+			// 只比较真实声明，保留带下划线的历史 ID。网关在提交时复核同一份 beforeContent。
+			const ids = Object.keys(collectRelationBlockAnchors(snapshot.rawBlock, "memo", true));
+			if (ids.length) {
+				const existing = ids.some(id => id.includes("_"))
+					? collectRelationBlockAnchors(prepared.beforeContent, "file", true)
+					: prepared.before.blockAnchors ?? collectRelationBlockAnchors(prepared.beforeContent);
+				if (ids.some(id => existing[id])) throw new Error("Restore block ID already exists in target Daily.");
+			}
 			const observation = findAppendedObservation(prepared, snapshot.rawBlock, snapshot.section, "bottom");
 			await store.assertUnchanged(snapshot);
 			// 一旦可能写入，后续按钮只核对落盘并清理，不能再次追加。
@@ -142,13 +150,14 @@ export class IndependentTrashService {
 		try {
 			await store.assertUnchanged(snapshot);
 			this.options.assertActive?.();
-			if (prepared.file.path !== (prepared.before.observations[0]?.sourcePath ?? prepared.after.observations[0]?.sourcePath)) {
-				throw new Error("Daily target path changed.");
-			}
 			await this.gateway.commit(prepared);
 		} catch (error) { throw new TrashDailyWriteError(snapshot.snapshotId, await this.readDailyState(prepared), error); }
 		const state = await this.readDailyState(prepared);
 		if (state !== "after") throw new TrashDailyWriteError(snapshot.snapshotId, state, "Disk write is not confirmed.");
+	}
+
+	private assertDailyTarget(path: string, logicalDate: string): void {
+		if (this.options.getLogicalDateForPath(path) !== logicalDate) throw new StaleDailyWriteError(path);
 	}
 
 	private async readDailyState(prepared: PreparedDailyWrite): Promise<TrashDailyWriteError["dailyState"]> {

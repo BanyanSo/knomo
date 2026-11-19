@@ -12,6 +12,7 @@ export const en: Record<TranslationKey, string> = {
 	"favorite.unstarUnconfirmed": "Couldn’t confirm whether the memo was unstarred. Reopen Favorites to check.",
 	"favorite.empty.title": "No favorites yet",
 	"favorite.empty.description": "Choose Star from a memo’s menu to find it here again.",
+	"favorite.more.title": "No favorites to show in this batch",
 	"favorite.noMatch.title": "No matching memos in Favorites",
 	"favorite.noMatch.description": "Try a different keyword or clear your filters.",
 	"favorite.loading.title": "Loading Favorites…",

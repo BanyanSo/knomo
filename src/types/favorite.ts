@@ -8,9 +8,9 @@ export interface FavoriteQueryProgress {
 
 export interface FavoriteQueryCursor {
 	version: number;
+	catalogRevision: number;
 	filter: string;
 	date: string;
-	checkedDate: boolean;
 	progress: FavoriteQueryProgress;
 }
 

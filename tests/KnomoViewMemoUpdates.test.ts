@@ -84,7 +84,7 @@ test("窗口外灯标编辑在索引落后、两个真实分页窗口刷新及�
 		assert.equal(production.getCatalogPresentationTotalCount.call(view), 160);
 		const cursor = Reflect.get(view, "catalogCursor") as import("../src/types/catalogView").CatalogFeatureCursor;
 		if (view === h.view) { assert.equal(cursor, null); assert.equal(await production.loadNextCatalogPage.call(view), false); continue; }
-		assert.ok(cursor); assert.equal(cursor.catalog.catalogRevision, await h.catalog.getStore().getCatalogRevision());
+		assert.ok(cursor?.catalog); assert.equal(cursor.catalog.catalogRevision, await h.catalog.getStore().getCatalogRevision());
 		assert.equal(await production.loadNextCatalogPage.call(view), true); assert.equal(view.memos.length, 150);
 		assert.equal(new Set(view.memos.map(memo => memo.id)).size, 150);
 		assert.equal(view.memos.some(memo => memo.contentSnapshot === "edited outside"), false);
@@ -2172,7 +2172,7 @@ async function fixture(options: { body?: string; otherBody?: string; immediate?:
 	const mutations = new MarkdownMutationService(app, { ...mutationOptions, getMemoTimeFormat: () => "HH:mm" }, gateway);
 	let snapshotId = 0;
 	const trash = new IndependentTrashService(app, new TrashSnapshotStore(app, () => "Knomo"), {
-		getLogicalDateForPath: async () => DATE, getOriginalDailyFile: async () => file, getDailyFileForDate: async () => file,
+		getLogicalDateForPath: () => DATE, getOriginalDailyFile: async () => file, getDailyFileForDate: async () => file,
 		updateCatalogPartition, refreshCatalogPaths: async () => {}, newSnapshotId: () => "s_" + (++snapshotId),
 	}, gateway);
 	const command = new MemoCommandService(app, catalog, { getMemoTimeFormat: () => "HH:mm", getTrashService: () => trash,

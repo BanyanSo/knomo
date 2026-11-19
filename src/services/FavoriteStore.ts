@@ -1,4 +1,4 @@
-import { TFile, TFolder, type App } from "obsidian";
+import { TFile, TFolder, Vault, type App } from "obsidian";
 import { favoriteLocation, type FavoriteCollection, type FavoriteItem } from "../types/favorite";
 import { assertVaultPath } from "./TrashSnapshotStore";
 import { ensureFolder } from "../utils/vault";
@@ -41,28 +41,28 @@ export class FavoriteStore {
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	dispose(): void { this.closed = true; this.generation++; this.reads.clear(); this.listeners.clear(); }
 
-	retry(): Promise<void> {
+	retry(force = true): Promise<void> {
 		this.started = true;
 		return this.serial(async () => {
-			if (!this.closed && this.isReady()) await this.reconcile(true);
+			if (!this.closed && this.isReady() && (force || this.state.status !== "ready")) await this.reconcile(true);
 		});
 	}
 
 	configurationChanged(): void { this.invalidate(); }
 
-	fileChanged(path: string, oldPath?: string): void {
+	fileChanged(path: string, oldPath?: string, folder?: TFolder): void {
 		if (this.closed || !this.started) return;
 		const paths = oldPath === undefined ? [path] : [oldPath, path];
 		const related = [...this.candidates ?? [], ...this.reads.keys(), this.hint?.path];
 		try { related.push(this.pathFor(this.getFolder())); } catch { /* 配置故障由发现流程报告。 */ }
 		if (!paths.some(changed => (basename(changed) === FILE_NAME && this.validLocation(changed)
 			&& this.app.vault.getAbstractFileByPath(changed) instanceof TFile)
-			|| related.some(current => current && within(current, changed)))) return;
+			|| related.some(current => current && within(current, changed))) && (!folder || !this.folderHasCandidate(folder))) return;
 		for (const changed of paths) {
 			for (const cached of this.reads.keys()) if (within(cached, changed)) this.reads.delete(cached);
 		}
 		// 父目录事件只重建文件名候选集合，未变化的候选无需重新读盘。
-		if (paths.some(changed => basename(changed) !== FILE_NAME)) this.candidates = undefined;
+		if (folder || paths.some(changed => basename(changed) !== FILE_NAME)) this.candidates = undefined;
 		else if (this.candidates) for (const changed of paths) {
 			if (this.validLocation(changed) && this.app.vault.getAbstractFileByPath(changed) instanceof TFile) this.candidates.add(changed);
 			else this.candidates.delete(changed);
@@ -252,9 +252,23 @@ export class FavoriteStore {
 	}
 
 	private listCandidates(force: boolean): string[] {
-		if (force || !this.candidates) this.candidates = new Set(this.app.vault.getFiles()
-			.map(file => file.path).filter(path => basename(path) === FILE_NAME && this.validLocation(path)));
+		if (force || !this.candidates) {
+			const candidates = new Set<string>();
+			for (const { path } of this.app.vault.getFiles()) {
+				if (basename(path) === FILE_NAME && this.validLocation(path)) candidates.add(path);
+			}
+			this.candidates = candidates;
+		}
 		return [...this.candidates];
+	}
+
+	private folderHasCandidate(folder: TFolder): boolean {
+		let found = false;
+		// 宿主可能只通知父目录，搬入的新候选没有单独的文件事件。
+		Vault.recurseChildren(folder, file => {
+			if (!found && file instanceof TFile && basename(file.path) === FILE_NAME && this.validLocation(file.path)) found = true;
+		});
+		return found;
 	}
 
 	private async read(path: string, force: boolean): Promise<WorkingCopy> {

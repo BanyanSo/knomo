@@ -43,7 +43,8 @@ export class BeaconService {
 	private pending: { reference: BeaconReference | null; intent: number; selection: number; generation: number } | null = null;
 	private resolving: { generation: number; intent: number; promise: Promise<void> } | null = null;
 
-	constructor(private readonly store: PluginDataStore, private readonly options: BeaconServiceOptions) {}
+	constructor(private readonly store: PluginDataStore, private readonly options: BeaconServiceOptions,
+		private readonly runMutation: <T>(action: () => Promise<T>) => Promise<T> = action => action()) {}
 	getSnapshot(): BeaconSnapshot { return this.snapshot; }
 	retry(): Promise<void> { return this.readable ? this.refresh() : this.reload(); }
 	isSelectedHandle(handle: ObservationHandle): boolean {
@@ -82,6 +83,10 @@ export class BeaconService {
 	set(handle: ObservationHandle): Promise<void> {
 		const original = { sourcePath: handle.sourcePath, sourceRevision: handle.sourceRevision,
 			startLine: handle.startLine, endLine: handle.endLine, rawBlockHash: handle.rawBlockHash };
+		return this.runMutation(() => this.setSelection(original));
+	}
+
+	private setSelection(original: ObservationHandle): Promise<void> {
 		const intent = ++this.intent;
 		return this.serial(async () => {
 			this.assertWritable();

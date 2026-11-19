@@ -4,6 +4,9 @@ import "fake-indexeddb/auto";
 import type { App, PluginManifest } from "obsidian";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import type { CatalogQueryPage } from "../src/types/catalog";
+import type { FavoriteService } from "../src/services/FavoriteService";
+import type { BeaconService } from "../src/services/BeaconService";
+import type { MemoCommandService } from "../src/services/MemoCommandService";
 
 let Plugin: typeof import("../src/main").default;
 let Settings: typeof import("../src/services/SettingsService").SettingsService;
@@ -81,6 +84,51 @@ test("等待灯标读取不阻断视图注册，卸载后的读取结果不继�
 	h.plugin.unload(); release.resolve(); await loading;
 	assert.equal(h.calls.includes("view"), true);
 	assert.equal(h.getPrimary().getLifecycle().writable, false);
+});
+
+for (const mark of ["favorite", "beacon"] as const) test(`${mark} 正文写入遵守维护屏障，维护等待已开始的操作`, async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	t.after(() => h.monthly.resolve());
+	const { InMemoryVault } = await import("./helpers/InMemoryVault");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Daily/2026-10-13.md", content = "- 09:00 memo\n";
+	const vault = new InMemoryVault({ [path]: content });
+	Object.assign(h.plugin.app.vault, vault.app.vault);
+	Object.assign(h.plugin.app.workspace, { layoutReady: true, getActiveViewOfType: () => null });
+	const runtime = h.plugin as unknown as {
+		favoriteService: FavoriteService; beaconService: BeaconService;
+		memoCommandService: MemoCommandService; catalogIndexCoordinator: InstanceType<typeof Coordinator>;
+	};
+	t.mock.method(runtime.catalogIndexCoordinator, "replaceCommittedFile", async () => undefined);
+	await runtime.beaconService.reload();
+	await runtime.favoriteService.retry();
+	const parsed = await new DiaryMemoParser().parse({ sourcePath: path, logicalDate: "2026-10-13", bytes: Buffer.from(content) });
+	const markMemo = () => mark === "favorite" ? runtime.favoriteService.star(parsed.observations[0]!)
+		: runtime.beaconService.set(parsed.observations[0]!);
+	const pause = (action: () => Promise<void>) => runtime.memoCommandService.runWithMutationsPaused(action);
+	await pause(async () => {
+		await assert.rejects(markMemo(), /being rebuilt/u);
+		assert.equal(vault.read(path), content);
+	});
+
+	const entered = deferred(), release = deferred();
+	t.after(() => release.resolve());
+	const process = h.plugin.app.vault.process.bind(h.plugin.app.vault);
+	h.plugin.app.vault.process = async (file, update) => {
+		if (file.path === path) { entered.resolve(); await release.promise; }
+		return process(file, update);
+	};
+	const marking = markMemo();
+	await entered.promise;
+	let maintenanceStarted = false;
+	const maintenance = pause(async () => { maintenanceStarted = true; });
+	await turn();
+	assert.equal(maintenanceStarted, false);
+	release.resolve();
+	await Promise.all([marking, maintenance]);
+	assert.equal(maintenanceStarted, true);
+	assert.match(vault.read(path)!, / \^[a-z0-9-]+\n$/iu);
 });
 
 for (const degraded of [false, true]) test(`首次生成灯标锚点后文件通知晚到，精确落盘、${degraded ? "索引故障仍展示" : "Catalog 接管"}与幂等保存`, async t => {

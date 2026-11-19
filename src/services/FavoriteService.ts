@@ -28,7 +28,7 @@ type SourceState = { status: "missing" | "waiting" }
 type Transfer = { path: string; file: object | null; restored?: ObservationHandle };
 
 export class FavoriteService {
-	private readonly listeners = new Set<(refreshList: boolean) => void>();
+	private readonly listeners = new Set<(refreshList: boolean, paths?: readonly string[]) => void>();
 	private readonly sources = new Map<string, SourceState>();
 	private readonly reads = new Map<string, Promise<SourceState>>();
 	private readonly transfers = new Map<string, Transfer>();
@@ -43,7 +43,8 @@ export class FavoriteService {
 	private configuration = 0;
 	private closed = false;
 
-	constructor(readonly store: FavoriteStore, private readonly options: FavoriteServiceOptions) {
+	constructor(readonly store: FavoriteStore, private readonly options: FavoriteServiceOptions,
+		private readonly runMutation: <T>(action: () => Promise<T>) => Promise<T> = action => action()) {
 		this.unsubscribe = store.subscribe(() => this.storeChanged());
 	}
 
@@ -53,8 +54,8 @@ export class FavoriteService {
 	getDate(path: string): string | null { return this.options.getDate(path); }
 	paths(): Iterable<string> { return this.byPath.keys(); }
 	countAt(path: string): number { return this.byPath.get(path)?.length ?? 0; }
-	retry(): Promise<void> { return this.store.retry().then(() => this.retryRepairs()); }
-	subscribe(listener: (refreshList: boolean) => void): () => void {
+	retry(force = true): Promise<void> { return this.store.retry(force).then(() => this.retryRepairs()); }
+	subscribe(listener: (refreshList: boolean, paths?: readonly string[]) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -90,6 +91,10 @@ export class FavoriteService {
 
 	async star(handle: ObservationHandle): Promise<void> {
 		const original = { ...handle };
+		return this.runMutation(() => this.starSelection(original));
+	}
+
+	private starSelection(original: ObservationHandle): Promise<void> {
 		return this.perform(original, () => this.store.run(async operation => {
 			const configuration = this.configuration;
 			const file = this.options.getFileIdentity(original.sourcePath);
@@ -170,7 +175,7 @@ export class FavoriteService {
 			this.reads.delete(current);
 			this.sourceSequence.set(current, (this.sourceSequence.get(current) ?? 0) + 1);
 		}
-		if (affected.size) this.changed();
+		if (affected.size) this.changed([...affected]);
 		if (kind === "rename") for (const current of affected) this.checkVisible(current);
 	}
 
@@ -184,7 +189,7 @@ export class FavoriteService {
 	catalogChanged(path?: string): void {
 		if (path && !this.byPath.has(path)) return;
 		if (path && this.sources.get(path)?.status === "waiting") this.sources.delete(path);
-		if (this.byPath.size) this.changed();
+		if (this.byPath.size) this.changed(path ? [path] : undefined);
 	}
 
 	observeSource(source: DailyAnchorSource): void {
@@ -238,8 +243,12 @@ export class FavoriteService {
 		const task = Promise.resolve().then(async (): Promise<SourceState> => {
 			try {
 				const source = parsed ?? await this.options.readSource(path);
-				if (source.path !== path || !await this.options.isSourceCurrent(source) || !current()) return { status: "waiting" };
-				return this.acceptSource(source);
+				if (source.path === path && current() && await this.options.isSourceCurrent(source) && current()) {
+					return this.acceptSource(source);
+				}
+				const waiting = { status: "waiting" } as const;
+				if (current()) this.sources.set(path, waiting);
+				return waiting;
 			} catch (error) {
 				const result: SourceState = { status: error instanceof DailyAnchorSourceUnlocatedError ? "missing" : "waiting" };
 				if (current()) this.sources.set(path, result);
@@ -249,7 +258,7 @@ export class FavoriteService {
 		}).finally(() => {
 			if (this.reads.get(path) === task) {
 				this.reads.delete(path);
-				this.notify(false);
+				this.notify(false, [path]);
 			}
 		});
 		this.reads.set(path, task);
@@ -349,11 +358,11 @@ export class FavoriteService {
 		const key = observationHandleKey(handle);
 		if (this.closed || this.cardState(handle).disabled) throw new Error("Favorites action is already pending.");
 		this.pending.set(key, handle);
-		this.notify(false);
+		this.notify(false, [handle.sourcePath]);
 		try { await action(); }
 		finally { this.pending.delete(key);
 			if (!this.byPath.has(handle.sourcePath)) this.sourceSequence.delete(handle.sourcePath);
-			this.notify(false); }
+			this.notify(false, [handle.sourcePath]); }
 	}
 
 	private storeChanged(): void {
@@ -403,10 +412,10 @@ export class FavoriteService {
 		return items.some(item => item.blockId === blockId && this.transfers.get(item.favoriteId)?.path === sourcePath);
 	}
 
-	private changed(): void { this.version++; this.notify(true); }
-	private notify(refresh: boolean): void {
+	private changed(paths?: readonly string[]): void { this.version++; this.notify(true, paths); }
+	private notify(refresh: boolean, paths?: readonly string[]): void {
 		if (!this.closed) for (const listener of this.listeners) {
-			try { listener(refresh); } catch (error) { this.report("render", error); }
+			try { listener(refresh, paths); } catch (error) { this.report("render", error); }
 		}
 	}
 	private report(operation: string, error: unknown): void { logContinuationFailure("view", "favorites-" + operation, error); }

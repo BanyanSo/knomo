@@ -281,6 +281,33 @@ test("serializes concurrent setting patches without losing earlier updates", asy
 	assert.equal(service.getSettings().memoTimeFormat, "HH:mm");
 });
 
+for (const stale of ["read", "error", "before-save"] as const) test(`设置重读的旧结果不发布：${stale}`, async () => {
+	const { SettingsService } = await loadSettingsService();
+	const plugin = await createPlugin({}, { settings: createSettings() });
+	const service = new SettingsService(plugin as never);
+	await service.loadSettings();
+	let resolve!: (value: typeof plugin.savedData) => void, reject!: (error: Error) => void;
+	const oldRead = new Promise<typeof plugin.savedData>((yes, no) => { resolve = yes; reject = no; });
+	const oldData = plugin.savedData;
+	const load = plugin.loadData.bind(plugin);
+	let reads = 0, notifications = 0;
+	plugin.loadData = () => ++reads === 1 ? oldRead : load();
+	service.onChanged(() => { notifications++; });
+	const loading = service.loadSettings();
+	if (stale === "before-save") {
+		await service.updateSettings({ dailyHeading: "## New" });
+	} else {
+		plugin.savedData = { settings: { ...createSettings(), dailyHeading: "## New" } };
+		await service.loadSettings();
+	}
+	if (stale === "error") reject(new Error("obsolete settings read failed"));
+	else resolve(oldData);
+	await loading;
+	assert.equal(service.getSettings().dailyHeading, "## New");
+	assert.equal(service.getLoadStatus(), "ready");
+	assert.equal(notifications, 1);
+});
+
 test("retires legacy maintenance diagnostics on the next plugin-data write", async () => {
 	const { SettingsService } = await loadSettingsService();
 	const plugin = await createPlugin({}, {

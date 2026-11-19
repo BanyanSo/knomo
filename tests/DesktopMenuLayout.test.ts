@@ -145,6 +145,24 @@ test("已打开的桌面卡片菜单随窗口和面板尺寸更新，未跨断�
 	} finally { h.close(); }
 });
 
+test("同一帧内的拾星来源通知合并为一次定向更新", async () => {
+	const h = await createDesktopMenuPositionFixture();
+	try {
+		const view = h.f.view as unknown as { handleFavoritesChanged(refresh: boolean, paths: string[]): void };
+		const win = h.f.win;
+		const callbacks: FrameRequestCallback[] = [];
+		const paths: string[][] = [];
+		win.requestAnimationFrame = callback => callbacks.push(callback);
+		Object.assign(view, { syncFavoriteCards: (changed: ReadonlySet<string>) => paths.push([...changed]) });
+		view.handleFavoritesChanged(false, ["Daily/A.md"]);
+		view.handleFavoritesChanged(false, ["Daily/A.md", "Daily/B.md"]);
+		assert.equal(callbacks.length, 1);
+		assert.deepEqual(paths, []);
+		callbacks[0](0);
+		assert.deepEqual(paths, [["Daily/A.md", "Daily/B.md"]]);
+	} finally { h.close(); }
+});
+
 test("桌面已打开的拾星菜单不能操作同一张卡片的新收藏", async () => {
 	const h = await createDesktopMenuPositionFixture();
 	try {

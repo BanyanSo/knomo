@@ -39,7 +39,7 @@ test("P8 两个独立本地 IDB：Daily 先到可操作，后到快照不影响�
 		};
 		let coordinator = await start();
 		cleanup.push(() => stop());
-		const options = { getLogicalDateForPath: async () => "2026-09-01",
+		const options = { getLogicalDateForPath: () => "2026-09-01",
 			getDailyFileForDate: async () => vault.app.vault.getAbstractFileByPath(daily) as TFile,
 			updateCatalogPartition: (input: import("../src/services/MarkdownMutationService").MarkdownCatalogCommitInput) => coordinator.replaceCommittedFile(input),
 			refreshCatalogPaths: (paths: readonly string[]) => coordinator.refreshPaths(paths) };

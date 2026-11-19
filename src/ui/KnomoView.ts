@@ -444,11 +444,11 @@ export class KnomoView extends ItemView {
 	private catalogRevision = 0;
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private hasCommittedCatalogDesktopQuery = false;
-	private favoriteWindow?: { key: string; version: number; memos: MemoRecord[]; cursor: CatalogFeatureCursor | null; progress: FavoriteQueryProgress };
+	private favoriteWindow?: { key: string; version: number; memos: MemoRecord[]; cursor: CatalogFeatureCursor | null; progress: FavoriteQueryProgress; pagesRead: number };
 	private favoriteReading?: { key: string; position: MemoReadingPosition; visibleCount: number };
 	private favoriteRequest?: AbortController;
 	private desktopFavoriteSelection?: { card: HTMLElement; memo: MemoRecord; state: FavoriteCardState };
-	private favoriteRefreshQueued = false;
+	private favoriteRefresh?: { win: Window; frame: number; refreshList: boolean; paths?: Set<string> };
 	private favoriteQueryError = false;
 	private mobileFavoriteProgress?: FavoriteQueryProgress;
 	private mobileFavoriteHasMore = false;
@@ -1238,7 +1238,7 @@ export class KnomoView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		try {
-			if (this.favoriteService) this.getRenderScope().register(this.favoriteService.subscribe(refresh => this.handleFavoritesChanged(refresh)));
+			if (this.favoriteService) this.register(this.favoriteService.subscribe((refresh, paths) => this.handleFavoritesChanged(refresh, paths)));
 			if (this.beaconService) {
 				this.register(this.beaconService.subscribe(() => this.handleBeaconChanged()));
 				void this.beaconService.retry();
@@ -1407,7 +1407,11 @@ export class KnomoView extends ItemView {
 		this.mobileNavbarCompactController.start();
 		this.register(() => this.clearTimeBuoyPickerEventListeners());
 		this.presentationVisibilityReady = true;
-		this.register(this.containerEl.onWindowMigrated(() => this.startLayoutObserver()));
+		this.register(this.containerEl.onWindowMigrated(() => {
+			this.startLayoutObserver();
+			const pending = this.favoriteRefresh;
+			if (pending) this.queueFavoriteRefresh(pending.refreshList, pending.paths);
+		}));
 		this.registerDomEvent(this.containerEl.win, "orientationchange", () => this.closeTimeBuoyPicker(false));
 		this.registerMobileBackHandler();
 		this.startLayoutObserver();
@@ -1440,6 +1444,8 @@ export class KnomoView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.cancelFavoriteRequest();
+		this.favoriteRefresh?.win.cancelAnimationFrame(this.favoriteRefresh.frame);
+		this.favoriteRefresh = undefined;
 		this.favoriteReading = undefined;
 		this.desktopFavoriteSelection = undefined;
 		this.shareCardModal?.close(); this.shareCardModal = null;
@@ -4838,7 +4844,7 @@ export class KnomoView extends ItemView {
 		return memo.status === "active" && memo.catalog ? this.favoriteService?.cardState(memo.catalog.observationHandle) : undefined;
 	}
 
-	private handleFavoritesChanged(refresh: boolean): void {
+	private handleFavoritesChanged(refresh: boolean, paths?: readonly string[]): void {
 		if (this.trashViewClosed) return;
 		const desktopSelection = this.desktopFavoriteSelection;
 		if (desktopSelection) {
@@ -4849,21 +4855,27 @@ export class KnomoView extends ItemView {
 		const openMenuMemo = this.mobileMenuController?.kind === "card" && this.activeMenuMemoId !== null
 			? this.findMemoById(this.activeMenuMemoId) : null;
 		if (openMenuMemo && this.getMemoFavoriteState(openMenuMemo)?.disabled) this.closeCardMenu();
-		for (const container of [this.cardFlowEl, this.mobileSearchResultsEl, this.relationsPage?.el]) {
-			for (const card of container?.findAll(".knomo-card") ?? []) {
-				const id = card.getAttr("data-memo-id");
-				const key = card.getAttr("data-memo-render-key");
-				const memo = id ? this.findMemoById(id, this.getMemoSurface(card)) : null;
-				const visible = memo ?? (key ? this.renderedCardMemos.get(key) : undefined);
-				if (visible?.catalog) this.favoriteService?.checkVisible(visible.dailyRef.path);
-				syncMemoCardFavorite(card, visible && this.getMemoFavoriteState(visible));
-			}
+		this.queueFavoriteRefresh(refresh, paths);
+	}
+
+	private queueFavoriteRefresh(refreshList: boolean, paths?: Iterable<string>): void {
+		const win = this.containerEl.win;
+		const pending = this.favoriteRefresh;
+		const next = pending ?? { win, frame: 0, refreshList, paths: paths && new Set(paths) };
+		if (pending) {
+			pending.refreshList ||= refreshList;
+			if (!paths) pending.paths = undefined;
+			else for (const path of paths) pending.paths?.add(path);
+			if (pending.win === win) return;
+			pending.win.cancelAnimationFrame(pending.frame);
 		}
-		if (!refresh || this.activeNav !== "favorites" || this.favoriteRefreshQueued) return;
-		this.favoriteRefreshQueued = true;
-		queueMicrotask(() => {
-			this.favoriteRefreshQueued = false;
-			if (this.trashViewClosed || this.activeNav !== "favorites") return;
+		next.win = win;
+		next.frame = win.requestAnimationFrame(() => {
+			if (this.favoriteRefresh !== next) return;
+			this.favoriteRefresh = undefined;
+			if (this.trashViewClosed) return;
+			this.syncFavoriteCards(next.paths);
+			if (!next.refreshList || this.activeNav !== "favorites") return;
 			if (this.isPresentationHidden()) { this.pendingViewRefresh ??= false; return; }
 			if (this.mobileSearchPageOpen) {
 				this.mobileFavoriteProgress = undefined;
@@ -4875,6 +4887,24 @@ export class KnomoView extends ItemView {
 				void this.loadFavorites();
 			}
 		});
+		this.favoriteRefresh = next;
+	}
+
+	private syncFavoriteCards(paths?: ReadonlySet<string>): void {
+		const sync = (card: HTMLElement, memo: MemoRecord | null | undefined) => {
+			if (!memo?.catalog || (paths && !paths.has(memo.dailyRef.path))) return;
+			this.favoriteService?.checkVisible(memo.dailyRef.path);
+			syncMemoCardFavorite(card, this.getMemoFavoriteState(memo));
+		};
+		for (const card of this.cardFlowEl?.findAll(".knomo-card") ?? []) {
+			const key = card.getAttr("data-memo-render-key");
+			if (key) sync(card, this.renderedCardMemos.get(key));
+		}
+		this.mobileSearchController?.forEachRenderedCard(sync);
+		for (const card of this.relationsPage?.el?.findAll(".knomo-card") ?? []) {
+			const id = card.getAttr("data-memo-id");
+			if (id) sync(card, this.relationsPage?.findMemo(id));
+		}
 	}
 
 	private getCurrentFavoriteWindow() {
@@ -4924,7 +4954,9 @@ export class KnomoView extends ItemView {
 		try {
 			let cursor = append ? previous?.cursor : null;
 			const memos = append ? [...previous!.memos] : [];
-			const target = append ? memos.length + 1 : Math.max(1, previous?.memos.length ?? 0);
+			const pageBudget = append ? 1 : Math.max(1, previous?.pagesRead ?? 1);
+			const target = Math.max(1, previous?.memos.length ?? 0);
+			let pages = 0;
 			let page: CatalogMemoPage;
 			do {
 				page = await queryFavorites(this.catalogReadService, service, { ...filter, limit: CATALOG_PAGE_SIZE, cursor }, request.signal);
@@ -4932,8 +4964,10 @@ export class KnomoView extends ItemView {
 				if (page.invalidated) throw new CatalogDiscoveryInvalidatedError();
 				memos.push(...page.items.map(toCatalogMemoView));
 				cursor = page.nextCursor;
-			} while (cursor && memos.length < target);
-			this.favoriteWindow = { key, version, memos, cursor, progress: page.favoriteProgress };
+				pages++;
+			} while (cursor && pages < pageBudget && memos.length < target);
+			this.favoriteWindow = { key, version, memos, cursor, progress: page.favoriteProgress,
+				pagesRead: (append ? previous!.pagesRead : 0) + pages };
 			return true;
 		} catch (error) {
 			if (current() && error instanceof CatalogDiscoveryInvalidatedError && retries > 0) return this.loadFavorites(false, retries - 1);
@@ -6895,7 +6929,7 @@ export class KnomoView extends ItemView {
 		this.clearSearchDebounce();
 		const previousViewStateKey = this.getCardFlowViewStateKey();
 		const result = this.viewStateController.setSidebarNav(nav);
-		if (nav === "favorites") void this.favoriteService?.retry();
+		if (nav === "favorites") void this.favoriteService?.retry(false);
 		if (nav === "record-stats") this.catalogReadService?.relations.beginReading();
 		this.applyViewStateTransitionEffects(result);
 		if (result.type === "already-default") {
@@ -9048,8 +9082,7 @@ export class KnomoView extends ItemView {
 		try {
 			await openMemoDailyNoteDefault(this.app.workspace, memo);
 		} catch (error) {
-			const fallbackMessage = randomReunionCard ? t("error.randomOpenFailed") : t("error.openDailyFailed");
-			new Notice(formatServiceError(error, fallbackMessage));
+			new Notice(formatServiceError(error, t("error.openDailyFailed")));
 		}
 	}
 

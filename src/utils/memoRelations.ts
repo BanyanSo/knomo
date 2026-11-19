@@ -55,9 +55,10 @@ export function extractMemoRelationTargets(content: string): MemoRelationTarget[
 	return [...targets.values()];
 }
 
-export function collectRelationBlockAnchors(content: string, context: "file" | "memo" = "file"): Record<string, number> {
+export function collectRelationBlockAnchors(content: string, context: "file" | "memo" = "file", includeLegacyIds = false): Record<string, number> {
 	const anchors: Record<string, number> = Object.create(null) as Record<string, number>;
-	const pattern = /(?:^|[\t ])\^([A-Za-z0-9-]+)[\t ]*$/gmu;
+	if (!content.includes("^")) return anchors;
+	const pattern = includeLegacyIds ? /(?:^|[\t ])\^([A-Za-z0-9_-]+)[\t ]*$/gmu : /(?:^|[\t ])\^([A-Za-z0-9-]+)[\t ]*$/gmu;
 	// 只有整份文件有 frontmatter；Memo 内相同文本仍是正文分隔线。
 	const withoutFrontmatter = context === "memo" ? content : content.replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[\t ]*(?:\r?\n|$)/u, value => value.replace(/[^\r\n]/gu, " "));
 	const body = relationBody(withoutFrontmatter, false);

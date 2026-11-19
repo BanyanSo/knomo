@@ -237,17 +237,19 @@ test("移动拾星搜索等待本次结果，按当前可见卡片显示来源�
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const { t } = await import("../src/i18n");
-	let visible = true, reveal: (() => void) | undefined;
+	let reveal: (() => void) | undefined;
 	let release!: (page: MobileSearchPage) => void;
 	const pending = new Promise<MobileSearchPage>(resolve => { release = resolve; });
+	let response = pending;
+	const service = { status: "ready", revision: 1, cardState: () => ({ favoriteId: "star" }) };
 	const view = Object.assign(Object.create(KnomoView.prototype), {
 		viewStateController: { activeNav: "favorites" },
-		favoriteService: { status: "ready", cardState: () => ({ favoriteId: visible ? "star" : undefined }) },
+		favoriteService: service,
 		mobileFavoriteProgress: { persisted: 0, located: 0, matched: 0, waiting: 0, missing: 0 },
 	});
-	const { getScopedContext, getResultStatus, filterMemos, onResultsAccepted } = Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
-	const h = createControllerHarness(MobileSearchController, [], undefined, () => pending, {
-		getScopedContext, getResultStatus, filterMemos, onResultsAccepted,
+	const { getScopedContext, getResultStatus, filterMemos, onResultsAccepted, getFavoriteQueryState } = Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
+	const h = createControllerHarness(MobileSearchController, [], undefined, () => response, {
+		getScopedContext, getResultStatus, filterMemos, onResultsAccepted, getFavoriteQueryState,
 		getWindow: () => ({ setTimeout: (callback: () => void) => { reveal = callback; return 1; }, clearTimeout: () => { reveal = undefined; } } as unknown as Window),
 	});
 	const feedback = () => h.root.find(".knomo-search-result-feedback")?.getText();
@@ -258,11 +260,23 @@ test("移动拾星搜索等待本次结果，按当前可见卡片显示来源�
 		assert.equal(feedback(), t("favorite.loading.title"));
 		release({ ...makeRemotePage([createReferenceMemo()]), favoriteProgress: { persisted: 2, located: 1, matched: 1, waiting: 1, missing: 0 } });
 		await settle();
-		assert.ok(h.root.find(".knomo-card"));
+		const card = h.root.find(".knomo-card");
+		assert.ok(card);
 		assert.equal(feedback(), t("favorite.partial.title"));
 
-		visible = false;
-		h.controller.renderResults();
+		service.status = "loading"; service.revision++;
+		response = Promise.resolve({ ...makeRemotePage([]), favoriteProgress: { persisted: 2, located: 0, matched: 0, waiting: 0, missing: 0 } });
+		await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), card);
+
+		service.status = "ready"; service.revision++;
+		response = Promise.resolve({ ...makeRemotePage([]), favoriteProgress: { persisted: 2, located: 0, matched: 0, waiting: 2, missing: 0 } });
+		await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-card"), card);
+
+		service.revision++;
+		response = Promise.resolve({ ...makeRemotePage([]), favoriteProgress: { persisted: 2, located: 0, matched: 0, waiting: 0, missing: 2 } });
+		await h.controller.refreshAppliedResults();
 		assert.equal(h.root.find(".knomo-card"), null);
 		assert.equal(feedback(), `${t("favorite.missing.title")} ${t("favorite.missing.description")}`);
 	} finally { h.controller.removePage(); }

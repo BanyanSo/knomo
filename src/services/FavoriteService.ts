@@ -18,6 +18,7 @@ interface FavoriteServiceOptions {
 export interface FavoriteCardState {
 	favoriteId?: string;
 	disabled: boolean;
+	checking?: true;
 }
 
 export class FavoriteSelectionChangedError extends Error {}
@@ -76,8 +77,12 @@ export class FavoriteService {
 		const state = this.sources.get(handle.sourcePath);
 		const key = observationHandleKey(handle);
 		const favorite = state?.status === "ready" ? state.bindings.get(key) : undefined;
-		const ready = this.status === "ready";
+		const status = this.status;
+		const ready = status === "ready";
+		const checking = status === "loading" || (ready && this.byPath.has(handle.sourcePath)
+			&& (!state || state.status === "waiting" || (state.status === "ready" && state.revision !== handle.sourceRevision)));
 		return {
+			...(checking ? { checking: true } as const : {}),
 			favoriteId: ready && favorite && sameObservationHandle(favorite, handle) ? favorite.favoriteId : undefined,
 			disabled: !ready || (state?.status === "ready" && state.blocked.has(key))
 				|| this.pending.has(key) || [...this.pending.values()].some(item => item.sourcePath === handle.sourcePath

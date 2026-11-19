@@ -23,8 +23,8 @@ export function getMemoListStateKey(memos: readonly MemoRecord[]): string {
 }
 
 // 仅在已确认提交给出的 occurrence 映射内复用，不按正文寻找或合并 Memo。
-export function canRetainMemoCard(before: MemoRecord, after: MemoRecord): boolean {
-	return (before.id === after.id || (before.catalog !== undefined && after.catalog !== undefined
+export function canRetainMemoCard(before: MemoRecord, after: MemoRecord, confirmedAnchorWrite = false): boolean {
+	return (confirmedAnchorWrite || before.id === after.id || (before.catalog !== undefined && after.catalog !== undefined
 		&& before.catalog.observation.rawBlockHash === after.catalog.observation.rawBlockHash))
 		&& before.dailyRef.path === after.dailyRef.path
 		&& before.createdAt === after.createdAt && before.updatedAt === after.updatedAt
@@ -35,10 +35,11 @@ export function canRetainMemoCard(before: MemoRecord, after: MemoRecord): boolea
 
 export function areMemoListsUnchanged(
 	before: readonly MemoRecord[], after: readonly MemoRecord[], changes: ReadonlyMap<string, MemoRecord | null>,
+	anchorOnly = false,
 ): boolean {
 	return before.length === after.length && before.every((memo, index) => {
 		const current = changes.has(memo.id) ? changes.get(memo.id) : memo;
-		return current != null && current.id === after[index]?.id && canRetainMemoCard(memo, after[index]);
+		return current != null && current.id === after[index]?.id && canRetainMemoCard(memo, after[index], anchorOnly && changes.has(memo.id));
 	});
 }
 

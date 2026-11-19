@@ -2033,14 +2033,55 @@ test("拾星集无需加载下一页即可原位更新总数", async t => {
 	} finally { countGate.resolve(); dom.dispose(); }
 });
 
-test("拾星重读期间保留已展开窗口，取消当前卡片后接续相邻记录的阅读位置", async () => {
+test("真实首次拾星在锚点提交和收藏读回后保留卡片及图片节点", async () => {
+	const gate = deferred<void>(), confirmed = deferred<void>();
+	const h = await fixture({ immediate: true, refreshViews: true, catalogGate: gate.promise, onConfirmed: () => confirmed.resolve() });
+	const { FavoriteService } = await import("../src/services/FavoriteService");
+	const { FavoriteStore } = await import("../src/services/FavoriteStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const parser = new DiaryMemoParser();
+	const readSource = async (path: string) => ({ path, logicalDate: DATE,
+		...await parser.parse({ sourcePath: path, logicalDate: DATE, bytes: Buffer.from(h.vault.read(path)!) }) });
+	const service = new FavoriteService(new FavoriteStore(h.vault.app, () => "Knomo", () => true), {
+		getDate: () => DATE, getFileIdentity: path => h.vault.app.vault.getAbstractFileByPath(path), readSource,
+		isSourceCurrent: async source => (await readSource(source.path)).sourceRevision === source.sourceRevision,
+		createBlockReference: observation => h.mutations.createBlockReference({ observation, sourcePath: observation.sourcePath }),
+	});
+	await service.retry();
+	Object.assign(h.view, { favoriteService: service });
+	const dom = attachCardFlow(h.view);
+	const selected = h.view.memos.find(memo => memo.contentSnapshot === "old")!;
+	const card = Array.from(dom.root.querySelectorAll(".knomo-card")).find(el => el.getAttribute("data-memo-id") === selected.id);
+	const image = card?.querySelector("img");
+	const operation = service.star(selected.catalog!.observationHandle);
+	try {
+		await confirmed.promise;
+		const current = h.view.memos.find(memo => memo.contentSnapshot === "old")!;
+		assert.notEqual(current.id, selected.id);
+		assert.notEqual(current.catalog!.observation.rawBlockHash, selected.catalog!.observation.rawBlockHash);
+		assert.ok(card?.isConnected);
+		assert.equal(card.getAttribute("data-memo-id"), current.id);
+		assert.equal(card.querySelector("img"), image);
+		assert.equal(service.cardState(current.catalog!.observationHandle).favoriteId, undefined);
+		gate.resolve();
+		await operation;
+		await h.waitForViewRefresh();
+		assert.ok(card.isConnected);
+		assert.ok(service.cardState(current.catalog!.observationHandle).favoriteId);
+	} finally {
+		gate.resolve();
+		await operation;
+		service.dispose(); dom.dispose();
+	}
+});
+
+test("拾星重读期间保留卡片节点，取消当前卡片后接续相邻记录的阅读位置", async () => {
 	const h = await fixture({ immediate: true });
 	const dom = attachCardFlow(h.view);
 	try {
 		const view = h.view as TestView & {
 			favoriteWindow: { key: string; version: number; memos: MemoViewItem[]; cursor: null; progress: object };
 			loadFavorites(): Promise<boolean>;
-			renderEmptyCardFlow(presentation: { type: "empty"; title: string; description: string }): void;
 		};
 		const previous = [...h.memos];
 		const key = "[]";
@@ -2073,10 +2114,11 @@ test("拾星重读期间保留已展开窗口，取消当前卡片后接续相�
 		view.favoriteWindow = { key, version: 1, memos: previous, cursor: null, progress };
 		dom.root.querySelectorAll<HTMLElement>(".knomo-card").forEach(setGeometry);
 		dom.root.scrollTop = 150;
-		const loading = view.getCurrentCardFlowPresentation();
-		if (loading.type !== "empty") assert.fail("未确认的收藏需要暂停展示");
-		view.renderEmptyCardFlow(loading);
-		dom.root.scrollTop = 0;
+		const cards = Array.from(dom.root.querySelectorAll(".knomo-card"));
+		assert.equal(view.getCurrentCardFlowPresentation().type, "items");
+		dom.render();
+		assert.deepEqual(Array.from(dom.root.querySelectorAll(".knomo-card")), cards);
+		assert.equal(dom.findMemo(previous[0]!.id), null);
 		await view.loadFavorites();
 		assert.equal(view.favoriteWindow.memos.length, 3);
 
@@ -2085,8 +2127,8 @@ test("拾星重读期间保留已展开窗口，取消当前卡片后接续相�
 		// 新收藏版本已读回，其他来源的旧卡片可以先显示，但完整的新查询还在等待。
 		partial = true;
 		dom.render();
-		assert.equal(dom.root.querySelectorAll(".knomo-card").length, 1);
-		dom.root.scrollTop = 0;
+		assert.deepEqual(Array.from(dom.root.querySelectorAll(".knomo-card")), cards);
+		assert.equal(dom.root.scrollTop, 150);
 
 		partial = false;
 		view.favoriteWindow = { key, version: service.revision, memos: [previous[0]!, previous[2]!], cursor: null, progress };

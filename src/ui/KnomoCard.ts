@@ -199,12 +199,15 @@ export function syncMemoCardFavorite(card: HTMLElement, state?: FavoriteCardStat
 		const star = icons.createSpan({ cls: "knomo-card-favorite", attr: { role: "img", "aria-label": t("favorite.starred") } });
 		setIcon(star, "star");
 		icons.prepend(star);
-	} else if (!state?.favoriteId) {
+	} else if (!state?.favoriteId && !state?.checking) {
 		badge?.remove();
 		removeEmptyStatusIcons(card);
 	}
 	const button = card.querySelector<HTMLButtonElement>("[data-memo-action='star'], [data-memo-action='unstar']");
-	if (button && state) syncFavoriteButton(button, state);
+	if (button && state) {
+		if (state.checking) button.disabled = true;
+		else syncFavoriteButton(button, state);
+	}
 }
 
 function syncFavoriteButton(button: HTMLButtonElement, state: FavoriteCardState): void {

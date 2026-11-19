@@ -53,6 +53,7 @@ interface MobileSearchControllerOptions {
 	getSourceScope?: () => ScopeFilter;
 	syncScopedSearch?: (query: string, date: SearchDateFilter | null) => void;
 	getCatalogRevision?: () => number;
+	getFavoriteQueryState?: () => { revision: number; status: "ready" | "loading" | "conflict" | "error" } | undefined;
 	getRelationRevision?: () => number;
 	getCoverageKey?: () => string;
 	getQueryContextKey?: () => string;
@@ -147,6 +148,8 @@ export class MobileSearchController {
 	private renderedPending = false;
 	private readonly loadingIndicator: DelayedLoadingIndicator;
 	private pendingScrollTop: number | null = null;
+	private pendingFavoriteRevision?: number;
+	private displayedFavoriteRevision?: number;
 	private renderedCards: Array<{ memo: MemoRecord; card: HTMLElement }> = [];
 	private imageHandoff: ReadyCardImageHandoff | undefined;
 	private seedPlaceholder: ReturnType<typeof createMemoRenderPlaceholders> | null = null;
@@ -518,6 +521,7 @@ export class MobileSearchController {
 	loadMore(): void {
 		if (this.session.requestStatus === "pending" || this.getDisplayedRequestKey() !== this.getRequestKey(this.getAppliedFilter())) return;
 		if (this.acceptedResultsInvalidated
+			|| this.options.getFavoriteQueryState?.()?.revision !== this.displayedFavoriteRevision
 			|| (this.options.getCatalogRevision?.() ?? this.session.result?.catalogRevision) !== this.session.result?.catalogRevision
 			|| (this.options.getCoverageKey?.() ?? this.session.result?.coverageKey) !== this.session.result?.coverageKey) {
 			void this.refreshAppliedResults();
@@ -554,6 +558,11 @@ export class MobileSearchController {
 			queryContextKey: this.options.getQueryContextKey?.() ?? "" };
 		const filter = this.getAppliedFilter();
 		const key = this.getRequestKey(filter);
+		const favorites = this.options.getFavoriteQueryState?.();
+		const favoriteRevision = favorites?.revision, favoriteStatus = favorites?.status;
+		const favoriteCurrent = () => favoriteRevision === this.options.getFavoriteQueryState?.()?.revision;
+		if (reset && changeIntent === "content-change" && favorites && this.pendingQueryKey === key
+			&& this.pendingFavoriteRevision === favoriteRevision) return;
 		const revision = this.options.getCatalogRevision?.() ?? 0;
 		const coverageKey = this.options.getCoverageKey?.() ?? "";
 		if (deduplicate && (this.pendingQueryKey === key || (this.session.requestStatus === "ready" && !this.acceptedResultsInvalidated
@@ -586,6 +595,7 @@ export class MobileSearchController {
 		this.queryController = controller;
 		const run = ++this.queryRun, version = this.session.version;
 		this.pendingQueryKey = key;
+		this.pendingFavoriteRevision = reset ? favoriteRevision : undefined;
 		this.session.beginRequest();
 		this.queryError = null;
 		this.syncControls();
@@ -595,7 +605,7 @@ export class MobileSearchController {
 			let page = await this.options.loadRemoteResults(filter, reset ? null : this.cursor, controller.signal);
 			controller.signal.throwIfAborted();
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-			if (key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
+			if (!favoriteCurrent() || key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
 			const pageCoverageKey = catalogCoverageKey(page.coverage);
 			const currentCoverageKey = this.options.getCoverageKey?.() ?? coverageKey;
 			const currentRevision = this.options.getCatalogRevision?.() ?? revision;
@@ -622,7 +632,7 @@ export class MobileSearchController {
 				page = await this.options.loadRemoteResults(filter, cursor, controller.signal);
 				controller.signal.throwIfAborted();
 				if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-				if (key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
+				if (!favoriteCurrent() || key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
 				if (page.invalidated || page.catalogRevision !== pageRevision || catalogCoverageKey(page.coverage) !== pageCoverageKey
 					|| currentRevision !== (this.options.getCatalogRevision?.() ?? revision)
 					|| currentCoverageKey !== (this.options.getCoverageKey?.() ?? coverageKey)
@@ -635,6 +645,15 @@ export class MobileSearchController {
 				if (!page.favoriteProgress && page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 				for (const memo of page.items) staged.set(getMemoRenderKey(memo), memo);
 				pages++;
+			}
+			if (reset && sameScope && this.displayedMemos?.length && page.favoriteProgress
+				&& (favoriteStatus === "loading" || page.favoriteProgress.waiting > 0)) {
+				// 直到收藏来源和索引对齐，当前显示与摘要继续使用已接纳的结果。
+				acceptResults?.(false);
+				this.invalidateAcceptedResults();
+				this.session.requestStatus = "ready";
+				this.options.onResultsAccepted?.(page);
+				return;
 			}
 			if (filter.hasReferrers && page.status.relations?.complete === false && this.displayedMemos?.length
 				&& this.getDisplayedRequestKey() === key) {
@@ -654,6 +673,7 @@ export class MobileSearchController {
 			acceptResults?.();
 			this.displayedContext = context;
 			this.displayedMemos = projected;
+			this.displayedFavoriteRevision = favoriteRevision;
 			this.revokedResults = null;
 			this.cursor = page.nextCursor;
 			this.favoritePageCount = page.favoriteProgress ? (reset ? 0 : this.favoritePageCount) + pages : 0;
@@ -674,7 +694,7 @@ export class MobileSearchController {
 				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {
+			if (controller.signal.aborted || !favoriteCurrent() || error instanceof CatalogQueryCancelledError) {
 				this.session.requestStatus = this.session.result === null ? "idle" : "ready";
 				return;
 			}
@@ -907,12 +927,12 @@ export class MobileSearchController {
 			focus.restore([]); focus.dispose();
 			this.syncControls(); return;
 		}
-		if (!this.reconcileCommittedCards(changes)) this.renderResults("content-change", true);
+		if (!this.reconcileCommittedCards(changes, anchorOnly)) this.renderResults("content-change", true);
 		// 提交通知使旧查询失效后，继续完成用户已提交的新搜索条件。
 		if (resumeSearch) void this.refreshAppliedResults();
 	}
 
-	private reconcileCommittedCards(changes: ReadonlyMap<string, MemoRecord | null>): boolean {
+	private reconcileCommittedCards(changes: ReadonlyMap<string, MemoRecord | null>, anchorOnly: boolean): boolean {
 		const root = this.resultsEl;
 		if (!root || this.options.isVisible?.() === false || this.renderedCards.length === 0
 			|| this.renderedViewKey !== this.getViewStateKey()) return false;
@@ -938,7 +958,8 @@ export class MobileSearchController {
 		for (const [index, memo] of visible.entries()) {
 			const previous = retained.get(memo.id);
 			let card = previous?.card;
-			if (previous && previous.card.getAttribute("data-knomo-readonly-transition") === null && canRetainMemoCard(previous.memo, memo)) {
+			if (previous && previous.card.getAttribute("data-knomo-readonly-transition") === null
+				&& canRetainMemoCard(previous.memo, memo, anchorOnly && changes.has(previous.memo.id))) {
 				rebindMemoCard(previous.card, memo);
 				this.options.retainCard?.(previous.card, memo);
 			} else if (!previous || previous.memo !== memo) {

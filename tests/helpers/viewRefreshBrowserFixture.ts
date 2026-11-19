@@ -702,6 +702,49 @@ export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mob
 	return { samples, readonlyCount, updated, sameReadonlyCard, sameImage, releasedOnScopeChange };
 }
 
+export async function favoriteRefreshGeometry(mobile: boolean) {
+	const h = fixture(mobile, true), { view, flow } = h;
+	h.context.enabled = false;
+	const memos = Array.from({ length: 24 }, (_, index) => h.makeMemo(index, 1, true));
+	const readingIndex = 12;
+	const removedHandle = memos[readingIndex].catalog!.observationHandle;
+	let removed = false;
+	const favoriteService = { status: "ready", revision: 1, checkVisible() {},
+		cardState: (handle: ObservationHandle) => ({
+			favoriteId: favoriteService.status === "ready" && (!removed || handle.startLine !== removedHandle.startLine)
+				? String(handle.startLine) : undefined,
+			disabled: favoriteService.status !== "ready",
+		}) };
+	const progress = { persisted: memos.length, located: memos.length, matched: memos.length, waiting: 0, missing: 0 };
+	const state = new KnomoViewStateController(); state.activeNav = "favorites";
+	Object.assign(view, { viewStateController: state, favoriteService, getCatalogQueryFingerprint: () => "favorites",
+		favoriteWindow: { key: "favorites", version: 1, memos, pagesRead: 2, cursor: null, progress } });
+	const render = () => view.syncCardFlowPresentation(view.getFavoritePresentation(), null);
+	const cards = () => Array.from(flow.querySelectorAll<HTMLElement>(".knomo-card"));
+	const offset = (card: HTMLElement) => card.getBoundingClientRect().top - flow.getBoundingClientRect().top;
+	render();
+	await h.settle();
+	const before = cards(), neighbor = before[readingIndex + 1], image = neighbor.querySelector("img");
+	flow.scrollTop += offset(before[readingIndex]) + 12;
+	await frames();
+	const start = flow.scrollTop;
+	favoriteService.status = "loading"; favoriteService.revision++;
+	render(); await frames();
+	const reloading = cards();
+	const retained = reloading.length === before.length && reloading.every((card, index) => card === before[index]);
+	const paused = reloading.every(card => card.hasAttribute("inert"));
+	const waitingScroll = flow.scrollTop;
+	// 用户可以在等待期间继续向下读。以查询接纳前的位置为准。
+	flow.scrollTop += 18;
+	await frames();
+	const neighborOffset = offset(neighbor);
+	favoriteService.status = "ready"; favoriteService.revision++; removed = true;
+	view.favoriteWindow = { ...view.favoriteWindow, version: favoriteService.revision, memos: memos.filter((_, index) => index !== readingIndex) };
+	render(); await frames();
+	return { retained, paused, start, waitingScroll, interactiveAgain: !neighbor.hasAttribute("inert"),
+		count: cards().length, neighborOffset, finalOffset: offset(neighbor), sameImage: !!image && image === neighbor.querySelector("img") && neighbor.isConnected };
+}
+
 export async function referrerRefreshGeometry(options: { mobile: boolean; remaining: number; position: number }) {
 	const h = fixture(options.mobile), { view, flow } = h;
 	h.context.enabled = false;

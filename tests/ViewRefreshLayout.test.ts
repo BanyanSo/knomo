@@ -284,6 +284,21 @@ test("普通列表保留 A 的只读画面时更新上方 B，重建仍保留 A 
 	} finally { await h.close(); }
 });
 
+test("拾星集重读时保持当前卡片与图片，移除当前卡后保留用户的新阅读位置", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) {
+			const result = await h.page.evaluate(mobile => window.refreshFixture.favoriteRefreshGeometry(mobile), mobile);
+			const evidence = JSON.stringify({ mobile, ...result });
+			assert.ok(result.retained && result.paused && result.interactiveAgain && result.sameImage, evidence);
+			assert.ok(result.start > 0, evidence);
+			assert.ok(Math.abs(result.waitingScroll - result.start) <= 1, evidence);
+			assert.equal(result.count, 23, evidence);
+			assert.ok(Math.abs(result.finalOffset - result.neighborOffset) <= 1, evidence);
+		}
+	} finally { await h.close(); }
+});
+
 test("真实被引用关系重查分别保留数据深度、挂载数量和屏上卡片，再沿新游标翻页", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const h = await browserFixture();
 	try {

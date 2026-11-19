@@ -29,10 +29,10 @@ export function getMissingFiles(filePaths: readonly string[], existsSync: (fileP
 	return filePaths.filter((filePath) => !existsSync(filePath));
 }
 
-export function getNodeTestArgs(compiledTestFiles: readonly string[], extraNodeTestArgs: readonly string[] = []): string[] {
+export function getNodeTestArgs(compiledTestFiles: readonly string[], extraNodeTestArgs: readonly string[] = [], concurrency = 2): string[] {
 	return [
 		"--test",
-		"--test-concurrency=2",
+		"--test-concurrency=" + concurrency,
 		...extraNodeTestArgs,
 		...compiledTestFiles,
 	];
@@ -86,6 +86,20 @@ export function getBrowserTestSources(sourceFileNames: readonly string[]): strin
 		&& /skip:\s*!process\.env\.KNOMO_LAYOUT_PLAYWRIGHT/u.test(fs.readFileSync(path.join(TESTS_DIR, file), "utf8")));
 }
 
+export function getTestRuns(sourceFileNames: readonly string[], args: readonly string[]) {
+	const all = args.includes("--suite=all");
+	const node = args.includes("--suite=node");
+	const browser = args.includes("--suite=browser");
+	if (!all && !node && !browser) return [{ sourceFileNames, browser: false }];
+
+	const browserSources = getBrowserTestSources(sourceFileNames);
+	const browserSet = new Set(browserSources);
+	const runs = [];
+	if (all || node) runs.push({ sourceFileNames: sourceFileNames.filter(file => !browserSet.has(file)), browser: false });
+	if (all || browser) runs.push({ sourceFileNames: browserSources, browser: true });
+	return runs;
+}
+
 export async function prepareTestEnvironment(args: readonly string[], environment: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
 	const env = { ...environment };
 	if (args.includes("--suite=node")) {
@@ -108,22 +122,23 @@ export async function prepareTestEnvironment(args: readonly string[], environmen
 
 export async function runTests(args: readonly string[] = []): Promise<number> {
 	let selection: RunTestSelection;
+	let runs: ReturnType<typeof getTestRuns>;
 	try {
 		selection = getRunTestSelection(fs.readdirSync(TESTS_DIR), args);
-		if (args.includes("--suite=browser")) selection.sourceFileNames = getBrowserTestSources(selection.sourceFileNames);
+		runs = getTestRuns(selection.sourceFileNames, args);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
 	}
 
-	const compiledTestFiles = getCompiledTestFilesForSources(selection.sourceFileNames);
+	const compiledRuns = runs.map(run => ({ browser: run.browser, files: getCompiledTestFilesForSources(run.sourceFileNames) }));
 
-	if (compiledTestFiles.length === 0) {
-		console.error("No test source files found.");
+	if (compiledRuns.some(run => run.files.length === 0)) {
+		console.error("No test source files found for a requested suite.");
 		return 1;
 	}
 
-	const missingCompiledTests = getMissingFiles(compiledTestFiles);
+	const missingCompiledTests = getMissingFiles(compiledRuns.flatMap(run => run.files));
 
 	if (missingCompiledTests.length > 0) {
 		console.error("Compiled test files are missing. Run `tsc -p tsconfig.test.json` first:");
@@ -136,23 +151,32 @@ export async function runTests(args: readonly string[] = []): Promise<number> {
 	let environment: NodeJS.ProcessEnv;
 	try { environment = await prepareTestEnvironment(args); }
 	catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 1; }
-	if (!environment.KNOMO_LAYOUT_PLAYWRIGHT && getBrowserTestSources(selection.sourceFileNames).length > 0) {
+	if (args.includes("--suite=node")) {
+		console.warn("Node suite: run npm run test:browser or npm run test:all for real browser coverage.");
+	} else if (!environment.KNOMO_LAYOUT_PLAYWRIGHT && getBrowserTestSources(selection.sourceFileNames).length > 0) {
 		console.warn("Node-only run: real browser checks will be skipped. Run npm run test:browser or npm run test:all for browser coverage.");
 	}
 	await prepareObsidianStub();
 	const scale = ["--suite=stress", "--suite=node", "--suite=all"].some(arg => args.includes(arg)) ? "stress" : "normal";
-	const browserArgs = args.includes("--suite=browser") || args.includes("--suite=all") ? ["--test-concurrency=1"] : [];
-	const result = spawnSync(process.execPath, getNodeTestArgs(compiledTestFiles, [...browserArgs, ...selection.extraNodeTestArgs]), {
-		stdio: "inherit",
-		env: { ...environment, KNOMO_TEST_PREPARED: "1", KNOMO_TEST_SCALE: scale },
-	});
+	for (const run of compiledRuns) {
+		const env: NodeJS.ProcessEnv = { ...environment, KNOMO_TEST_PREPARED: "1", KNOMO_TEST_SCALE: scale };
+		if (args.includes("--suite=all")) {
+			console.log(run.browser ? "\n==> Browser tests" : "\n==> Node tests");
+			if (!run.browser) delete env.KNOMO_LAYOUT_PLAYWRIGHT;
+		}
+		const result = spawnSync(process.execPath, getNodeTestArgs(run.files, selection.extraNodeTestArgs, run.browser ? 1 : 2), {
+			stdio: "inherit",
+			env,
+		});
 
-	if (result.error !== undefined) {
-		console.error(result.error.message);
-		return 1;
+		if (result.error !== undefined) {
+			console.error(result.error.message);
+			return 1;
+		}
+		if (result.status !== 0) return result.status ?? 1;
 	}
 
-	return result.status ?? 1;
+	return 0;
 }
 
 if (require.main === module) {

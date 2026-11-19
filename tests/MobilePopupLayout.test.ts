@@ -20,7 +20,16 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 	const hostCss = process.env.KNOMO_HOST_CSS ? readFileSync(process.env.KNOMO_HOST_CSS, "utf8") : "";
 	if (process.env.KNOMO_POPUP_SCREENSHOTS) mkdirSync(process.env.KNOMO_POPUP_SCREENSHOTS, { recursive: true });
 	try {
-		const page = await browser.newPage();
+		// 此用例验证稳定布局；真实入场和键盘退场由下面的时序用例覆盖。
+		const page = await browser.newPage({ reducedMotion: "reduce" });
+		const waitForComposer = (keyboardOpen: boolean) => page.waitForFunction((expected: boolean) => {
+			const layer = document.querySelector(".knomo-mobile-composer-layer.is-open");
+			return layer !== null && layer.classList.contains("is-keyboard-open") === expected;
+		}, keyboardOpen, { timeout: 3000 });
+		const waitForAnimation = (selector: string) => page.waitForFunction((target: string) => {
+			const element = document.querySelector(target);
+			return element !== null && element.getAnimations().every(animation => !animation.pending && animation.playState !== "running");
+		}, selector, { timeout: 3000 });
 		const errors: string[] = [];
 		page.on("pageerror", (error: Error) => errors.push(error.message));
 		for (const theme of ["theme-light", "theme-dark"]) for (const { size, scale } of [{ size: 15, scale: 1 }, { size: 22, scale: 1 }, { size: 15, scale: 1.5 }, { size: 15, scale: 2 }]) for (const [width, height] of [[320, 700], [740, 320], [240, 500]]) {
@@ -64,7 +73,7 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 					});
 					win.touchController=controller;controller.prepare();controller.open();
 				});
-				await page.waitForTimeout(280);
+				await waitForComposer(false);
 				assert.equal(await page.locator(".knomo-cancel-edit-button").evaluate((el: HTMLElement) => getComputedStyle(el).fontSize), `${14 * scale}px`);
 				if (mode === "reference") assert.equal(await page.locator(".knomo-reference-preview-text").evaluate((el: HTMLElement) => getComputedStyle(el).fontSize), `${13 * scale}px`);
 				const selectors = [".knomo-send-button", ".knomo-tool-button", mode === "edit" ? ".knomo-cancel-edit-button" : ".knomo-reference-clear"];
@@ -79,24 +88,27 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 					});
 					assert.ok(target.width >= 44 && target.height >= 44 && target.hit, JSON.stringify({ theme, size, width, height, mode, selector, target }));
 				}
-				const keyboardHeight = height > 500 ? 300 : height > 320 ? 200 : 120;
-				await page.evaluate((keyboardHeight: number) => {
-					window.dispatchEvent(new CustomEvent("keyboardWillShow", { detail: { keyboardHeight } }));
-					window.dispatchEvent(new CustomEvent("keyboardDidShow", { detail: { keyboardHeight } }));
-				}, keyboardHeight);
-				await page.waitForTimeout(280);
-				for (const selector of [".knomo-send-button", mode === "edit" ? ".knomo-cancel-edit-button" : ".knomo-reference-clear"]) {
-					const target = await page.locator(selector).first().evaluate((button: HTMLElement) => {
-						const rect = button.getBoundingClientRect();
-						return { top:rect.top, bottom:rect.bottom, hit:button.contains(document.elementFromPoint(rect.left+rect.width/2, rect.top+rect.height/2)) };
+				const keyboardCase = theme === "theme-light" ? size === 15 && scale === 1 : (width === 320 ? size === 22 : scale === 2);
+				if (keyboardCase) {
+					const keyboardHeight = height > 500 ? 300 : height > 320 ? 200 : 120;
+					await page.evaluate((keyboardHeight: number) => {
+						window.dispatchEvent(new CustomEvent("keyboardWillShow", { detail: { keyboardHeight } }));
+						window.dispatchEvent(new CustomEvent("keyboardDidShow", { detail: { keyboardHeight } }));
+					}, keyboardHeight);
+					await waitForComposer(true);
+					for (const selector of [".knomo-send-button", mode === "edit" ? ".knomo-cancel-edit-button" : ".knomo-reference-clear"]) {
+						const target = await page.locator(selector).first().evaluate((button: HTMLElement) => {
+							const rect = button.getBoundingClientRect();
+							return { top:rect.top, bottom:rect.bottom, hit:button.contains(document.elementFromPoint(rect.left+rect.width/2, rect.top+rect.height/2)) };
+						});
+						assert.ok(target.top>=0 && target.bottom<=height-keyboardHeight+6 && target.hit, JSON.stringify({ theme,size,width,height,mode,selector,keyboardHeight,target }));
+					}
+					await page.evaluate(() => {
+						window.dispatchEvent(new Event("keyboardWillHide"));
+						window.dispatchEvent(new Event("keyboardDidHide"));
 					});
-					assert.ok(target.top>=0 && target.bottom<=height-keyboardHeight+6 && target.hit, JSON.stringify({ theme,size,width,height,mode,selector,keyboardHeight,target }));
+					await waitForComposer(false);
 				}
-				await page.evaluate(() => {
-					window.dispatchEvent(new Event("keyboardWillHide"));
-					window.dispatchEvent(new Event("keyboardDidHide"));
-				});
-				await page.waitForTimeout(280);
 				assert.equal(await page.locator(".knomo-card-actions").evaluate((menu: HTMLElement) => getComputedStyle(menu).display), "none");
 				assert.equal(await page.locator(".knomo-mobile-scope-popover").evaluate((menu: HTMLElement) => getComputedStyle(menu).display), "none");
 				const alpha = await page.locator(".knomo-mobile-composer-backdrop").evaluate((el: HTMLElement) => getComputedStyle(el).backgroundColor);
@@ -115,7 +127,7 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 					sidebar.innerHTML='<button class="knomo-sidebar-action">刷新</button><div class="knomo-tag-row"><button class="knomo-tag-nav">标签</button><button class="knomo-tag-toggle">展开</button></div><button class="knomo-mobile-search-chip">本周</button>';
 					root.appendChild(sidebar);
 				});
-				await page.waitForTimeout(280);
+				await waitForAnimation(".knomo-sidebar");
 				for (const selector of [".knomo-sidebar-action", ".knomo-tag-nav", ".knomo-tag-toggle", ".knomo-mobile-search-chip"]) {
 					const geometry=await page.locator(selector).evaluate((button: HTMLElement) => {
 						const rect=button.getBoundingClientRect();return { width:rect.width,height:rect.height,hit:button.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)) };
@@ -129,7 +141,7 @@ test("mobile touch targets and confirm layering work across themes, host font ov
 		await page.setViewportSize({ width:1000,height:720 });
 		await page.setContent(`<style>${hostCss}${css}body{display:block;--font-ui-medium:15px;--border-width:1px;--background-primary:white}</style><body><div class="knomo-plugin is-layout-desktop-wide is-scope-open">${scopeHtml.replace("knomo-mobile-scope-popover","knomo-desktop-scope-popover")}${cardHtml}</div></body>`);
 		await page.locator(".knomo-card").evaluate((card: HTMLElement) => card.classList.add("is-menu-open"));
-		await page.waitForTimeout(200);
+		await waitForAnimation(".knomo-card-actions");
 		const desktop=await page.locator(".knomo-card-actions").evaluate((menu: HTMLElement) => ({ width:menu.getBoundingClientRect().width,display:getComputedStyle(menu).display }));
 		assert.equal(desktop.width,168);assert.equal(desktop.display,"flex");
 		assert.equal(await page.locator(".knomo-reference-clear").count(),0);

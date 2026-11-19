@@ -33,7 +33,7 @@ test("Catalog 启动不等待配置，自身失败与取消仍生效", async () 
 	assert.equal(await initializeCatalogRuntime({ ...options, isCancelled: () => true }), false);
 });
 
-test("无 config segments 时当前值可用，locale 固定，设备偏好只写本地", async () => {
+test("当前配置可用，locale 固定，设备偏好只写本地", async () => {
 	const f = await fixture();
 	await f.current.initialize();
 	assert.equal(f.current.getStatus(), "ready");

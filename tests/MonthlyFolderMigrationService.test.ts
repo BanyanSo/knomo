@@ -38,12 +38,11 @@ test("更改文件夹时区分无效路径与 Obsidian 配置目录", async () =
 	await assert.rejects(f.service.planMonthlyMemoFolderMigration(`${f.vault.app.vault.configDir}/plugins`), { code: "monthly_folder_protected_path" });
 });
 
-test("Monthly 切换复制/合并完整集合，保存设置后才清理旧文件，不读取开发目录或 marker", async () => {
-	const marker = "Old/_knomo-data/legacy-index-completion.json";
+test("Monthly 切换只搬迁 Trash 集合，保存设置后才清理旧集合文件", async () => {
 	const development = "Old/_knomo-data/trash/s1.json";
-	const f = await fixture({ [OLD]: collection(), [NEW]: collection([item("s2")]), [marker]: "ignored", [development]: "ignored", "Old/Memos.md": "monthly", "Daily.md": "daily" });
+	const f = await fixture({ [OLD]: collection(), [NEW]: collection([item("s2")]), [development]: "ignored", "Old/Memos.md": "monthly", "Daily.md": "daily" });
 	const read = f.vault.app.vault.read.bind(f.vault.app.vault);
-	f.vault.app.vault.read = async (file) => { assert.notEqual(file.path, marker); assert.notEqual(file.path, development); return read(file); };
+	f.vault.app.vault.read = async (file) => { assert.notEqual(file.path, development); return read(file); };
 	const remove = f.vault.app.fileManager.trashFile;
 	f.vault.app.fileManager.trashFile = async (file) => {
 		assert.equal(f.service.getSettings().monthlyMemoFolder, "New");
@@ -53,7 +52,6 @@ test("Monthly 切换复制/合并完整集合，保存设置后才清理旧文�
 	assert.equal((await f.service.migrateMonthlyMemoFolder("New")).trashError, undefined);
 	assert.deepEqual(JSON.parse(f.vault.read(NEW)!).items.map((i: { snapshotId: string }) => i.snapshotId).sort(), ["s1", "s2"]);
 	assert.equal(f.vault.read(OLD), null);
-	assert.equal(f.vault.read(marker), "ignored");
 	assert.equal(f.vault.read(development), "ignored");
 	assert.equal(f.vault.read("Old/Memos.md"), "monthly");
 	assert.equal(f.vault.read("Daily.md"), "daily");

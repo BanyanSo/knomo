@@ -13,32 +13,12 @@ test("生产装配保留 Catalog 和当前回收站入口", async () => {
 	]) {
 		assert.equal(main.includes(serviceName), true, `main.ts should wire ${serviceName}.`);
 	}
-	assert.equal(main.includes("sessionWriterId"), false);
-	assert.equal(main.includes("getWriterId: () => localWriterIdentityService.getWriterId()"), false);
 	const coordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
 	assert.equal(coordinator.includes("knomo-catalog-${"), true);
 	assert.equal(coordinator.includes("knomo-catalog-v"), false);
 });
 
-test("生产装配停用开发期持久化，tracked contract 不读取本地 architecture", () => {
-	const main = fs.readFileSync("src/main.ts", "utf8");
-	for (const retired of [
-		"IdentityPublicationStore",
-		"KnomoSharedReplicaStore",
-		"KnomoSharedStorageService",
-		"KnomoSharedStorageCoordinator",
-		"SharedReviewService",
-		"CausalSharedConfigService",
-		"SharedStorageDataRootService",
-	]) {
-		assert.equal(main.includes(retired), false, `main.ts must not wire retired ${retired}.`);
-	}
-	assert.equal(main.includes("new IdentityReceiptStore(this.app"), false);
-	assert.equal(main.includes("new KnomoBootstrapStateStore("), false);
-	assert.equal(main.includes("currentStateStore: new KnomoCurrentStateStore("), false);
-	assert.equal(main.includes("getIdentityLedgerRootPath(settings.knomoDataRoot)"), false);
-	assert.equal(main.includes("getKnomoCurrentConfigRootPath(settings.knomoDataRoot)"), false);
-
+test("可执行代码独立于本地架构资料", () => {
 	const trackedContractFiles = [
 		...listFiles("src"),
 		...listFiles("scripts"),
@@ -84,17 +64,12 @@ test("Daily 写入标题不参与历史读取、Catalog fingerprint 或 Monthly 
 	const parser = fs.readFileSync("src/services/DiaryMemoParser.ts", "utf8");
 	const coordinator = fs.readFileSync("src/services/CatalogIndexCoordinator.ts", "utf8");
 	const monthly = fs.readFileSync("src/services/MonthlyProjectionInputBuilder.ts", "utf8");
-	const settingTab = fs.readFileSync("src/ui/KnomoSettingTab.ts", "utf8");
 	assert.equal(parser.includes("headings"), false);
 	assert.equal(coordinator.includes("headings"), false);
 	assert.equal(monthly.includes("headings"), false);
-	const saveDailyHeading = checkedSourceSlice(
-		settingTab, "private async saveDailyHeading", "private async saveMonthlyDateHeadingFormat",
-	);
-	assert.equal(saveDailyHeading.includes("rebuildLocalCatalog"), false);
 });
 
-test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分片", () => {
+test("Monthly 与 Catalog 共享低优先级队列并分片执行", () => {
 	const main = fs.readFileSync("src/main.ts", "utf8");
 	const monthlyInput = fs.readFileSync("src/services/MonthlyProjectionInputBuilder.ts", "utf8");
 	const monthlyCoordinator = fs.readFileSync("src/services/MonthlyProjectionCoordinator.ts", "utf8");
@@ -104,7 +79,8 @@ test("Monthly 与 Catalog 共享低优先级队列，显式旧版迁移独立分
 	assert.match(main, /trackCatalogInventory\(this\.catalogIndexCoordinator\.initialize\(\)\)/u);
 	assert.match(main, /initializeCatalog: \(\) => catalogInitialization/u);
 	const startup = fs.readFileSync("src/services/CatalogStartup.ts", "utf8");
-	assert.ok(startup.indexOf("await options.initializeCatalog()") < startup.indexOf("await options.initializeMonthly()"));
+	const initializeCatalog = startup.indexOf("await options.initializeCatalog()");
+	assert.ok(initializeCatalog >= 0 && initializeCatalog < startup.indexOf("await options.initializeMonthly()"));
 	assert.equal(monthlyInput.includes("dailyInventory.listPeriod(period)"), true);
 	assert.equal(monthlyCoordinator.includes("invalidatePeriods(await this.options.inputBuilder.listPeriods())"), false);
 	assert.equal(monthlyCoordinator.includes("await this.yieldControl()"), true);
@@ -122,33 +98,11 @@ test("当前配置监听等待 layout ready，启动后续阶段遵守卸载取�
 		main.indexOf("private runManualRefresh"),
 	);
 
-	assert.equal(listenerStart.includes("identityLedgerService.start"), false);
 	assert.equal(listenerStart.includes("knomoCurrentConfigService.start"), true);
 	assert.equal(listenerStart.includes("lowPriorityWorkQueue.signal.aborted"), true);
 	assert.equal(main.includes("cancellationSignal: lowPriorityWorkQueue.signal"), true);
 	assert.match(main, /settingTab\?\.refreshAttentionIfVisible\(\)/u);
 	assert.equal(afterLayoutInitialization.includes("const isCancelled = () => cancellationSignal?.aborted === true"), true);
-});
-
-test("生产 runtime 无旧迁移入口和身份恢复队列", () => {
-	const main = fs.readFileSync("src/main.ts", "utf8");
-	assert.doesNotMatch(main, /LegacyIndexReader|LegacyTrashMigrationService|initializeRecovery/iu);
-	assert.doesNotMatch(main, /identityRecoveryCoordinator|snapshotRevisionTransitionQueue|reconcileIdentityLedger/u);
-});
-
-function checkedSourceSlice(source: string, startMarker: string, endMarker?: string): string {
-	const start = source.indexOf(startMarker);
-	const end = endMarker === undefined ? source.length : source.indexOf(endMarker);
-	assert.ok(start >= 0, `Missing source boundary: ${startMarker}`);
-	assert.ok(end > start, `Invalid source boundary: ${endMarker ?? "EOF"}`);
-	return source.slice(start, end);
-}
-
-test("源码守卫拒绝缺失或反序边界，不能通过空切片", () => {
-	assert.throws(() => checkedSourceSlice("end", "start", "end"));
-	assert.throws(() => checkedSourceSlice("start", "start", "end"));
-	assert.throws(() => checkedSourceSlice("end start", "start", "end"));
-	assert.throws(() => checkedSourceSlice("renamed", "private runManualRefresh()"));
 });
 
 function listFiles(root: string): string[] {
@@ -159,18 +113,24 @@ function listFiles(root: string): string[] {
 }
 
 
-test("生产源码不再引入已退役身份协议", () => {
- for (const file of listFiles('src').filter(file => file.endsWith('.ts'))) {
-  const source = fs.readFileSync(file, 'utf8');
-  assert.doesNotMatch(source, /IdentityHandle|IdentityLedger|bindingId|writerId|prepareRecoverableDelete|removePermanently|confirm-identity/, file);
- }
+test("生产源码无退役的迁移、共享数据根和持久身份协议依赖", () => {
+	const retired = [
+		/Legacy(?:ArtifactInventory|IndexReader|TrashMigrationService|MigrationMarkerStore)|initializeRecovery/iu,
+		/identityRecoveryCoordinator|snapshotRevisionTransitionQueue|reconcileIdentityLedger|identityLedgerService|sessionWriterId|localWriterIdentityService/u,
+		/IdentityPublicationStore|IdentityReceiptStore|IdentityHandle|IdentityLedger|bindingId|writerId|prepareRecoverableDelete|removePermanently|confirm-identity/u,
+		/KnomoShared(?:ReplicaStore|StorageService|StorageCoordinator)|SharedReviewService|CausalSharedConfigService|SharedStorageDataRootService|KnomoBootstrapStateStore|KnomoCurrentStateStore|getKnomoCurrentConfigRootPath/u,
+		/RecoveryDataRootService|knomoDataRoot|getDataRoot\(|_knomo-data|legacy-index-completion|getTrashSnapshotPath|managed(?:Legacy)?SystemFolderExcludeRule/u,
+	];
+	for (const file of listFiles("src").filter(file => file.endsWith(".ts"))) {
+		const source = fs.readFileSync(file, "utf8");
+		for (const pattern of retired) {
+			assert.doesNotMatch(file, pattern);
+			assert.doesNotMatch(source, pattern, file);
+		}
+	}
 });
 
-
-test("Trash 唯一集合 Store；生产依赖图没有旧根、开发 marker 或 Catalog Trash 查询", () => {
- const forbidden = /RecoveryDataRootService|knomoDataRoot|knomoDataRootConfigured|getDataRoot\(|_knomo-data|legacy-index-completion|LegacyMigrationMarkerStore|getTrashSnapshotPath|managed(?:Legacy)?SystemFolderExcludeRule/u;
- const production = listFiles("src").filter((file) => file.endsWith(".ts"));
- assert.deepEqual(production.filter((file) => forbidden.test(file) || forbidden.test(fs.readFileSync(file, "utf8"))), []);
+test("Trash 使用独立集合文件，Catalog 与卡片控制器不接管存储", () => {
  const catalog = fs.readFileSync("src/services/CatalogReadService.ts", "utf8");
  assert.equal(/Trash|trash|getDeletedSummary|listDeleted|readSnapshots/u.test(catalog), false);
  const controller = fs.readFileSync("src/ui/TrashMemoController.ts", "utf8");

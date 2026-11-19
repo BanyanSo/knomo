@@ -10,7 +10,7 @@ import {
 	getMissingFiles,
 	getNodeTestArgs,
 	getRunTestSelection,
-	getBrowserTestSources,
+	getTestRuns,
 	prepareTestEnvironment,
 } from "../scripts/run-tests";
 
@@ -22,13 +22,7 @@ test("stress suite selects scale checks while all retains every source", () => {
 	assert.deepEqual(getRunTestSelection(sources, ["--suite=all"]).sourceFileNames, sources);
 });
 
-test("明确区分无需浏览器的全量集合与强制浏览器集合", () => {
-	const sources = ["Future.test.ts", "runTests.test.ts"];
-	assert.deepEqual(getRunTestSelection(sources, ["--suite=node"]).sourceFileNames, sources);
-	assert.deepEqual(getRunTestSelection(sources, ["--suite=browser"]).sourceFileNames, sources);
-});
-
-test("浏览器集合自动发现带显式环境条件的新测试，不依赖名称清单", () => {
+test("Node 与浏览器集合互斥，全量按顺序覆盖两者，显式文件入口保持原选择", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-browser-selection-"));
 	const previousCwd = process.cwd();
 	try {
@@ -36,8 +30,55 @@ test("浏览器集合自动发现带显式环境条件的新测试，不依赖�
 		fs.writeFileSync(path.join(root, "tests", "Future.test.ts"), ["test('browser', { skip:", "!process.env.KNOMO_LAYOUT_PLAYWRIGHT }, () => {});"].join(" "));
 		fs.writeFileSync(path.join(root, "tests", "Plain.test.ts"), "test('node', () => {});");
 		process.chdir(root);
-		assert.deepEqual(getBrowserTestSources(["Plain.test.ts", "Future.test.ts", "helper.ts"]), ["Future.test.ts"]);
+		const sources = ["Plain.test.ts", "Future.test.ts"];
+		const node = { sourceFileNames: ["Plain.test.ts"], browser: false };
+		const browser = { sourceFileNames: ["Future.test.ts"], browser: true };
+		assert.deepEqual(getTestRuns(sources, ["--suite=node"]), [node]);
+		assert.deepEqual(getTestRuns(sources, ["--suite=browser"]), [browser]);
+		assert.deepEqual(getTestRuns(sources, ["--suite=all"]), [node, browser]);
+		assert.deepEqual(getTestRuns(sources, ["--files", ...sources]), [{ sourceFileNames: sources, browser: false }]);
 	} finally { process.chdir(previousCwd); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("全量只执行各文件一次，Node 失败停止，浏览器失败传回退出状态", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-test-phases-"));
+	try {
+		const compiled = path.join(root, ".tmp", "knomo-tests");
+		for (const directory of ["src/assets", "tests", ".tmp/knomo-tests/scripts", ".tmp/knomo-tests/tests/helpers"]) {
+			fs.mkdirSync(path.join(root, directory), { recursive: true });
+		}
+		fs.copyFileSync(path.resolve(".tmp/knomo-tests/scripts/run-tests.js"), path.join(compiled, "scripts/run-tests.js"));
+		fs.copyFileSync(path.join(__dirname, "helpers/obsidianStub.js"), path.join(compiled, "tests/helpers/obsidianStub.js"));
+		for (const name of ["Banyan-WeChat-Reward.png", "buymeacoffe-code.png", "share-reflection-cover.webp"]) {
+			fs.writeFileSync(path.join(root, "src/assets", name), "");
+		}
+		const playwright = path.join(root, "playwright.cjs");
+		fs.writeFileSync(playwright, "exports.chromium = { async launch() { return { async close() {} }; } };");
+		for (const [name, browser] of [["Node", false], ["Browser", true]] as const) {
+			const marker = browser ? ["skip:", "!process.env.KNOMO_LAYOUT_PLAYWRIGHT"].join(" ") : "";
+			fs.writeFileSync(path.join(root, "tests", name + ".test.ts"), marker);
+			fs.writeFileSync(path.join(compiled, "tests", name + ".test.js"), [
+				"const assert = require('node:assert/strict');",
+				"require('node:test')('phase fixture', () => {",
+				"require('node:fs').appendFileSync('phase-log.txt', '" + name + "\\n');",
+				"assert.equal(Boolean(process.env.KNOMO_LAYOUT_PLAYWRIGHT), " + browser + ");",
+				"assert.equal(process.env.KNOMO_TEST_SCALE, 'stress');",
+				"assert.notEqual(process.env.KNOMO_FAIL_PHASE, '" + name + "');",
+				"});",
+			].join("\n"));
+		}
+		for (const [failure, expected] of [["", ["Node", "Browser"]], ["Node", ["Node"]], ["Browser", ["Node", "Browser"]]] as const) {
+			const trace = path.join(root, "phase-log.txt");
+			fs.writeFileSync(trace, "");
+			const env: NodeJS.ProcessEnv = { ...process.env, KNOMO_LAYOUT_PLAYWRIGHT: playwright, KNOMO_FAIL_PHASE: failure };
+			delete env.NODE_TEST_CONTEXT;
+			const result = spawnSync(process.execPath, [path.join(compiled, "scripts/run-tests.js"), "--suite=all", "--test-reporter=spec"], {
+				cwd: root, encoding: "utf8", env,
+			});
+			assert.equal(result.status, failure ? 1 : 0, result.stderr || result.stdout);
+			assert.deepEqual(fs.readFileSync(trace, "utf8").trim().split("\n"), expected);
+		}
+	} finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("node 集合显式关闭浏览器，局部测试仍保留调用者的环境", async () => {
@@ -143,6 +184,10 @@ test("product and tooling partition every current test source exactly once", () 
 	assert.deepEqual(all, sources);
 	assert.deepEqual([...product, ...tooling].sort(), sources);
 	assert.equal(new Set([...product, ...tooling]).size, sources.length);
+	const [nodeRun, browserRun] = getTestRuns(sources, ["--suite=all"]);
+	assert.deepEqual([...nodeRun.sourceFileNames, ...browserRun.sourceFileNames].sort(), sources);
+	assert.ok(nodeRun.sourceFileNames.includes("MemoRelationsUi.test.ts"));
+	assert.ok(browserRun.sourceFileNames.includes("MemoRelationsUi.browser.test.ts"));
 	for (const file of ["CatalogArchitectureGuard.test.ts", "P8SyncAcceptance.test.ts",
 		"DiaryMemoParser.test.ts", "IndependentTrashService.test.ts", "MarkdownMutationService.test.ts",
 		"MonthlyProjectionCoordinator.test.ts"]) {

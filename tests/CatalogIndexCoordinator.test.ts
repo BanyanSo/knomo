@@ -1461,7 +1461,7 @@ test("101 个 Daily 在短 slice 下每个只解析一次，checkpoint 仍按批
 	}
 });
 
-test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共享数据", async () => {
+test("Catalog rebuild 只重建本机缓存，保留 Vault 中的文件", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1471,7 +1471,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	const fixture = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-10.md", content: "## Memos\n- 09:00 rebuild only\n", mtime: 10 },
 		{ path: "Memos/2026-08.md", content: "monthly bytes\n", mtime: 10 },
-		{ path: "Memos/_knomo-data/sentinel.md", content: "shared bytes\n", mtime: 10 },
+		{ path: "Notes/sentinel.md", content: "user bytes\n", mtime: 10 },
 	]);
 	const store = new InMemoryMemoCatalogStore();
 	const monthlyCheckpoint = {
@@ -1494,7 +1494,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 			],
 		},
 	);
-	const sharedBytes = fixture.snapshot();
+	const vaultBefore = fixture.snapshot();
 	try {
 		coordinator.start(fixture.owner);
 		await coordinator.initialize();
@@ -1504,7 +1504,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 		const page = await store.query({ limit: 50 });
 		assert.deepEqual(page.items.map((item) => item.content), ["rebuild only"]);
 		assert.equal(page.coverage.kind, "complete");
-		assert.deepEqual(fixture.snapshot(), sharedBytes);
+		assert.deepEqual(fixture.snapshot(), vaultBefore);
 		assert.deepEqual(await store.getMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY), monthlyCheckpoint);
 		assert.equal(await store.getMeta("catalog-derived-sentinel"), null);
 	} finally {
@@ -1512,7 +1512,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	}
 });
 
-test("P8 Daily 先到 B，后到 Trash、marker 和旧开发文件的事件不改变 observations", async () => {
+test("Daily 先到 B，后到 Trash 和非 Daily 文件的事件不改变 observations", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1532,8 +1532,7 @@ test("P8 Daily 先到 B，后到 Trash、marker 和旧开发文件的事件不�
 		assert.equal((await read.query({ limit: 10, text: "duplicate", tags: ["project"] })).items.length, 2);
 		assert.equal((await read.getRandomReunionItems(10)).length, 2);
 		assert.equal(new Set(before.items.map((item) => item.observationKey)).size, 2);
-		for (const auxiliary of ["_knomo-data/trash/snapshot.json", "_knomo-data/migration-complete.json",
-			"_knomo-data/current-state.json", "_knomo-data/config/old.json", "_knomo-data/receipts/old.json",
+		for (const auxiliary of ["Memos/knomo-trash.json", "Notes/metadata.json",
 			"_knomo-system/indexes/memo-index-2026-08.json"]) {
 			fixture.setFile(auxiliary, body, 2);
 			const file = fixture.file(auxiliary)!;

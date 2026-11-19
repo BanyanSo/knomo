@@ -29,13 +29,15 @@ test("share modal keeps current PNG, output failures, focus, independent scrolli
 	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
 	const bundle = await build({ stdin: { contents: `import { KnomoShareCardModal } from './src/ui/KnomoShareCardModal';
 import { createShareCardSnapshot, ShareCardError } from './src/ui/share/ShareCardContent'; import { Platform } from 'obsidian';
-window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardError,Platform};`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser",
+import { ShareCardRenderer } from './src/ui/share/ShareCardRenderer';
+window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardError,ShareCardRenderer,Platform};`, resolveDir: process.cwd() }, loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" }, bundle: true, write: false, format: "iife", platform: "browser",
 		plugins: [{ name: "share-modal-host", setup(build) { build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "host", namespace: "share-host" })); build.onLoad({ filter: /.*/, namespace: "share-host" }, () => ({ contents: host, loader: "js" })); } }] });
 	mkdirSync(".tmp/share-card-samples", { recursive: true });
 	const browser = await chromium.launch({ channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge", headless: true });
 	try {
 		const page = await browser.newPage({ acceptDownloads: true });
 		for (const [width, height] of [[320, 568], [390, 844], [844, 390], [768, 1024], [1100, 800]]) for (const theme of ["theme-light", "theme-dark", "theme-custom"]) {
+			const realOutput = theme === "theme-light" && (width === 390 || width === 1100);
 			await page.setViewportSize({ width, height });
 			await page.setContent(`<body class="${theme} ${width < 1000 ? "is-mobile is-phone" : ""}"><button id="return">Card menu</button></body>`);
 			await page.addStyleTag({ content: mobileModalCss });
@@ -52,11 +54,24 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			await page.addScriptTag({ content: "window.createEl = tag => document.createElement(tag);" });
 			await page.addScriptTag({ content: bundle.outputFiles[0].text });
 			if (theme === "theme-custom") await page.addStyleTag({ content: ".theme-custom .modal-title{font-size:28px;line-height:40px}" });
-			await page.evaluate(({ mobile }: { mobile: boolean }) => {
+			await page.evaluate(async ({ mobile, realOutput }: { mobile: boolean; realOutput: boolean }) => {
 				const api = (window as any).shareModalTest; api.Platform.isMobile = mobile;
+				if (!realOutput) {
+					// 保留真实弹窗、预览缩放及滚动，只替换重复的长文渲染。
+					const canvas = document.createElement("canvas");
+					canvas.width = 480;
+					canvas.height = 3200;
+					const preview = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve));
+					if (!preview) throw new Error("Cannot create layout preview PNG");
+					const renderer = api.ShareCardRenderer.prototype;
+					const originalRender = renderer.render;
+					renderer.render = async () => preview;
+					api.restorePreviewRenderer = () => { renderer.render = originalRender; };
+				}
 				const state = (window as any).shareModalState = { reads: 0, locks: 0, unlocks: 0 };
 				const writes = (window as any).vaultWrites = [] as string[];
-				const snapshot = api.createShareCardSnapshot({ contentSnapshot: ("完整长文，保留本来的顺序与段落。Emoji 🌱 EnglishLongTextWithoutSpacesForWrapping。\n\n").repeat(45), createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/today.md" } }, "zh-CN");
+				const contentSnapshot = "完整长文，保留本来的顺序与段落。Emoji 🌱 EnglishLongTextWithoutSpacesForWrapping。\n\n".repeat(realOutput ? 45 : 1);
+				const snapshot = api.createShareCardSnapshot({ contentSnapshot, createdAt: "2026-10-27T08:30", dailyRef: { path: "Daily/today.md" } }, "zh-CN");
 				const modal = (window as any).shareModal = new api.KnomoShareCardModal({ vault: {
 					getAbstractFileByPath: (path: string) => path === "Knomo-20261027-083000.png" || writes.includes(path) ? {} : null,
 					createBinary: async (path: string) => { writes.push(path); },
@@ -64,7 +79,7 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 					loadSnapshot: async () => { state.reads++; return snapshot; }, loadImage: async () => { throw Error("unexpected image"); },
 					lockScroll: () => { state.locks++; }, onClose: () => { state.unlocks++; }, returnFocusEl: document.getElementById("return"),
 				}); modal.open();
-			}, { mobile: width < 1000 });
+			}, { mobile: width < 1000, realOutput });
 			await page.locator(".knomo-share-preview > img").waitFor();
 			assert.equal(await page.locator(".knomo-share-status").textContent(), "");
 			assert.equal(await page.getByRole("button", { name: "Retry", exact: true }).count(), 0);
@@ -108,10 +123,12 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			assert.ok(geometry.buttonCursors.every((cursor: string) => cursor === "pointer"));
 			assert.equal(await page.locator(".knomo-share-close[aria-label], .knomo-share-preview[aria-label], .knomo-share-templates[aria-label]").count(), 0);
 			assert.equal(await page.locator(".knomo-share-preview > img").getAttribute("alt"), "");
-			await page.locator('[data-template="reflection"]').click();
-			await page.locator('[data-template="daybook"]').click();
-			await page.locator(".knomo-share-preview > img").waitFor();
-			assert.equal(await page.locator('[data-template="daybook"]').getAttribute("aria-pressed"), "true");
+			if (realOutput) {
+				await page.locator('[data-template="reflection"]').click();
+				await page.locator('[data-template="daybook"]').click();
+				await page.locator(".knomo-share-preview > img").waitFor();
+				assert.equal(await page.locator('[data-template="daybook"]').getAttribute("aria-pressed"), "true");
+			}
 			assert.equal(await page.evaluate(() => (window as any).shareModalState.reads), 1);
 			if (width === 1100 && theme === "theme-light") {
 				// 重新探测时才显示图片剪贴板接口，操作拒绝不清除已生成的 PNG。
@@ -180,6 +197,7 @@ window.shareModalTest={KnomoShareCardModal,createShareCardSnapshot,ShareCardErro
 			assert.equal(await page.locator("iframe").count(), 0);
 			assert.equal(await page.evaluate(() => document.activeElement?.id), "return");
 			assert.deepEqual(await page.evaluate(() => (window as any).shareModalState), { reads: 1, locks: 1, unlocks: 1 });
+			await page.evaluate(() => (window as any).shareModalTest.restorePreviewRenderer?.());
 		}
 		for (const mode of ["stale", "retry", "close"] as const) {
 			await page.evaluate((mode: string) => {

@@ -1990,6 +1990,49 @@ test("真实 Daily 编辑后的移动分页失效不会被等价输入及取消�
 	}
 });
 
+test("拾星集无需加载下一页即可原位更新总数", async t => {
+	const total = 51, countGate = deferred<void>();
+	const h = await fixture({ immediate: true,
+		body: "## Memos\n" + Array.from({ length: total }, (_, index) => `- 09:00 starred-${index}\n`).join("") });
+	const page = await h.read.query({ limit: total });
+	const bindings = new Map(page.items.map(item => [item.key, item.observationHandle]));
+	const count = h.read.count.bind(h.read);
+	t.mock.method(h.read, "count", async (...args: Parameters<typeof count>) => {
+		await countGate.promise;
+		return count(...args);
+	});
+	const view = h.view as TestView & { loadFavorites(): Promise<boolean> };
+	const dom = attachCardFlow(view);
+	try {
+		Object.assign(view, {
+			favoriteService: { status: "ready", revision: 1, persistedCount: total, paths: () => [PATH], getDate: () => DATE,
+				countAt: () => total, resolve: async () => ({ status: "ready", revision: page.items[0]!.observationHandle.sourceRevision, bindings }),
+				cardState: () => ({ favoriteId: "star" }) },
+			mobileSearchController: { isOpen: false },
+			renderCardFlow: () => {
+				const presentation = view.getCurrentCardFlowPresentation();
+				assert.equal(presentation.type, "items");
+				Reflect.get(view, "syncCardFlowPresentation").call(view, presentation, null);
+			},
+		});
+		view.viewStateController.activeNav = "favorites";
+		assert.equal(await view.loadFavorites(), true);
+		const summary = dom.root.querySelector(".knomo-result-summary");
+		const slot = summary?.querySelector(".knomo-result-summary-count");
+		assert.equal(slot?.getAttribute("data-state"), "pending");
+		const card = dom.root.querySelector(".knomo-card");
+		assert.ok(card);
+		const window = Reflect.get(view, "favoriteWindow");
+		assert.equal(window.memos.length, 50);
+		countGate.resolve();
+		await new Promise<void>(resolve => setImmediate(resolve));
+		assert.equal(slot?.textContent, String(total));
+		assert.equal(dom.root.querySelector(".knomo-result-summary"), summary);
+		assert.equal(dom.root.querySelector(".knomo-card"), card);
+		assert.equal(window.memos.length, 50);
+	} finally { countGate.resolve(); dom.dispose(); }
+});
+
 test("拾星重读期间保留已展开窗口，取消当前卡片后接续相邻记录的阅读位置", async () => {
 	const h = await fixture({ immediate: true });
 	const dom = attachCardFlow(h.view);

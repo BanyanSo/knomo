@@ -453,7 +453,7 @@ test("Favorites query keeps same-revision candidates, combines search and tags, 
 	const { IndexedDbMemoCatalogStore } = await import("../src/services/IndexedDbMemoCatalogStore");
 	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
 	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const { queryFavorites } = await import("../src/services/FavoriteQuery");
+	const { queryFavorites, countFavorites } = await import("../src/services/FavoriteQuery");
 	const catalog = new MemoCatalogService(new IndexedDbMemoCatalogStore("favorites", { factory: new IDBFactory(), keyRange: IDBKeyRange }));
 	const read = new CatalogReadService({ catalog });
 	for (const path of [DAILY, latest]) {
@@ -462,8 +462,15 @@ test("Favorites query keeps same-revision candidates, combines search and tags, 
 			sourcePath: path, logicalDate: source.logicalDate, mtime: 1, size: f.vault.read(path)!.length,
 		}, parserVersion: 1, settingsFingerprint: "test", auditedAt: 1 });
 	}
+	await catalog.getStore().setCoverage({ kind: "complete", coveredFromDate: DATE, pendingFileCount: 0, coveredFileCount: 2, totalFileCount: 2 });
 	const query = { text: "first", tags: ["work"], fromDate: DATE, limit: 25 };
 	let page = await queryFavorites(read, f.service, query);
+	assert.equal(page.items.length, 25);
+	assert.ok(page.nextCursor);
+	const signal = new AbortController().signal;
+	assert.equal(await countFavorites(read, f.service, query, page, signal), 166);
+	assert.equal(await countFavorites(read, f.service, { ...query, toDate: DATE }, page, signal), 1);
+	assert.equal(await countFavorites(read, f.service, { ...query, tags: ["home"] }, page, signal), 0);
 	const handles: string[] = [];
 	for (;;) {
 		assert.equal(page.invalidated, false);
@@ -480,6 +487,8 @@ test("Favorites query keeps same-revision candidates, combines search and tags, 
 	assert.equal(filteredOut.items.length, 0);
 	f.vault.replace(DAILY, anchoredBody.replace("first", "changed"));
 	f.service.sourceChanged(DAILY, "change");
+	assert.equal(await countFavorites(read, f.service, query, page, signal), null);
+	await assert.rejects(countFavorites(read, f.service, query, page, AbortSignal.abort()), { name: "AbortError" });
 	const stale = await queryFavorites(read, f.service, { ...query, toDate: DATE });
 	assert.equal(stale.items.length, 0);
 	assert.equal(stale.favoriteProgress.waiting, 1);

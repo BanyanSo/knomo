@@ -1,5 +1,5 @@
 import { FavoriteSelectionChangedError, type FavoriteCardState, type FavoriteService } from "../services/FavoriteService";
-import { queryFavorites } from "../services/FavoriteQuery";
+import { countFavorites, queryFavorites } from "../services/FavoriteQuery";
 import type { FavoriteQueryProgress } from "../types/favorite";
 import { DailyAnchorChangedError, DailyAnchorNotSavedError, DailyAnchorSourceUnlocatedError } from "../services/DailyMemoAnchor";
 import { getFavoriteFeedback } from "./FavoritePresentation";
@@ -444,7 +444,10 @@ export class KnomoView extends ItemView {
 	private catalogRevision = 0;
 	private catalogDesktopQueryFingerprint: string | null = null;
 	private hasCommittedCatalogDesktopQuery = false;
-	private favoriteWindow?: { key: string; version: number; memos: MemoRecord[]; cursor: CatalogFeatureCursor | null; progress: FavoriteQueryProgress; pagesRead: number };
+	private favoriteWindow?: {
+		key: string; version: number; memos: MemoRecord[]; cursor: CatalogFeatureCursor | null; progress: FavoriteQueryProgress; pagesRead: number;
+		count?: { value: number | null; request?: AbortController };
+	};
 	private favoriteReading?: { key: string; position: MemoReadingPosition; visibleCount: number };
 	private favoriteRequest?: AbortController;
 	private desktopFavoriteSelection?: { card: HTMLElement; memo: MemoRecord; state: FavoriteCardState };
@@ -2252,7 +2255,7 @@ export class KnomoView extends ItemView {
 		if (hidden === this.presentationHidden) return;
 		this.presentationHidden = hidden;
 		if (hidden) {
-			if (this.favoriteRequest) this.pendingViewRefresh ??= false;
+			if (this.favoriteRequest || this.favoriteWindow?.count?.request) this.pendingViewRefresh ??= false;
 			this.cancelFavoriteRequest();
 			this.syncBeaconMotion(undefined);
 			this.presentationVisibilityRevision++;
@@ -4933,6 +4936,9 @@ export class KnomoView extends ItemView {
 	private cancelFavoriteRequest(): void {
 		this.favoriteRequest?.abort();
 		this.favoriteRequest = undefined;
+		const count = this.favoriteWindow?.count;
+		count?.request?.abort();
+		if (count) count.request = undefined;
 	}
 
 	private async loadFavorites(append = false, retries = 2): Promise<boolean> {
@@ -4946,7 +4952,7 @@ export class KnomoView extends ItemView {
 		const key = getCatalogQueryKey(filter), version = service.revision;
 		const previous = this.getCurrentFavoriteWindow();
 		if (append && (!previous?.cursor || previous.version !== version || this.favoriteRequest)) return false;
-		this.cancelFavoriteRequest();
+		if (!append) this.cancelFavoriteRequest();
 		const request = this.favoriteRequest = new AbortController();
 		const current = () => !request.signal.aborted && !this.trashViewClosed && this.activeNav === "favorites"
 			&& !this.mobileSearchPageOpen && key === this.getCatalogQueryFingerprint(true) && version === service.revision;
@@ -4967,7 +4973,20 @@ export class KnomoView extends ItemView {
 				pages++;
 			} while (cursor && pages < pageBudget && memos.length < target);
 			this.favoriteWindow = { key, version, memos, cursor, progress: page.favoriteProgress,
-				pagesRead: (append ? previous!.pagesRead : 0) + pages };
+				pagesRead: (append ? previous!.pagesRead : 0) + pages, count: append ? previous?.count : undefined };
+			if (!append && cursor && !page.favoriteProgress.waiting && !page.favoriteProgress.missing) {
+				const controller = new AbortController();
+				const count: { value: number | null; request?: AbortController } = { value: null, request: controller };
+				this.favoriteWindow.count = count;
+				void countFavorites(this.catalogReadService, service, filter, page, controller.signal).then(value => {
+					if (!controller.signal.aborted) count.value = value;
+				}).catch(error => {
+					if (!controller.signal.aborted && !(error instanceof CatalogDiscoveryInvalidatedError)) logContinuationFailure("view", "favorites-count", error);
+				}).finally(() => {
+					count.request = undefined;
+					if (!controller.signal.aborted && this.getCurrentFavoriteWindow()?.count === count && current()) this.renderCardFlow();
+				});
+			}
 			return true;
 		} catch (error) {
 			if (current() && error instanceof CatalogDiscoveryInvalidatedError && retries > 0) return this.loadFavorites(false, retries - 1);
@@ -4991,9 +5010,17 @@ export class KnomoView extends ItemView {
 		const status = this.favoriteService?.status ?? "loading";
 		const feedback = getFavoriteFeedback(status === "ready" && this.favoriteQueryError ? "error" : status,
 			progress, memos.length > 0, !!window?.cursor);
-		if (memos.length === 0 && feedback) return { type: "empty", ...feedback };
-		const headers: CardFlowHeader[] = feedback && !feedback.loading
-			? [{ type: "summary", text: `${feedback.title} ${feedback.description}`.trim(), feedback: true }] : [];
+		const count = status === "ready" && !this.favoriteQueryError && progress && !progress.missing && !progress.waiting
+			? window?.cursor ? window.count?.value ?? null : progress.matched : null;
+		const pending = !!feedback?.loading || (progress !== undefined && window?.count?.request !== undefined && !this.favoriteQueryError);
+		const copy = getRegularFilterCopy({
+			activeNav: "favorites", activeTag: this.activeTag, activeTagKey: this.activeTagKey,
+			searchQuery: this.searchQuery, searchDateFilter: this.searchDateFilter,
+			recordStatsSearchFilter: this.recordStatsSearchFilter, scopeFilter: this.scopeFilter,
+		}, count, pending);
+		const headers: CardFlowHeader[] = copy ? [{ type: "result-summary", summary: copy.summary }] : [];
+		if (memos.length === 0 && feedback) return { type: "empty", ...feedback, headers };
+		if (feedback && !feedback.loading) headers.push({ type: "summary", text: `${feedback.title} ${feedback.description}`.trim(), feedback: true });
 		return { type: "items", mode: "memo", headers, memos };
 	}
 

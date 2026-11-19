@@ -26,6 +26,7 @@ export type RecordStatsSearchFilter = CatalogRecordStatsFilter;
 
 export type RegularFilterCondition =
 	| { type: "things"; text: string }
+	| { type: "favorites"; text: string }
 	| { type: "tag"; text: string }
 	| { type: "search"; text: string; query: string }
 	| { type: "date"; text: string; filter: SearchDateFilter }
@@ -119,6 +120,7 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 	}
 	const condition = conditions[0];
 	if (condition.type === "things") return t("empty.generic");
+	if (condition.type === "favorites") return t("favorite.empty.title");
 	if (condition.type === "tag") {
 		return t("filterEmpty.tag", { tag: condition.text });
 	}
@@ -137,6 +139,7 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 export function getRegularFilterConditions(state: RegularFilterState): RegularFilterCondition[] {
 	const conditions: RegularFilterCondition[] = [];
 	if (state.activeNav === "things") conditions.push({ type: "things", text: t("nav.things") });
+	if (state.activeNav === "favorites") conditions.push({ type: "favorites", text: t("favorite.title") });
 	const tag = state.activeTag?.trim() || state.activeTagKey || "";
 	if (state.activeTagKey !== null && tag.length > 0) {
 		conditions.push({ type: "tag", text: formatTagFilterText(tag) });

@@ -106,6 +106,10 @@ test("拾星集延迟显示加载提示，来源异常按实际卡片区分空�
 			h.view.viewStateController.activeNav = "favorites";
 			h.view.renderCardFlow();
 			assert.equal(h.title(), null);
+			const summary = h.root.querySelector(".knomo-result-summary");
+			const summaryState = () => h.root.querySelector(".knomo-result-summary-count")?.getAttribute("data-state");
+			assert.ok(summary);
+			assert.equal(summaryState(), "pending");
 			h.revealLoading();
 			assert.equal(h.title(), t("favorite.loading.title"));
 			const announcement = h.root.querySelector(".knomo-empty-state[aria-live='polite']");
@@ -120,12 +124,14 @@ test("拾星集延迟显示加载提示，来源异常按实际卡片区分空�
 			h.view.renderCardFlow();
 			assert.equal(h.title(), t("favorite.missing.title"));
 			assert.equal(h.root.querySelector(".knomo-empty-description")?.textContent, t("favorite.missing.description"));
+			assert.equal(h.root.querySelector(".knomo-result-summary"), summary);
+			assert.equal(summaryState(), "unavailable");
 
 			window.memos = [createReferenceMemo()];
 			window.progress = { ...progress, matched: 1, missing: 0, waiting: 1 };
 			h.view.renderCardFlow();
 			assert.equal(h.cards().length, 1);
-			assert.equal(h.root.querySelector(".knomo-list-summary")?.textContent, t("favorite.partial.title"));
+			assert.equal(h.root.querySelector(".knomo-list-summary:not(.knomo-result-summary)")?.textContent, t("favorite.partial.title"));
 
 			window.memos = [];
 			window.progress = { ...progress, matched: 0, missing: 0 };
@@ -139,6 +145,18 @@ test("拾星集延迟显示加载提示，来源异常按实际卡片区分空�
 			h.view.renderCardFlow();
 			assert.equal(h.title(), t("favorite.noMatch.title"));
 			assert.equal(h.root.querySelector(".knomo-history-load-more"), null);
+			assert.equal(summaryState(), "ready");
+			assert.equal(h.root.querySelector(".knomo-result-summary")?.textContent,
+				t("filterSummary.label", { label: t("favorite.title"), count: 0 }));
+
+			h.view.viewStateController.activeTag = "Work";
+			h.view.viewStateController.activeTagKey = "work";
+			window.memos = [createReferenceMemo()];
+			window.progress = { ...progress, matched: 1, missing: 0 };
+			h.view.renderCardFlow();
+			assert.equal(h.root.querySelector(".knomo-result-summary")?.textContent, t("filterSummary.combo", {
+				conditions: [t("favorite.title"), "#Work"].join(t("filterSummary.separator")), count: 1,
+			}));
 		} finally { h.close(); }
 	}
 });

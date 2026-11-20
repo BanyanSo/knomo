@@ -65,10 +65,18 @@ export function getBeaconData(savedData: unknown): unknown {
 	return isRecord(savedData) ? savedData.beacon : undefined;
 }
 
+function hasPathControlCharacter(path: string): boolean {
+	for (let index = 0; index < path.length; index++) {
+		if (path.charCodeAt(index) <= 0x1f) return true;
+	}
+	return false;
+}
+
 export function parseBeaconReference(value: unknown): BeaconReference | null {
 	if (!isRecord(value) || typeof value.sourcePath !== "string" || value.sourcePath.length === 0
 		|| !value.sourcePath.endsWith(".md") || value.sourcePath.startsWith("/")
-		|| /(?:^|\/)\.\.?(?:\/|$)|[\\:\u0000-\u001f]|\/\//u.test(value.sourcePath)
+		|| /(?:^|\/)\.\.?(?:\/|$)|[\\:]|\/\//u.test(value.sourcePath)
+		|| hasPathControlCharacter(value.sourcePath)
 		|| typeof value.blockId !== "string" || !/^[A-Za-z0-9-]+$/u.test(value.blockId)
 		|| typeof value.memoTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/u.test(value.memoTime)) return null;
 	return { sourcePath: value.sourcePath, blockId: value.blockId, memoTime: value.memoTime };

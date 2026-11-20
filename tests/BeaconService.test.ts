@@ -26,6 +26,9 @@ test("仅保存路径、原生 ID 和实际时间，保留其它插件数据及�
 	assert.deepEqual(buildPluginDataWithSettings(h.data, { test: 1 } as never).beacon, ref);
 	assert.deepEqual(buildPluginDataWithBeacon({ memoTimeFormat: "HH:mm" }, ref).settings, { memoTimeFormat: "HH:mm" });
 	assert.deepEqual(parseBeaconReference({ ...ref, memoTime: "09:00:17" }), { ...ref, memoTime: "09:00:17" });
+	for (const code of [0, 10, 31]) {
+		assert.equal(parseBeaconReference({ ...ref, sourcePath: `Daily/a${String.fromCharCode(code)}b.md` }), null);
+	}
 	for (const invalid of [{ ...ref, sourcePath: "../a.md" }, { ...ref, sourcePath: "C:/a.md" }, { ...ref, sourcePath: "/a.md" },
 		{ ...ref, sourcePath: "Daily//a.md" }, { ...ref, blockId: "bad_id" }, { ...ref, memoTime: "24:00" },
 		{ ...ref, memoTime: "09:60" }, { ...ref, memoTime: "9:00" }, { handle: h.source.observations[1], logicalDate: DATE }]) {

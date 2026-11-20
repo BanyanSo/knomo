@@ -2,10 +2,15 @@ import type { CatalogQueryFilter } from "../types/catalog";
 import { buildRecordStatsCatalogQuery, buildReviewCatalogQuery } from "../services/CatalogReadService";
 import { intersectCatalogFilters } from "../services/SearchMatching";
 import { formatDatePart } from "../utils/date";
-import { type RegularFilterState, type SearchDateFilter } from "./viewFilters";
+import { getRecordStatsSearchFilterKey, type RegularFilterState, type SearchDateFilter } from "./viewFilters";
 import { getSearchShortcutDate } from "./SearchSession";
 
 export type SearchSourceContext = Omit<RegularFilterState, "searchQuery" | "searchDateFilter">;
+
+export function getSearchSourceKey(context: SearchSourceContext): string {
+	return JSON.stringify([context.activeNav ?? "all", context.scopeFilter, context.activeTagKey,
+		getRecordStatsSearchFilterKey(context.recordStatsSearchFilter)]);
+}
 
 export function buildSearchSourceScope(context: SearchSourceContext, today = new Date()): CatalogQueryFilter {
 	let filter: CatalogQueryFilter = {};

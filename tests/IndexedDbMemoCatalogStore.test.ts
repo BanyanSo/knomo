@@ -587,20 +587,22 @@ test("完全同时间的跨文件浮标保留各 Store 原来的稳定并列顺�
 	try {
 		for (const store of stores) {
 			await store.open();
-			for (const path of ["Daily/a.md", "Daily/A.md", "日记/一.md", "日记/二.md"]) {
+			const paths = ["Daily/a.md", "Daily/A.md", "日记/一.md", "日记/二.md"];
+			for (const path of paths) {
 				await store.replaceFilePartition(makePartition(path, "2026-09-27", [
 					makeObservation(path, "2026-09-27", 1, "09:00", "same", { timeBuoyDates: ["2026-09-27"] }),
 				]));
 			}
-			const expected = (await store.query({ hasTimeBuoy: true, limit: 30 })).items.map(item => item.observationKey);
-			const keys: string[] = [];
+			const expected = paths.sort((left, right) => store instanceof InMemoryMemoCatalogStore
+				? right.localeCompare(left) : left > right ? -1 : 1);
+			const actual: string[] = [];
 			let page = await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1 });
 			for (;;) {
-				keys.push(...page.items.map(item => item.observationKey));
+				actual.push(...page.items.map(item => item.sourcePath));
 				if (!page.nextCursor) break;
 				page = await store.queryTimeBuoys({ today: "2026-09-27", tab: "today", limit: 1, cursor: page.nextCursor });
 			}
-			assert.deepEqual(keys, expected);
+			assert.deepEqual(actual, expected);
 		}
 	} finally { stores.forEach(store => store.close()); await deleteDatabase(name); }
 });

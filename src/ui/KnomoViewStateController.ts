@@ -62,6 +62,7 @@ export class KnomoViewStateController {
 		this.search.applied.shortcut = filter;
 		if (filter !== null || this.search.applied.dateOrigin === "shortcut") {
 			this.search.applied.date = null;
+			this.search.applied.dateRange = undefined;
 			this.search.applied.dateOrigin = filter === null ? null : "shortcut";
 		}
 	}
@@ -110,9 +111,9 @@ export class KnomoViewStateController {
 	}
 
 	setSearchQuery(query: string): SearchStateResult {
-		this.search.updateDraft(query);
+		if (query !== this.search.draft.text) this.search.updateDraft(query);
 		if (!this.search.submit()) return { type: "changed" };
-		if (this.activeNav === "things" || this.activeNav === "favorites") return { type: "changed", clearCardMenu: true };
+		if (this.preservesSearchSource()) return { type: "changed", clearCardMenu: true };
 		if (query.trim().length > 0 || this.searchDateFilter !== null || this.recordStatsSearchFilter !== null) {
 			this.clearActiveTag();
 			this.activeNav = "all";
@@ -124,12 +125,11 @@ export class KnomoViewStateController {
 
 	setSearchDateFilter(filter: SearchDateFilter): SearchStateResult {
 		if (!this.search.toggleShortcut(filter)) return { type: "changed" };
-		if (this.activeNav === "things" || this.activeNav === "favorites") {
+		if (this.preservesSearchSource()) {
 			this.desktopSearchOpen = false;
 			this.compactSearchOpen = false;
 			return { type: "changed", clearCardMenu: true };
 		}
-		this.recordStatsSearchFilter = null;
 		this.clearActiveTag();
 		this.activeNav = "all";
 		this.scopeFilter = "all";
@@ -258,12 +258,21 @@ export class KnomoViewStateController {
 		this.recordStatsSearchFilter = null;
 	}
 
-	getSearchSource(today = new Date()) {
-		return buildSearchSourceScope({
+	getSearchSourceContext() {
+		return {
 			activeNav: this.activeNav, scopeFilter: this.scopeFilter,
 			activeTag: this.activeTag, activeTagKey: this.activeTagKey,
 			recordStatsSearchFilter: this.recordStatsSearchFilter,
-		}, today);
+		};
+	}
+
+	getSearchSource(today = new Date()) {
+		return buildSearchSourceScope(this.getSearchSourceContext(), today);
+	}
+
+	private preservesSearchSource(): boolean {
+		return this.activeNav === "things" || this.activeNav === "favorites"
+			|| this.recordStatsSearchFilter !== null || (this.activeNav === "all" && this.scopeFilter === "referenced");
 	}
 
 	clearActiveTag(): void {

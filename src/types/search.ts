@@ -13,4 +13,5 @@ export interface ParsedSearch {
 	terms: string[];
 	date: SearchDate | null;
 	dateRange: SearchInputRange | null;
+	dateFallback?: true;
 }

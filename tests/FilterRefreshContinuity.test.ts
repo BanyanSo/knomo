@@ -353,7 +353,7 @@ test("新范围首批卡片与摘要同批出现，延迟计数只更新数字�
 			assert.ok(card); assert.equal(card.previousElementSibling, summary);
 			const fixed = summary.firstChild, slot = summary.querySelector(".knomo-result-summary-count")!;
 			assert.ok(slot); assert.equal(slot.getAttribute("data-state"), "pending");
-			assert.match(summary.textContent!, /memo 2026 \{\{count\}\}/u);
+			assert.match(summary.textContent!, /memo\s+\{\{count\}\}.*2026/u);
 			count.resolve(result); await new Promise<void>(resolve => setImmediate(resolve));
 			assert.equal(root.querySelector(".knomo-search-result-count"), summary);
 			assert.equal(summary.firstChild, fixed); assert.equal(summary.querySelector(".knomo-result-summary-count"), slot);
@@ -417,17 +417,21 @@ test("移动 A→B→A 后第一轮 A 的成功或失败都不能覆盖第二轮
 	});
 });
 
-test("组合筛选确认零结果只显示现有空态，空搜索不生成计数摘要", async () => {
+test("快捷日期筛选确认零结果时没有日期按钮，空搜索显示提示", async () => {
 	const h = await searchFixture({ query: "memo", date: "month", things: true });
 	try {
 		const page = h.page(); page.items = []; h.setLoad(async () => page); await h.controller.refreshAppliedResults();
 		const root = h.controller.results!;
 		assert.equal(root.querySelectorAll(".knomo-mobile-search-empty").length, 1);
 		assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
-		assert.equal(root.querySelector(".knomo-search-result-count"), null);
+		assert.equal(root.querySelector("[data-search-date-action]"), null);
 	} finally { h.close(); }
 	const empty = await searchFixture({});
-	try { assert.equal(empty.controller.results!.querySelector(".knomo-search-result-count"), null); }
+	try {
+		assert.equal(empty.controller.results!.querySelector(".knomo-search-result-count"), null);
+		assert.equal(empty.controller.results!.querySelector(".knomo-mobile-search-empty")?.textContent,
+			"Enter keywords or a date, or choose a quick search");
+	}
 	finally { empty.close(); }
 });
 
@@ -453,7 +457,10 @@ test("移动组合首查等待、失败及不完整空切片不显示零条，�
 			if (outcome === "partial") page.coverage = { ...page.coverage, kind: "partial", pendingFileCount: 1 };
 			pending.resolve(page);
 			await new Promise<void>(resolve => setImmediate(resolve));
-			if (outcome === "empty") assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			if (outcome === "empty") {
+				assert.ok(root.querySelector(".knomo-mobile-search-empty"));
+				assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
+			}
 			else assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
 			if (outcome === "partial") assert.match(root.textContent!, /Coverage incomplete/u);
 			if (outcome === "failed") assert.match(root.textContent!, /Could not load this view/u);
@@ -485,16 +492,17 @@ test("移动组合空窗口仍有下一页时保留加载入口，数量确认�
 				assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
 				assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
 			} else {
-				assert.equal(root.querySelector(".knomo-search-result-count"), null);
+				assert.ok(root.querySelector(".knomo-mobile-search-empty"));
 				assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
 			}
 			page.nextCursor = null;
 			await h.controller.refreshAppliedResults();
-			assert.equal(root.querySelector(".knomo-search-result-count"), null);
+			assert.ok(root.querySelector(".knomo-mobile-search-empty"));
 			assert.match(root.querySelector(".knomo-mobile-search-empty")!.textContent!, /0 Memos/u);
 			h.controller.updateCatalogProgress({ ...page.coverage, coveredFileCount: 2, totalFileCount: 2 });
 			h.controller.renderResults();
 			assert.equal(root.querySelector(".knomo-mobile-search-empty"), null);
+			assert.equal(root.querySelector("[data-search-date-action]"), null);
 			assert.equal(root.querySelector(".knomo-result-summary-count")!.getAttribute("data-state"), "unavailable");
 			assert.ok(root.querySelector(".knomo-mobile-search-more"));
 		} finally { pending.resolve(page); count.resolve(result); h.close(); }

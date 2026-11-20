@@ -11,25 +11,28 @@ export function parseSearchInput(input: string): ParsedSearch {
 	const result: ParsedSearch = { status: "empty", terms: [], date: null, dateRange: null };
 	const tokens: Token[] = [];
 	// 任一日期解析失败都回退整条原文，不沿用已提取的日期、文字或转义结果。
-	const asText = (): ParsedSearch => ({ status: "valid", terms: [normalizeSearchText(input)], date: null, dateRange: null });
+	const asText = (): ParsedSearch => ({
+		status: "valid", terms: [normalizeSearchText(input)], date: null, dateRange: null, dateFallback: true,
+	});
 	let at = 0;
 	while (at < input.length) {
 		if (/\s/u.test(input.charAt(at))) { at++; continue; }
 		const from = at, opening = input.charAt(at).normalize("NFKC");
-		// 引号仅为数字日期提供文字转义，普通文字沿用连续文本匹配。
+		// 独立引号保护连续短语和数字转义，保留原文位置供日期操作使用。
 		if (opening === '"' || opening === "“") {
 			const closing = opening === "“" ? "”" : '"';
 			let close = at + 1;
 			while (close < input.length && input.charAt(close).normalize("NFKC") !== closing) close++;
 			if (close === input.length) close = -1;
-			const value = normalizeSearchText(input.slice(at + 1, close < 0 ? input.length : close));
-			if (/^[\d\s~至-]+$/u.test(value)) {
-				if (close < 0) return asText();
-				if (close + 1 === input.length || /\s/u.test(input.charAt(close + 1))) {
-					at = close + 1;
-					tokens.push({ from, to: at, phrase: true, value });
-					continue;
-				}
+			const raw = input.slice(at + 1, close < 0 ? input.length : close);
+			const value = normalizeSearchText(raw);
+			const numericEscape = /^[\d\s~至-]+$/u.test(value);
+			if (numericEscape && close < 0) return asText();
+			if (close >= 0 && (close + 1 === input.length || /\s/u.test(input.charAt(close + 1)))) {
+				at = close + 1;
+				const term = numericEscape || /\s/u.test(raw.trim()) ? value : normalizeSearchText(input.slice(from, at));
+				tokens.push({ from, to: at, phrase: true, value: term });
+				continue;
 			}
 		}
 		while (at < input.length && !/\s/u.test(input.charAt(at))) at++;
@@ -79,8 +82,6 @@ export function parseSearchInput(input: string): ParsedSearch {
 			result.terms.push(token.value);
 		}
 	}
-	const text = normalizeSearchText(result.terms.join(" "));
-	result.terms = text ? [text] : [];
 	result.status = result.terms.length > 0 || result.date !== null ? "valid" : "empty";
 	return result;
 }

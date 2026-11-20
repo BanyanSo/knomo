@@ -612,7 +612,10 @@ test("组合筛选首查和已有窗口切换时，等待、失败与不完整�
 				if (outcome === "failed") pending.reject(new Error("Combination query failed"));
 				else pending.resolve(outcome === "partial" ? buildingLoad([]) : readyLoad(outcome === "empty" ? [] : [target]));
 				await loading;
-				if (outcome === "empty") assert.match(h.title()!, /0 Memos/u);
+				if (outcome === "empty") {
+					assert.match(h.root.textContent!, /0 Memos/u);
+					assert.equal(h.root.querySelector("[data-search-date-action]"), null);
+				}
 				else assert.doesNotMatch(h.root.textContent!, /0 Memos/u);
 				if (outcome === "ready") assert.equal(h.cards().length, 1);
 				if (outcome === "failed") {

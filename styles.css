@@ -1486,6 +1486,22 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	pointer-events: auto;
 }
 
+.knomo-plugin .knomo-result-summary-line.has-date-action {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.knomo-plugin .knomo-result-summary-line.has-date-action > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-result-summary-line.has-date-action > button {
+	flex: 0 0 auto;
+}
+
 .knomo-plugin .knomo-search-menu-option,
 .knomo-plugin .knomo-scope-option {
 	display: flex;

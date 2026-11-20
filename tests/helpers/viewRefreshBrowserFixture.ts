@@ -11,6 +11,7 @@ import type { CardImageLoadRequest } from "../../src/ui/CardImageLoadQueue";
 import { syncKnomoCardFlowHeaders } from "../../src/ui/KnomoFeed";
 import { syncResultCountSummary } from "../../src/ui/ResultCountSummary";
 import { getRegularFilterCopy } from "../../src/ui/viewFilters";
+import { SearchSession } from "../../src/ui/SearchSession";
 import { MobileSearchController, type MobileSearchPage } from "../../src/ui/MobileSearchController";
 import { createCatalogCapabilities } from "../../src/services/MemoCapabilityModel";
 import { TimeBuoyViewController } from "../../src/ui/TimeBuoyViewController";
@@ -1112,10 +1113,14 @@ export async function resultSummaryGeometry(options: { mobile: boolean; width: n
 	root.classList.toggle("is-layout-desktop-wide", !options.mobile);
 	root.style.width = flow.style.width = `${options.width}px`;
 	root.style.setProperty("--knomo-text-ui-base", `${options.fontSize}px`);
-	const query = "memo 2026 {{count}} 长条件 Long condition with words and 日期筛选";
+	const query = 'memo "2026" {{count}} 长条件 Long condition with words and 日期筛选';
 	const memos = Array.from({ length: 35 }, (_, i) => h.makeMemo(i, 0, false));
+	const search = new SearchSession();
+	search.updateDraft(query);
+	search.submit();
+	search.commitResult(search.getFilter(), 1, "");
 	const copy = getRegularFilterCopy({ activeNav: "all", activeTag: null, activeTagKey: null, searchQuery: query,
-		searchDateFilter: null, recordStatsSearchFilter: null, scopeFilter: "all" }, null, true)!;
+		searchDateFilter: null, recordStatsSearchFilter: null, scopeFilter: "all" }, null, true, search.result)!;
 	const summary = copy.summary;
 	let finishCount!: (result: { count: number | null; complete: boolean; catalogRevision: number; coverage: MobileSearchPage["coverage"] }) => void;
 	let countStarted!: () => void;

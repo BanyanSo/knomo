@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { SearchSession, getSearchShortcutDate } from "../src/ui/SearchSession";
 import { buildSearchSourceScope } from "../src/ui/SearchSourceScope";
 import { getCatalogQueryKey, narrowCatalogQuery } from "../src/services/SearchMatching";
+import { getRegularFilterCopy } from "../src/ui/viewFilters";
 
 test("回退文字可提交并移除旧手写日期，关闭与新草稿不改已接受结果指纹", () => {
 	const session = new SearchSession();
@@ -32,7 +33,7 @@ test("B：快捷日期与手输互斥，按钮只删除日期原文，原生清�
 	assert.equal(session.applied.shortcut, null);
 	session.toggleShortcut("month");
 	assert.equal(session.draft.text, "项目  复盘");
-	assert.deepEqual(session.applied.terms, ["项目 复盘"]);
+	assert.deepEqual(session.applied.terms, ["项目", "复盘"]);
 	assert.equal(session.applied.dateOrigin, "shortcut");
 	session.updateDraft(""); session.submit();
 	assert.equal(session.applied.shortcut, "month");
@@ -50,6 +51,54 @@ test("B：快捷日期与手输互斥，按钮只删除日期原文，原生清�
 	session.reset();
 	assert.equal(session.draft.text, "");
 	assert.equal(session.draft.composing, false);
+});
+
+test("按文字搜索使用已接纳的新日期区间，光标停在日期的闭引号之后", () => {
+	const session = new SearchSession();
+	const first = '2026-10-09 "项目 复盘"';
+	session.updateDraft(first); session.submit();
+	const filter = session.getFilter();
+	session.commitResult(filter, 4, "complete");
+	const second = '２０２６１００９ "项目 复盘"';
+	const start = second.indexOf("复盘");
+	session.updateDraft(second, start, start + 2); session.submit();
+	assert.equal(getCatalogQueryKey(session.getFilter()), getCatalogQueryKey(filter));
+	assert.equal(session.searchDateAsText(), false);
+	session.commitResult(session.getFilter(), 4, "complete");
+	session.beginComposition();
+	assert.equal(session.searchDateAsText(), false);
+	session.endComposition(second, start, start + 2);
+	session.submit();
+	session.commitResult(session.getFilter(), 4, "complete");
+	assert.equal(session.searchDateAsText(), true);
+	assert.equal(session.draft.text, '"２０２６１００９" "项目 复盘"');
+	const caret = '"２０２６１００９"'.length;
+	assert.deepEqual([session.draft.selectionStart, session.draft.selectionEnd], [caret, caret]);
+	assert.deepEqual(session.applied.terms, ["20261009", "项目 复盘"]);
+});
+
+test("日期反馈区分离散及循环日期冲突、零命中和日期解析回退", () => {
+	const source = { activeNav: "all", scopeFilter: "all", activeTag: null, activeTagKey: null,
+		recordStatsSearchFilter: { type: "max-daily-notes", dates: ["2026-02-12", "2026-10-30"] } } as const;
+	const contextSource = { ...source, recordStatsSearchFilter: { ...source.recordStatsSearchFilter, dates: [...source.recordStatsSearchFilter.dates] } };
+	const today = new Date(2026, 10, 20);
+	const sourceFilter = buildSearchSourceScope(contextSource, today);
+	const context = { source: contextSource, sourceFilter, today };
+	const session = new SearchSession();
+	for (const [input, conflict] of [['2026-05 "项目 复盘"', true], ['1220~0110 项目', true], ['0212 项目', false]] as const) {
+		session.updateDraft(input); session.submit();
+		session.commitResult(session.getFilter(sourceFilter), 4, "complete", context);
+		assert.equal(session.result?.dateConflict, conflict);
+	}
+	session.updateDraft('2026-13 "项目 复盘"'); session.toggleShortcut("month");
+	session.commitResult(session.getFilter(sourceFilter, context.today), 4, "complete", context);
+	const copy = getRegularFilterCopy({ ...context.source, searchQuery: "", searchDateFilter: null }, 0, false, session.result, true);
+	assert.ok(copy?.summary.searchDateFeedback?.feedback);
+	assert.ok(copy?.summary.searchDateFeedback?.conflict);
+	assert.equal(copy?.summary.dateLiteral, undefined);
+	assert.equal(session.searchDateAsText(), false);
+	assert.equal(session.draft.text, '2026-13 "项目 复盘"');
+	assert.deepEqual(session.applied.terms, ['2026-13 "项目 复盘"']);
 });
 
 test("回退整条文字可选中及取消快捷日期，不移除其中有效日期或引号", () => {

@@ -116,6 +116,8 @@ export function getCardFlowPresentation(options: CardFlowPresentationOptions): C
 			type: "empty",
 			title: options.regularFilterCopy?.emptyTitle ?? getEmptyStateTitle(options.activeNav),
 			description: "",
+			...(options.regularFilterCopy && (options.regularFilterCopy.summary.searchDateFeedback || options.regularFilterCopy.summary.dateLiteral)
+				? { headers: [{ type: "result-summary" as const, summary: options.regularFilterCopy.summary }] } : {}),
 			...(options.activeNav === "random" ? { headers: [getRandomReunionToolbar(0),
 				...(options.randomReunionError ? [{ type: "summary" as const, text: options.randomReunionError, feedback: true }] : [])] } : {}),
 		};

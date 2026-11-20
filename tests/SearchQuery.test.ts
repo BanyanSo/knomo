@@ -36,10 +36,10 @@ for (const input of [
 	"2026-10-99", "2026~202610", "1009~20261012", "20261009~20261001", "2026 1009", "2026 2027",
 	"1232~2026", "20261009~项目", "2026~~2027", '"2026', '“2026',
 	"项目 2026-13 后续", "20261009 项目 2026-13 后续", "2026-13 项目 20261009", '"2026" 20261009 2026-',
-	'  Ａ  项目　２０２６１００９　２０２６－１３  “2026” ',
+	'  Ａ  项目　２０２６１００９　２０２６－１３  “2026” ', '"项目 复盘" 2026-10 2026-13',
 ]) test("解析失败整条回退为连续文字：" + input, () => {
 	assert.deepEqual(parseSearchInput(input), {
-		status: "valid", terms: [normalizeSearchText(input)], date: null, dateRange: null,
+		status: "valid", terms: [normalizeSearchText(input)], date: null, dateRange: null, dateFallback: true,
 	});
 });
 
@@ -56,14 +56,25 @@ test("日期转义与 NFKC 保留原始删除区间", () => {
 	const input = 'ﬃ项 ２０２６１００９ "Ａ  B"';
 	const parsed = parseSearchInput(input);
 	assert.equal(input.slice(parsed.dateRange!.from, parsed.dateRange!.to), "２０２６１００９");
-	assert.deepEqual(parsed.terms, ['ffi项 "a b"']);
+	assert.deepEqual(parsed.terms, ["ffi项", "a b"]);
 	assert.equal(getCatalogQueryKey({ searchDate: parseSearchInput("20261009").date! }),
 		getCatalogQueryKey({ searchDate: parseSearchInput("２０２６－１０－０９").date! }));
 });
 
-test("恢复连续文字：空格不再拆成默认 AND，日期之外的引号属于文字", () => {
- assert.deepEqual(parseSearchInput("项目 复盘").terms, ["项目 复盘"]);
- assert.deepEqual(parseSearchInput("项目 20261009 复盘").terms, ["项目 复盘"]);
- assert.deepEqual(parseSearchInput('项目"复盘"').terms, ['项目"复盘"']);
- assert.deepEqual(parseSearchInput('"2026" 项目').terms, ["2026 项目"]);
+test("普通空白分词，独立多词引号和数字转义各保留一个条件", () => {
+	for (const [input, terms] of [
+		["项目 复盘", ["项目", "复盘"]],
+		["复盘　项目", ["复盘", "项目"]],
+		["项目 20261009 复盘", ["项目", "复盘"]],
+		['"项目 复盘" 预算', ["项目 复盘", "预算"]],
+		['＂项目 复盘" “ 预算　调整 ”', ["项目 复盘", "预算 调整"]],
+		['"2026-10 项目" 复盘', ["2026-10 项目", "复盘"]],
+		['"2026" 项目', ["2026", "项目"]],
+		['项目"复盘"', ['项目"复盘"']],
+		['"项目 复盘', ['"项目', "复盘"]],
+		['"项目 复盘"预算', ['"项目', '复盘"预算']],
+		['"词" "" "  " " A "', ['"词"', '""', '" "', '" a "']],
+	] as const) assert.deepEqual(parseSearchInput(input).terms, terms, input);
+	assert.equal(parseSearchInput('"2026-10 项目"').date, null);
+	assert.equal(parseSearchInput('2026-10 ~ "2026-11"').dateFallback, true);
 });

@@ -110,6 +110,22 @@ test("桌面获焦沿用快捷日期菜单：不查询、不跳页、不增加�
 			assert.equal(h.state.desktopSearchOpen, false);
 			h.drain(); assert.equal(h.queries, 1);
 			assert.equal(h.state.activeNav, nav === "things" ? "things" : "all");
+			assert.deepEqual(h.state.search.applied.terms, ["项目", "复盘"]);
+		} finally { h.dom.window.close(); }
+	}
+});
+
+test("宽窄搜索入口替换全角日期时读取输入框当前选区", async () => {
+	for (const layout of ["desktop-wide", "desktop-narrow"] as const) {
+		const h = await desktopSearch(layout);
+		try {
+			const value = '２０２６１００９ "项目 复盘"';
+			h.change(value);
+			const start = value.indexOf("复盘");
+			h.input.setSelectionRange(start, start + 2);
+			h.view.setSearchDateFilter("month", h.root.querySelector<HTMLElement>('[data-search-date="month"]'));
+			assert.equal(h.input.value, '"项目 复盘"');
+			assert.equal(h.input.value.slice(h.input.selectionStart!, h.input.selectionEnd!), "复盘");
 			assert.deepEqual(h.state.search.applied.terms, ["项目 复盘"]);
 		} finally { h.dom.window.close(); }
 	}

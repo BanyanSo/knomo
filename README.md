@@ -179,7 +179,7 @@ Monthly files make it easier to browse a long memo stream without losing the dai
 
 ### Card-based browsing
 
-Knomo displays memos as cards instead of forcing you to read the raw Markdown stream.
+Knomo displays memos as cards so you can scan recent entries and jump straight to the original Markdown when you need it.
 
 Cards are useful for:
 
@@ -197,15 +197,17 @@ Cards are useful for:
 
 Knomo supports multiple ways to narrow down your memo stream:
 
-- all notes;
-- **Things** — memos containing Markdown checkboxes;
-- untagged memos;
-- memos with links;
-- memos with images;
-- on-this-day / anniversary review;
-- recent ranges such as this week, this month, last 7 days, last 30 days, last week, and last month;
-- tag filtering;
-- keyword search;
+- all notes.
+- **Things** — memos containing Markdown checkboxes.
+- **Favorites** — memos you’ve starred (Knomo 1.15.0+).
+- untagged memos.
+- memos with links.
+- memos with images.
+- **Referenced** — memos that other memos link to, with optional keyword and date filters.
+- on-this-day / anniversary review.
+- recent ranges such as this week, this month, last 7 days, last 30 days, last week, and last month.
+- tag filtering.
+- keyword search.
 - statistics-driven filters.
 
 Since [1.13.0](release-notes/1.13.0.md), desktop and mobile search accept dates directly and can combine them with text:
@@ -216,12 +218,18 @@ Since [1.13.0](release-notes/1.13.0.md), desktop and mobile search accept dates 
 | `10-09` | October 9 in any year |
 | `2026-10-01~2026-10-09 review` | Memos containing “review” within the date range; `至` also joins range endpoints |
 | `"2026"` | The literal text 2026 |
+| `project review` | Memos containing both keywords, in any order |
+| `"project review" budget` | Memos containing the phrase “project review” and the keyword “budget” |
 
-Ordinary text uses normalized, contiguous matching: `project review` requires the contiguous text “project review”. Finding “project” and “review” at separate positions does not satisfy this query. Spaces do not create separate keyword AND conditions; multi-keyword AND remains a future candidate and is not supported in the current version.
+In Knomo 1.15.0 and later, separate keywords with spaces to find memos containing all of them. Put a phrase in double quotes to find those words together. Keywords can also match tags, link targets, or image paths. You can combine keywords, phrases, and a date in one search.
+
+Search within **Things**, **Favorites**, **Referenced**, or a **Record statistics** detail to keep that scope. A search date narrows the original date range, and the result summary shows the scope and dates. If the ranges do not overlap, Knomo displays a notice.
+
+To search for a typed date as text, enclose it in double quotes or choose **Search date as text** in the result summary after the date is recognized. If a date is incomplete or invalid, Knomo searches the entire input as continuous text and displays **Searched as typed**. Selecting a quick date replaces a valid typed date while keeping the other keywords.
 
 Search highlights matches that can be reliably located in the card's currently visible body. A result may have no highlight when only a link target, image path, or content outside the preview matches.
 
-Knomo uses a rebuildable local Catalog for historical queries, filters, and statistics, and loads memo cards in pages. Each device builds its own Catalog from Daily Notes; the index itself does not need to be synced.
+Knomo uses a rebuildable local Catalog for historical queries, filters, and statistics. Each device builds its own Catalog from Daily Notes and loads matching cards in pages.
 
 ---
 
@@ -250,7 +258,9 @@ This is useful when you want to:
 - connect scattered fragments over time;
 - keep the original source memo traceable.
 
-References use Obsidian-friendly links or block references so the connection remains meaningful outside Knomo.
+References use Obsidian links or block references so you can follow them from the original Markdown.
+
+When other memos reference a card, it can show a preview of those memos. Open **Relation details** to see the total and browse the direct referrers, newest first. You can follow more connections from there and return to the previous memo or list at your reading position.
 
 ---
 
@@ -276,6 +286,14 @@ The goal is not to become an image manager. Knomo only provides compact previews
 
 ---
 
+### Share a memo as an image
+
+Choose **Share** from the memo’s card menu to preview it as a PNG. Pick **Paper**, **Daybook**, **Reflection**, or **Midnight**, then share, copy, or save using the options available on your device. You can also save the image to the Vault root.
+
+Export supports common Markdown, static images, task lists, and expanded callouts. Knomo shows a message for content it cannot fully export, such as math, footnotes, HTML, dynamic queries or diagrams, and note, audio, video, or document embeds.
+
+---
+
 ### Task lists and checkboxes
 
 Knomo supports Markdown task lists inside memos.
@@ -294,26 +312,41 @@ Open **Things** from the sidebar or view selector to see memos with supported ch
 
 ---
 
+### Favorites
+
+From a memo’s card menu, choose **Star**, then open **Favorites** from the sidebar or view selector. You can search and filter your starred memos, and the result count includes matches beyond the pages you’ve loaded. Use **Unstar** to remove a memo from the collection.
+
+### Beacon
+
+Choose **Set as Beacon** from a card menu to pin one memo at the top of the default **All notes** view. Set another memo as the Beacon to replace it, or choose **Remove from Beacon** on the pinned card. If the memo also has a Time buoy, the card shows both markers.
+
+Beacon and Favorites are available in Knomo 1.15.0 and later. [See the 1.15.0 release notes](./release-notes/1.15.0.md)
+
+---
+
 ### Record statistics
 
 Knomo includes a record statistics view for understanding your memo habits and reviewing your writing rhythm.
 
 It can show:
 
-- total notes;
-- total words;
-- recording days;
-- notes with tags;
-- notes without tags;
-- notes with images;
-- referenced notes;
-- busiest days by note count;
-- wordiest days;
-- weekly, monthly, and yearly trends;
-- recording time distribution;
+- total notes.
+- total words.
+- recording days.
+- notes with tags.
+- notes without tags.
+- notes with images.
+- notes containing block references and notes referenced by other memos.
+- memos in Things and Favorites (Knomo 1.15.0+).
+- busiest days by note count.
+- wordiest days.
+- weekly, monthly, and yearly trends.
+- recording time distribution.
 - common tags.
 
-Statistics are designed for review and navigation, not for turning writing into a productivity scoreboard. You can use statistics to notice patterns and jump back into related memo cards.
+Select a supported count or chart entry to open the matching memo cards. Things and Favorites count qualifying memos by the date of the source daily note. If you star an old memo today, it counts toward the period in which it was written.
+
+The **Common tags** section shows up to 10 tags per period. It counts each directly applied tag once per memo. Selecting `#project` here shows memos with that exact tag. The sidebar tag filter also includes child tags.
 
 ---
 
@@ -463,11 +496,12 @@ After saving, the memo appears in the card flow and is written to the correspond
 
 After writing for a while, try:
 
-- filtering by tags;
-- searching text or entering a date such as `2026-10-09`;
-- opening memos with links or images;
-- using Random revisit;
-- checking Record statistics;
+- filtering by tags.
+- searching text or entering a date such as `2026-10-09`.
+- opening memos with links or images.
+- using Random revisit.
+- starring a memo you want to find again, or setting one as the Beacon.
+- checking Record statistics.
 - referencing an older memo when creating a new one.
 
 ---
@@ -569,16 +603,20 @@ Knomo uses simple Markdown that stays readable outside the plugin.
 
 Knomo settings include:
 
-- Daily Note insertion heading;
-- new memo insertion position;
-- memo time format;
-- monthly memos folder;
-- monthly memos filename format;
-- date heading format inside monthly files;
-- monthly date sort order;
-- optional exclusion of monthly memo files from Obsidian search / graph / statistics;
-- pinned tags;
+- Daily Note insertion heading.
+- new memo insertion position.
+- memo time format.
+- Composer toolbar controls and a Time buoy toggle.
+- display preferences such as **Recent 3-day time flow** and **Reduce glass effects**.
+- Knomo folder for monthly archives, Trash, and Favorites.
+- monthly memos filename format.
+- date heading format inside monthly files.
+- monthly date sort order.
+- optional exclusion of monthly memo files from Obsidian search / graph / statistics.
+- pinned tags.
 - data repair and rebuild tools.
+
+In Knomo 1.15.0 and later, changing the **Knomo folder** generates monthly archives in the new location from your daily notes. Knomo also attempts to move the Trash and Favorites files and reports any incomplete move.
 
 ---
 
@@ -586,14 +624,16 @@ Knomo settings include:
 
 Knomo's core principle is: **your data belongs to you**.
 
-- Memo content is stored in your Obsidian Vault;
-- Daily Notes and monthly Memos files are regular Markdown files;
-- Markdown files can be read, backed up, synced, and migrated directly;
-- the plugin index improves browsing, filtering, statistics, and sync behavior;
-- Daily Notes are the source of truth for active memos; the local Catalog and monthly files can be rebuilt from them;
-- Knomo does not require an account;
-- Knomo does not rely on an external server;
+- Memo content is stored in your Obsidian Vault.
+- Daily Notes and monthly Memos files are regular Markdown files.
+- Markdown files can be read, backed up, synced, and migrated directly.
+- the local Catalog speeds up browsing, filtering, and statistics on each device.
+- Daily Notes are the source of truth for active memos; the local Catalog and monthly files can be rebuilt from them.
+- Knomo does not require an account.
+- Knomo does not rely on an external server.
 - Knomo does not actively upload your notes.
+
+Favorites records are stored in `knomo-favorite.json` in the Knomo folder. If you want to use your Favorites on another device, keep that file and the source daily notes in your vault sync or backup.
 
 ---
 
@@ -712,12 +752,10 @@ Yes. Mobile is one of Knomo's main optimization areas. Knomo includes a mobile c
 
 The index may not have refreshed yet, or Markdown files may have been edited externally.
 
-Try:
-
-1. checking the original Markdown file;
-2. refreshing Knomo;
-3. using repair / rebuild tools;
-4. opening an issue with reproduction steps if the problem persists.
+1. Check the original Markdown file.
+2. Refresh Knomo.
+3. If Knomo reports an index problem, open its settings and choose **Reread daily notes** under **Needs attention**.
+4. If the problem persists, open an issue with steps to reproduce it.
 
 ### Can I edit Markdown files manually?
 

@@ -12,7 +12,7 @@ import { getCatalogQueryKey } from "../services/SearchMatching";
 import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
 import { SearchSession } from "./SearchSession";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
-import { buildSearchSourceScope } from "./SearchSourceScope";
+import { buildSearchSourceScope, getSearchSourceKey, type SearchSourceContext } from "./SearchSourceScope";
 import { bindSearchInput } from "./SearchInputBinding";
 import {
 	getRegularFilterCopy,
@@ -104,7 +104,7 @@ export class MobileSearchController {
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
 	readonly session = new SearchSession();
-	private displayedContext: { view: ScopedSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
+	private displayedQueryContextKey = "";
 	private displayedMemos: MemoRecord[] | null = null;
 	private revokedResults: { key: string; memos: Map<string, MemoRecord> } | null = null;
 	private displayedCount: number | null = null;
@@ -126,6 +126,7 @@ export class MobileSearchController {
 		this.session.applied.shortcut = filter;
 		if (filter !== null || this.session.applied.dateOrigin === "shortcut") {
 			this.session.applied.date = null;
+			this.session.applied.dateRange = undefined;
 			this.session.applied.dateOrigin = filter === null ? null : "shortcut";
 		}
 	}
@@ -268,6 +269,16 @@ export class MobileSearchController {
 			onClose: () => this.closePage(),
 		});
 		this.options.registerDomEvent(this.resultsEl, "click", (event) => {
+			if ((event.target as Element | null)?.closest?.("[data-search-date-action]")) {
+				if (!this.canApplySearchDateAction()) return;
+				this.readInputDraft();
+				if (this.session.searchDateAsText()) {
+					this.invalidateDraft();
+					this.submitDraft();
+					this.focusInputNow();
+				}
+				return;
+			}
 			this.options.handleMarkdownInternalLinkClick(event);
 		});
 		this.options.registerDomEvent(this.resultsEl, "click", (event) => {
@@ -442,7 +453,7 @@ export class MobileSearchController {
 		if (!this.open || !this.session.submit()) { this.syncControls(); return; }
 		this.syncInput();
 		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
-		this.visibleCount = this.options.batchSize;
+		if (this.getDisplayedRequestKey() !== this.getViewStateKey()) this.visibleCount = this.options.batchSize;
 		void this.refreshRemoteResults(true, "view-scope-change", true);
 	}
 
@@ -454,16 +465,25 @@ export class MobileSearchController {
 
 	private syncControls(): void {
 		this.syncDateButtons();
+		if (!this.session.canApplyDateAction()) {
+			this.resultsEl?.querySelectorAll<HTMLButtonElement>("[data-search-date-action]").forEach(button => { button.disabled = true; });
+		}
+	}
+
+	private getSearchSourceContext(): SearchSourceContext {
+		const context = this.options.getScopedContext?.();
+		const stats = this.recordStatsFilter;
+		return {
+			activeNav: context?.activeNav ?? (stats?.type === "things" || stats?.type === "favorites" ? stats.type : "all"),
+			scopeFilter: this.options.getSourceScope?.() ?? "all",
+			activeTag: context?.activeTag ?? null, activeTagKey: context?.activeTagKey ?? null,
+			recordStatsSearchFilter: stats,
+		};
 	}
 
 	getAppliedFilter(): CatalogQueryFilter {
-		const context = this.options.getScopedContext?.();
-		const source = buildSearchSourceScope({
-			activeNav: context?.activeNav ?? "all", scopeFilter: this.options.getSourceScope?.() ?? "all",
-			activeTag: context?.activeTag ?? null, activeTagKey: context?.activeTagKey ?? null,
-			recordStatsSearchFilter: this.recordStatsFilter,
-		});
-		return this.session.getFilter(source);
+		const today = new Date();
+		return this.session.getFilter(buildSearchSourceScope(this.getSearchSourceContext(), today), today);
 	}
 
 	getDisplayedFilter(): CatalogQueryFilter { return this.session.result?.filter ?? this.getAppliedFilter(); }
@@ -478,11 +498,9 @@ export class MobileSearchController {
 
 	setDateFilter(filter: SearchDateFilter): void {
 		this.clearDebounce();
-		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
+		this.readInputDraft();
 		if (!this.session.toggleShortcut(filter)) { this.syncControls(); return; }
-		// 列表内的日期快捷项叠加在统计期上，沿用桌面的筛选范围。
 		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
-		else this.recordStatsFilter = null;
 		this.invalidateDraft();
 		this.syncInput();
 		this.visibleCount = this.options.batchSize;
@@ -497,7 +515,7 @@ export class MobileSearchController {
 		if (!preserveImages) this.clearImageCache();
 		this.clearDebounce();
 		this.session.reset();
-		this.displayedContext = null;
+		this.displayedQueryContextKey = "";
 		this.displayedMemos = null;
 		this.revokedResults = null;
 		this.acceptedWindow = null;
@@ -518,8 +536,13 @@ export class MobileSearchController {
 
 	flushQuery(): void {
 		this.clearDebounce();
-		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
+		this.readInputDraft();
 		this.session.submit();
+	}
+
+	private readInputDraft(): void {
+		const input = this.inputEl;
+		if (input) this.session.updateDraft(input.value, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length);
 	}
 
 	loadMore(): void {
@@ -550,7 +573,7 @@ export class MobileSearchController {
 			this.acceptedWindow = null;
 			this.displayedCount = null;
 			this.summaryPresentation = null;
-			this.displayedContext = null;
+			this.displayedQueryContextKey = "";
 			this.session.result = null;
 			this.session.requestStatus = "idle";
 			this.pendingQueryKey = null;
@@ -558,9 +581,10 @@ export class MobileSearchController {
 			this.renderResults(changeIntent);
 			return;
 		}
-		const context = { view: this.options.getScopedContext?.(), scope: this.options.getSourceScope?.() ?? "all", stats: this.recordStatsFilter,
-			queryContextKey: this.options.getQueryContextKey?.() ?? "" };
-		const filter = this.getAppliedFilter();
+		const queryContextKey = this.options.getQueryContextKey?.() ?? "";
+		const source = this.getSearchSourceContext(), today = new Date();
+		const sourceFilter = buildSearchSourceScope(source, today);
+		const filter = this.session.getFilter(sourceFilter, today);
 		const key = this.getRequestKey(filter);
 		const favorites = this.options.getFavoriteQueryState?.();
 		const favoriteRevision = favorites?.revision, favoriteStatus = favorites?.status;
@@ -569,11 +593,18 @@ export class MobileSearchController {
 			&& this.pendingFavoriteRevision === favoriteRevision) return;
 		const revision = this.options.getCatalogRevision?.() ?? 0;
 		const coverageKey = this.options.getCoverageKey?.() ?? "";
-		if (deduplicate && (this.pendingQueryKey === key || (this.session.requestStatus === "ready" && !this.acceptedResultsInvalidated
-			&& this.getDisplayedRequestKey() === key && this.session.result?.catalogRevision === revision
-			&& this.session.result.coverageKey === coverageKey))) {
+		const accepted = this.session.result;
+		if (deduplicate && this.session.requestStatus === "ready" && !this.acceptedResultsInvalidated
+			&& this.getDisplayedRequestKey() === key && accepted?.catalogRevision === revision && accepted.coverageKey === coverageKey
+			&& this.isAcceptedSourceCurrent()
+			&& (this.displayedCount !== null || !this.options.countRemoteResults || !!favorites)) {
+			this.displayedQueryContextKey = queryContextKey;
+			this.session.commitResult(filter, revision, coverageKey, {
+				source, sourceFilter, today, favoriteRevision, relationRevision: accepted.relationRevision,
+			});
+			this.summaryPresentation = null;
 			this.syncControls();
-			if (this.session.requestStatus === "ready") this.renderResults("content-change");
+			this.renderResults("content-change", false, true);
 			return;
 		}
 		const sameScope = this.getDisplayedRequestKey() === key;
@@ -625,6 +656,8 @@ export class MobileSearchController {
 			const staged = new Map(page.items.map(memo => [getMemoRenderKey(memo), memo]));
 			const pageRevision = page.catalogRevision;
 			const relationsVersion = page.nextCursor?.relationsVersion ?? this.options.getRelationRevision?.();
+			if (filter.hasReferrers && this.options.getRelationRevision && this.options.getRelationRevision() !== relationsVersion)
+				throw new CatalogDiscoveryInvalidatedError();
 			const seenCursors = new Set<string>();
 			const pageBudget = page.favoriteProgress ? Math.max(1, this.favoritePageCount) : Infinity;
 			let pages = 1;
@@ -675,7 +708,7 @@ export class MobileSearchController {
 				.map(memo => [getMemoRenderKey(memo), memo])).values()];
 			const projected = this.options.projectResults?.(items, filter) ?? [...items];
 			acceptResults?.();
-			this.displayedContext = context;
+			this.displayedQueryContextKey = queryContextKey;
 			this.displayedMemos = projected;
 			this.displayedFavoriteRevision = favoriteRevision;
 			this.revokedResults = null;
@@ -691,11 +724,13 @@ export class MobileSearchController {
 					&& page.status.relations?.complete !== false
 					&& page.nextCursor === null && isQueryCovered(page.coverage, filter) ? this.displayedMemos.length : null;
 			}
-			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
+			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey, {
+				source, sourceFilter, today, favoriteRevision, relationRevision: filter.hasReferrers ? relationsVersion : undefined,
+			});
 			this.rememberAcceptedWindow();
 			this.options.onResultsAccepted?.(page);
 			if (reset && !page.favoriteProgress && this.displayedCount === null && !this.options.hasPendingMembershipChanges?.()
-				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
+				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, queryContextKey);
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
 			if (controller.signal.aborted || !favoriteCurrent() || error instanceof CatalogQueryCancelledError) {
@@ -792,8 +827,30 @@ export class MobileSearchController {
 		return this.open && this.revokedResults?.key === this.getViewStateKey() ? [...this.revokedResults.memos.values()] : [];
 	}
 	getDisplayedCount(): number | null {
-		return this.getDisplayedFilter().hasReferrers && (this.acceptedResultsInvalidated || this.getResultStatus(this.getMatchedMemos().length > 0)?.complete === false)
-			? null : this.displayedCount;
+		const favorites = this.options.getFavoriteQueryState?.();
+		if (favorites && (favorites.status !== "ready" || favorites.revision !== this.displayedFavoriteRevision || this.acceptedResultsInvalidated)) return null;
+		if (this.displayedCount === 0 || this.getDisplayedFilter().hasReferrers) {
+			if (this.acceptedResultsInvalidated || this.getResultStatus(!!this.displayedMemos?.length)?.complete === false) return null;
+		}
+		return this.displayedCount;
+	}
+
+	private isAcceptedSourceCurrent(): boolean {
+		const result = this.session.result;
+		const favorites = this.options.getFavoriteQueryState?.();
+		return (!favorites || (favorites.status === "ready" && favorites.revision === result?.favoriteRevision))
+			&& (!result?.filter.hasReferrers || this.options.getRelationRevision?.() === result.relationRevision)
+			&& this.getResultStatus(!!this.displayedMemos?.length)?.complete !== false;
+	}
+
+	private canApplySearchDateAction(): boolean {
+		const result = this.session.result;
+		return this.open && !!result?.searchDate && !!result.source && this.session.canApplyDateAction(result) && !this.acceptedResultsInvalidated
+			&& this.getDisplayedRequestKey() === this.getViewStateKey() && this.isAcceptedSourceCurrent()
+			&& getSearchSourceKey(result.source) === getSearchSourceKey(this.getSearchSourceContext())
+			&& (this.options.getCatalogRevision?.() ?? result.catalogRevision) === result.catalogRevision
+			&& (this.options.getCoverageKey?.() ?? result.coverageKey) === result.coverageKey
+			&& !this.options.hasPendingMembershipChanges?.();
 	}
 	private getResultStatus(hasMemos: boolean) {
 		return this.options.getResultStatus?.(this.getDisplayedFilter(), {
@@ -806,7 +863,7 @@ export class MobileSearchController {
 	}
 
 	private getDisplayedRequestKey(): string | null {
-		return this.session.result === null ? null : JSON.stringify([this.session.result.key, this.displayedContext?.queryContextKey ?? ""]);
+		return this.session.result === null ? null : JSON.stringify([this.session.result.key, this.displayedQueryContextKey]);
 	}
 
 	private cancelCount(): void {
@@ -1295,18 +1352,21 @@ export class MobileSearchController {
 		const blocked = this.queryError !== null || this.getResultStatus(visibleCount > 0)?.blocked === true;
 		const pending = !blocked && ((this.countController !== null && key === this.getRequestKey(this.getAppliedFilter()))
 			|| (this.queryController !== null && this.pendingQueryKey === key));
-		if (blocked || (total === 0 && !this.acceptedResultsInvalidated)) this.summaryPresentation = null;
+		const copy = key === null ? null : this.getResultCopy(total, pending);
+		if (total === null && this.summaryPresentation?.summary.count === 0) this.summaryPresentation = null;
+		if (blocked || (total === 0 && !copy?.summary?.searchDateFeedback && !copy?.summary?.dateLiteral)) this.summaryPresentation = null;
 		else if (updateSummary && key !== null) {
 			// 只允许同范围已展示的真实数量接续；新范围首批结果立即建立固定摘要。
 			const retained = this.summaryPresentation?.key === key && this.summaryPresentation.summary.count !== null;
 			if (total !== null || !retained) {
-				const summary = this.getResultCopy(total, pending)?.summary;
+				const summary = copy?.summary;
 				this.summaryPresentation = summary ? { key, summary } : null;
 			}
 		}
 		// 快照只接续已接纳范围的摘要，不能参与分页或当前查询计数。
-		const summary = this.summaryPresentation?.key === key ? this.summaryPresentation.summary
+		const snapshot = this.summaryPresentation?.key === key ? this.summaryPresentation.summary
 			: matchedCount > 0 && key !== null ? this.getResultCopy(null, pending)?.summary : null;
+		const summary = snapshot?.dateLiteral && !this.canApplySearchDateAction() ? { ...snapshot, dateLiteral: false } : snapshot;
 		if (!summary) results.find(".knomo-search-result-count")?.remove();
 		else {
 			const previous = results.find(".knomo-search-result-count");
@@ -1364,17 +1424,15 @@ export class MobileSearchController {
 	}
 
 	private getResultCopy(count: number | null, pending = false) {
-		const query = (this.session.result?.input ?? this.query).trim();
-		const date = this.session.result ? this.session.result.shortcut : this.dateFilter;
-		const context = this.displayedContext ? this.displayedContext.view : this.options.getScopedContext?.();
-		const scope = this.displayedContext ? this.displayedContext.scope : this.options.getSourceScope?.() ?? "all";
-		const stats = this.displayedContext ? this.displayedContext.stats : this.recordStatsFilter;
-		return context || scope !== "all" ? getRegularFilterCopy({
-			activeNav: "all", activeTag: null, activeTagKey: null, ...context,
-			searchQuery: query, searchDateFilter: date, recordStatsSearchFilter: stats, scopeFilter: scope,
-		}, count, pending) : {
-			summary: getMobileSearchResultSummary(query, date, count, pending, stats),
-			emptyTitle: formatMobileSearchEmptyTitle(query, date, stats),
+		const result = this.session.result;
+		const source = result?.source ?? this.getSearchSourceContext();
+		const query = (result?.input ?? this.query).trim();
+		const date = result ? result.shortcut : this.dateFilter;
+		return result || source.activeNav !== "all" || source.scopeFilter !== "all" ? getRegularFilterCopy({
+			...source, searchQuery: query, searchDateFilter: date,
+		}, count, pending, result, this.canApplySearchDateAction()) : {
+			summary: getMobileSearchResultSummary(query, date, count, pending, source.recordStatsSearchFilter),
+			emptyTitle: formatMobileSearchEmptyTitle(query, date, source.recordStatsSearchFilter),
 		};
 	}
 

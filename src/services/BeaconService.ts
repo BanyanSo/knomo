@@ -216,7 +216,7 @@ export class BeaconService {
 			|| !previous || !reference || this.selectedPath() !== change.sourcePath || blockAnchors?.[reference.blockId] !== 1) return null;
 		const handle = change.replacements.find(item => sameBeaconHandle(item.before, previous))?.after;
 		const observation = handle && observations.find(item => item.existingBlockId === reference.blockId && sameBeaconHandle(item, handle));
-		if (!observation || handle!.rawBlockHash !== previous.rawBlockHash || observation.time !== reference.memoTime) return null;
+		if (!observation || handle.rawBlockHash !== previous.rawBlockHash || observation.time !== reference.memoTime) return null;
 		this.generation++;
 		this.source = { path: change.sourcePath, logicalDate: change.logicalDate, sourceRevision: change.sourceRevision, observations, blockAnchors };
 		// 先让每个视图沿提交映射更新卡片，再通知灯标订阅者，避免夹入定位占位。

@@ -495,6 +495,107 @@ test("Favorites query keeps same-revision candidates, combines search and tags, 
 	catalog.close();
 });
 
+test("记录统计按当前 Daily 日期计算任务 Memo 与收藏，覆盖跨年周、闰日和未归期收藏", { timeout: 10000 }, async t => {
+	const dates = ["2024-02-29", "2025-12-31", "2026-01-01", "2026-01-04", "2026-01-05"];
+	const paths = dates.map(date => `Daily/${date}.md`);
+	const task = "- 10:00:00 Task\n\t- [ ] first\n\t- [x] second\n";
+	const initial = Object.fromEntries(paths.map(path => [path, task]));
+	initial[paths[0]!] = task + task;
+	initial[paths[1]!] = task.replace("Task", "Task ^a");
+	initial[paths[2]!] = "- 11:00 B ^b\n\t```md\n\t- [ ] example\n\t```\n";
+	const favorites = [
+		{ ...item("a", paths[1]), memoTime: "10:00:00", starredAt: "2026-01-06T00:00:00.000Z" },
+		{ ...item("b", paths[2]), memoTime: "11:00", starredAt: "2026-01-06T00:00:00.000Z" },
+	];
+	initial[FILE] = JSON.stringify(collection(favorites));
+	const f = await fixture(initial);
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { CatalogReadService } = await import("../src/services/CatalogReadService");
+	const { RecordStatsService } = await import("../src/services/RecordStatsService");
+	const { RecordStatsCountsController } = await import("../src/ui/RecordStatsCountsController");
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+	const read = new CatalogReadService({ catalog });
+	const stats = new RecordStatsService();
+	const counts = new RecordStatsCountsController();
+	try {
+		for (const path of paths) {
+			const source = await f.readSource(path);
+			await catalog.replaceFile({ ...source, blockAnchors: { ...source.blockAnchors }, inventory: {
+				sourcePath: path, logicalDate: source.logicalDate, mtime: 1, size: initial[path]!.length,
+			}, parserVersion: 1, settingsFingerprint: "test", auditedAt: 1 });
+		}
+		const store = catalog.getStore();
+		await store.setCoverage({ kind: "complete", coveredFromDate: dates[0]!, pendingFileCount: 0,
+			coveredFileCount: paths.length, totalFileCount: paths.length });
+		const catalogRevision = await store.getCatalogRevision();
+		const source = String(catalogRevision);
+		assert.equal(await stats.prepareFromSource(source, current => read.buildRecordStats(async () => {}, current)), true);
+		async function count(view: "week" | "month" | "year", date: Date) {
+			const selected = stats.select(view, date)!;
+			return new Promise<import("../src/ui/RecordStatsCountsController").RecordStatsCounts>(resolve => {
+				const sync = () => {
+					const result = counts.read({ source, selected, catalogRevision, read, favorites: f.service,
+						yieldToUi: async () => {}, isCurrent: () => true, onUpdate: sync });
+					if (result.things !== undefined && result.favorites !== undefined) resolve(result);
+				};
+				sync();
+			});
+		}
+		const recoveryPath = paths[1]!;
+		const readVault = f.vault.read.bind(f.vault);
+		let sourceUnavailable = true;
+		t.mock.method(f.vault, "read", (path: string) => {
+			if (path === recoveryPath && sourceUnavailable) throw new Error("Temporary Daily read failure");
+			return readVault(path);
+		});
+		const countReads = t.mock.method(read, "count");
+		const refreshes: (readonly string[] | undefined)[] = [];
+		const unsubscribe = f.service.subscribe((refresh, paths) => { if (refresh) refreshes.push(paths); });
+
+		const week = new Date(2026, 0, 1);
+		assert.deepEqual(await count("week", week), { things: 2, favorites: null });
+		await f.service.retry(false);
+		assert.equal((await f.service.resolve(recoveryPath)).status, "waiting");
+		assert.deepEqual(refreshes, []);
+		sourceUnavailable = false;
+		await f.service.retry(false);
+		assert.equal((await f.service.resolve(recoveryPath)).status, "ready");
+
+		assert.deepEqual(refreshes, [[recoveryPath]]);
+		assert.equal(await store.getCatalogRevision(), catalogRevision);
+		assert.deepEqual(await count("week", week), { things: 2, favorites: 2 });
+		assert.equal(countReads.mock.calls.filter(call => call.arguments[0]?.hasTask).length, 1);
+		unsubscribe();
+
+		const periods = [
+			["week", new Date(2026, 0, 1), 2, 2],
+			["week", new Date(2026, 0, 5), 1, 0],
+			["month", new Date(2025, 11, 31), 1, 1],
+			["year", new Date(2025, 11, 31), 1, 1],
+			["month", new Date(2026, 0, 1), 2, 1],
+			["year", new Date(2026, 0, 1), 2, 1],
+			["month", new Date(2024, 1, 1), 2, 0],
+		] as const;
+		for (const [view, date, things, favorites] of periods) {
+			assert.deepEqual(await count(view, date), { things, favorites });
+		}
+		f.vault.replace(FILE, JSON.stringify({ ...f.favorites(), items: [favorites[0]!] }));
+		f.store.fileChanged(FILE);
+		await f.drain();
+		assert.deepEqual(await count("week", new Date(2026, 0, 1)), { things: 2, favorites: 1 });
+		f.vault.replace(FILE, JSON.stringify({ ...f.favorites(), items: [item("a", "Unknown.md")] }));
+		f.store.fileChanged(FILE);
+		await f.drain();
+		assert.deepEqual(await count("week", new Date(2026, 0, 1)), { things: 2, favorites: null });
+		assert.deepEqual(await count("month", new Date(2026, 1, 1)), { things: 0, favorites: 0 });
+	} finally {
+		counts.clear();
+		f.service.dispose();
+		catalog.close();
+	}
+});
+
 test("拾星查询在空批次也返回日期续页，同一范围可继续找到较早的命中", async t => {
 	const paths = Array.from({ length: 73 }, (_, day) =>
 		`Daily/${new Date(Date.UTC(2026, 6, 1 + day)).toISOString().slice(0, 10)}.md`);

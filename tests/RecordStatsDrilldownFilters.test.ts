@@ -53,6 +53,19 @@ test("record stats trend drill-down accepts positive day and month points", () =
 	assert.equal(getRecordStatsTrendSearchFilter(null, "2026-06-01", "day"), null);
 });
 
+test("勾事记与拾星集只从已确认的正数进入所选日期范围", () => {
+	const selected = makeSelected();
+	for (const type of ["things", "favorites"] as const) {
+		for (const count of [undefined, null, 0]) {
+			assert.equal(getRecordStatsMetricSearchFilter(selected, type, undefined, false, count), null);
+		}
+		assert.equal(getRecordStatsMetricSearchFilter(selected, type, undefined, true, 1), null);
+		assert.deepEqual(getRecordStatsMetricSearchFilter(selected, type, undefined, false, 1), {
+			type, startDate: selected.startDate, endDateExclusive: selected.endDateExclusive,
+		});
+	}
+});
+
 test("record stats hour drill-down accepts valid active hours only", () => {
 	const selected = makeSelected({
 		activeHours: makeActiveHours({ 8: 3 }),

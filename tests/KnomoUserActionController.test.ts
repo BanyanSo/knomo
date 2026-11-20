@@ -354,6 +354,8 @@ test("handleAction dispatches every simple action to the expected view callbacks
 			expected: ["record-metric:references"],
 		},
 		"record-stats-filter-referenced": { expected: ["record-metric:referenced"] },
+		"record-stats-filter-things": { expected: ["record-metric:things"] },
+		"record-stats-filter-favorites": { expected: ["record-metric:favorites"] },
 		"record-stats-filter-max-daily-notes": {
 			expected: ["record-metric:max-daily-notes"],
 		},

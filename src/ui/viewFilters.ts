@@ -240,7 +240,7 @@ export function getRecordStatsSearchFilterLabel(filter: RecordStatsSearchFilter)
 	if (filter.type === "month") {
 		return t("recordStats.filter.month", { month: filter.month });
 	}
-	if (filter.type === "range") {
+	if (filter.type === "range" || filter.type === "things" || filter.type === "favorites") {
 		return t("recordStats.filter.range", {
 			startDate: filter.startDate,
 			endDate: getInclusiveEndDate(filter.endDateExclusive),
@@ -295,7 +295,7 @@ export function getRecordStatsSearchFilterKey(filter: RecordStatsSearchFilter | 
 	}
 	if (filter.type === "day") return `day:${filter.date}`;
 	if (filter.type === "month") return `month:${filter.month}`;
-	if (filter.type === "range") return `range:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "range" || filter.type === "things" || filter.type === "favorites") return `${filter.type}:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "with-tag") return `with-tag:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "no-tag") return `no-tag:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "with-image") return `with-image:${filter.startDate}:${filter.endDateExclusive}`;

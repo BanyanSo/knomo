@@ -1,4 +1,5 @@
 import type { MobileComposerAction } from "./MobileComposerActionGesture";
+import type { RecordStatsMetricFilterType } from "./RecordStatsDrilldownFilters";
 import { isKeyboardActivation } from "./NavigationFocus";
 import type { MemoAction, TrashAction } from "./KnomoActionDispatch";
 import {
@@ -89,9 +90,7 @@ interface KnomoUserActionControllerOptions {
 	setRecordStatsView: (view: "week" | "month" | "year") => void;
 	openRecordStatsTrendFilter: (sourceEl: HTMLElement | null) => void;
 	openRecordStatsHourFilter: (sourceEl: HTMLElement | null) => void;
-	openRecordStatsMetricFilter: (
-		type: "range" | "with-tag" | "no-tag" | "with-image" | "references" | "referenced" | "max-daily-notes" | "max-daily-words",
-	) => void;
+	openRecordStatsMetricFilter: (type: RecordStatsMetricFilterType) => void;
 	openRecordStatsTagFilter: (sourceEl: HTMLElement | null) => void;
 	openComposer: () => void;
 	toggleCompactSearch: () => void;
@@ -412,6 +411,12 @@ export class KnomoUserActionController {
 				return;
 			case "record-stats-filter-referenced":
 				this.options.openRecordStatsMetricFilter("referenced");
+				return;
+			case "record-stats-filter-things":
+				this.options.openRecordStatsMetricFilter("things");
+				return;
+			case "record-stats-filter-favorites":
+				this.options.openRecordStatsMetricFilter("favorites");
 				return;
 			case "record-stats-filter-max-daily-notes":
 				this.options.openRecordStatsMetricFilter("max-daily-notes");

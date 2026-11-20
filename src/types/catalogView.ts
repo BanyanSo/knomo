@@ -134,6 +134,8 @@ export type CatalogRecordStatsFilter =
 	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
 	| { type: "references"; startDate: string; endDateExclusive: string }
 	| { type: "referenced"; startDate: string; endDateExclusive: string }
+	| { type: "things"; startDate: string; endDateExclusive: string }
+	| { type: "favorites"; startDate: string; endDateExclusive: string }
 	| { type: "max-daily-notes"; dates: string[] }
 	| { type: "max-daily-words"; dates: string[] }
 	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };

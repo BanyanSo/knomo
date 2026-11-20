@@ -43,6 +43,8 @@ export type KnomoSimpleAction =
 	| "record-stats-filter-tag"
 	| "record-stats-filter-references"
 	| "record-stats-filter-referenced"
+	| "record-stats-filter-things"
+	| "record-stats-filter-favorites"
 	| "record-stats-filter-max-daily-notes"
 	| "record-stats-filter-max-daily-words"
 	| "open-composer"
@@ -112,6 +114,8 @@ export function getKnomoActionDispatch(action: string | null): KnomoActionDispat
 		action === "record-stats-filter-tag" ||
 		action === "record-stats-filter-references" ||
 		action === "record-stats-filter-referenced" ||
+		action === "record-stats-filter-things" ||
+		action === "record-stats-filter-favorites" ||
 		action === "record-stats-filter-max-daily-notes" ||
 		action === "record-stats-filter-max-daily-words" ||
 		action === "open-composer" ||

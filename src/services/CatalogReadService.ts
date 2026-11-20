@@ -892,6 +892,7 @@ export function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): 
 	if (filter.type === "hour") query.hour = filter.hour;
 	if (filter.type === "references") query.hasReference = true;
 	if (filter.type === "referenced") query.hasReferrers = true;
+	if (filter.type === "things") query.hasTask = true;
 	return { query, fromDate, toDate };
 }
 

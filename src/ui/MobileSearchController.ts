@@ -477,8 +477,9 @@ export class MobileSearchController {
 		this.clearDebounce();
 		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
 		if (!this.session.toggleShortcut(filter)) { this.syncControls(); return; }
-		this.recordStatsFilter = null;
+		// 列表内的日期快捷项叠加在统计期上，沿用桌面的筛选范围。
 		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
+		else this.recordStatsFilter = null;
 		this.invalidateDraft();
 		this.syncInput();
 		this.visibleCount = this.options.batchSize;

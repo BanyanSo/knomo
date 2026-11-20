@@ -1382,6 +1382,133 @@ test("记录统计准备中的非 force 重绘保留同范围位置，完成时�
 	}
 });
 
+test("记录统计仅回填当前期，拾星变化只重读拾星卡，旧快照空期不显示零", async () => {
+	const h = await fixture({ immediate: true });
+	const dom = attachCardFlow(h.view);
+	const { RecordStatsService } = await import("../src/services/RecordStatsService");
+	const { RecordStatsViewStateController } = await import("../src/ui/RecordStatsViewStateController");
+	const stats = new RecordStatsService();
+	const state = new RecordStatsViewStateController(new Date(2026, 7, 22));
+	const base = (await h.read.buildRecordStats(async () => {}, () => true))!;
+	const catalog = await h.read.query({ limit: 1, matchNone: true });
+	await stats.prepareFromSource("current", async () => base);
+	const things: { signal?: AbortSignal; finish: (count: number, revision?: number) => void }[] = [];
+	let favoriteReads = 0;
+	const service = { revision: 1, status: "ready", paths: () => [] as string[] };
+	const opened: unknown[] = [];
+	const view = h.view as unknown as {
+		activeNav: string;
+		renderRecordStatsPage: (force?: boolean) => void;
+		handleFavoritesChanged: (refresh: boolean) => void;
+		stopRecordStatsPreparation: () => void;
+		openRecordStatsMetricFilter: (type: "things" | "favorites") => void;
+	};
+	const read = {
+		count: (filter: object, signal?: AbortSignal) => {
+			assert.equal((filter as { hasTask: boolean }).hasTask, true);
+			const pending = deferred<import("../src/types/catalogView").CatalogMemoCountResult>();
+			things.push({ signal, finish: (count, revision = catalog.catalogRevision) => pending.resolve({
+				count, complete: true, catalogRevision: revision, coverage: catalog.coverage,
+			}) });
+			return pending.promise;
+		},
+		query: async () => { favoriteReads++; return catalog; },
+	};
+	Object.assign(h.view, {
+		recordStatsService: stats, recordStatsViewStateController: state, favoriteService: service, catalogReadService: read,
+		containerEl: { win: { requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) } },
+		catalogStatus: catalog.status, catalogRevision: catalog.catalogRevision, catalogCoverage: catalog.coverage,
+		mobileSearchController: { isOpen: false }, getDailyNotesStatus: () => ({ enabled: true }),
+		clearLoadingIndicators: () => {}, createHiddenText: () => "stats-label", syncFavoriteCards: () => {},
+		getCardFlowStateKey: () => JSON.stringify([stats.getSnapshot(), state.getSnapshot()]),
+		yieldToRecordStatsUi: async () => {},
+		openRecordStatsSearchFilter: (filter: unknown) => opened.push(filter),
+	});
+	h.view.viewStateController.activeNav = "record-stats";
+	const value = (name: string) => dom.root.querySelector(`[data-record-stats-metric='${name}'] .knomo-record-stats-metric-value`)?.textContent;
+	const metric = (name: string) => dom.root.querySelector(`button[data-record-stats-metric='${name}']`)!;
+	const settle = () => new Promise<void>(resolve => setTimeout(resolve, 10));
+	try {
+		view.renderRecordStatsPage();
+		assert.equal(value("things"), "—");
+		assert.equal(metric("things").getAttribute("aria-disabled"), "true");
+		view.openRecordStatsMetricFilter("things");
+		assert.deepEqual(opened, []);
+		await settle();
+		assert.equal(things.length, 1);
+		assert.equal(value("favorites"), "0");
+		assert.equal(metric("favorites").hasAttribute("data-action"), false);
+		state.setView("month");
+		view.renderRecordStatsPage();
+		const page = dom.root.firstElementChild;
+		const month = dom.root.querySelector<HTMLButtonElement>("[data-action='record-stats-view-month']")!;
+		const thingsCard = metric("things");
+		month.focus(); dom.root.scrollTop = 140;
+		await settle();
+		assert.equal(things[0]?.signal?.aborted, true);
+		assert.equal(things.length, 2);
+		things[0]!.finish(99);
+		await settle();
+		assert.equal(value("things"), "—");
+		things[1]!.finish(3);
+		await settle();
+		assert.equal(value("things"), "3");
+		assert.equal(metric("things"), thingsCard);
+		assert.equal(thingsCard.getAttribute("data-action"), "record-stats-filter-things");
+		view.openRecordStatsMetricFilter("things");
+		assert.deepEqual(opened, [{ type: "things", startDate: "2026-08-01", endDateExclusive: "2026-09-01" }]);
+		assert.equal(dom.root.firstElementChild, page);
+		assert.equal(dom.window.document.activeElement, month);
+		assert.equal(dom.root.scrollTop, 140);
+
+		service.revision++;
+		service.status = "loading";
+		view.handleFavoritesChanged(false);
+		await settle();
+		assert.equal(value("favorites"), "0");
+		view.handleFavoritesChanged(true);
+		await settle();
+		assert.equal(value("favorites"), "—");
+		service.status = "ready";
+		service.revision++;
+		view.handleFavoritesChanged(true);
+		await settle();
+		assert.equal(value("favorites"), "0");
+		assert.equal(things.length, 2);
+		assert.equal(favoriteReads, 3);
+
+		state.goToPrevious(stats.getEarliestYear());
+		view.renderRecordStatsPage();
+		assert.equal(value("things"), "0");
+		assert.equal(value("favorites"), "0");
+		stats.invalidate(false);
+		view.renderRecordStatsPage();
+		assert.equal(value("things"), "—");
+		view.openRecordStatsMetricFilter("things");
+		assert.equal(opened.length, 1);
+		assert.equal(value("favorites"), "—");
+		assert.equal(things.length, 2);
+		assert.equal(favoriteReads, 3);
+
+		await stats.prepareFromSource("current", async () => base);
+		state.goToNext();
+		view.renderRecordStatsPage();
+		await settle();
+		view.stopRecordStatsPreparation();
+		assert.equal(things[2]?.signal?.aborted, true);
+		view.renderRecordStatsPage(true);
+		await settle();
+		things[2]!.finish(99);
+		things[3]!.finish(4, catalog.catalogRevision + 1);
+		await settle();
+		assert.equal(value("things"), "—");
+		assert.equal(dom.root.querySelector("[data-record-stats-metric='things'] [role='status']")?.textContent, "Things count unavailable");
+	} finally {
+		view.stopRecordStatsPreparation();
+		dom.dispose();
+	}
+});
+
 test("浮标当前分组匹配时增量插入，不匹配时保留原面板，索引刷新也不重建", async () => {
 	const today = new Date();
 	const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;

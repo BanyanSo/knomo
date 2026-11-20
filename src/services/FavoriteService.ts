@@ -237,11 +237,12 @@ export class FavoriteService {
 		this.confirmed(presentation);
 	}
 
-	resolve(path: string, parsed?: DailyAnchorSource): Promise<SourceState> {
+	resolve(path: string, parsed?: DailyAnchorSource, retry = false): Promise<SourceState> {
 		const existing = this.reads.get(path);
 		if (existing) return existing;
 		const cached = this.sources.get(path);
-		if (!parsed && cached) return Promise.resolve(cached);
+		if (!parsed && cached && !retry) return Promise.resolve(cached);
+		if (retry) this.sources.delete(path);
 		const items = this.byPath.get(path);
 		if (!items || this.closed || this.status !== "ready") return Promise.resolve({ status: "waiting" });
 		const current = () => !this.closed && this.status === "ready" && this.reads.get(path) === task;
@@ -263,7 +264,9 @@ export class FavoriteService {
 		}).finally(() => {
 			if (this.reads.get(path) === task) {
 				this.reads.delete(path);
-				this.notify(false, [path]);
+				// 恢复定位会改变可确认的列表成员，通知保留了失败结果的读者。
+				if (cached && cached.status !== "ready" && this.sources.get(path)?.status === "ready") this.changed([path]);
+				else this.notify(false, [path]);
 			}
 		});
 		this.reads.set(path, task);
@@ -337,10 +340,12 @@ export class FavoriteService {
 	}
 
 	private retryRepairs(): void {
-		for (const path of this.byPath.keys()) if (this.sources.get(path)?.status === "waiting" || this.byPath.get(path)?.some(item => this.transfers.has(item.favoriteId)
-			|| this.sources.get(path)?.status === "ready" && this.hasOldTime(path, item))) {
-			this.sources.delete(path);
-			this.checkVisible(path);
+		for (const [path, items] of this.byPath) {
+			const status = this.sources.get(path)?.status;
+			if (status === "waiting" || items.some(item => this.transfers.has(item.favoriteId)
+				|| status === "ready" && this.hasOldTime(path, item))) {
+				void this.resolve(path, undefined, true);
+			}
 		}
 	}
 

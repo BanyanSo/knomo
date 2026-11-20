@@ -245,6 +245,7 @@ test("移动拾星搜索等待本次结果，按当前可见卡片显示来源�
 	const view = Object.assign(Object.create(KnomoView.prototype), {
 		viewStateController: { activeNav: "favorites" },
 		favoriteService: service,
+		syncRecordStatsSource: () => {},
 		mobileFavoriteProgress: { persisted: 0, located: 0, matched: 0, waiting: 0, missing: 0 },
 	});
 	const { getScopedContext, getResultStatus, filterMemos, onResultsAccepted, getFavoriteQueryState } = Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
@@ -290,6 +291,7 @@ test("移动拾星搜索保留空批次的续页按钮，继续加载后可显�
 	const view = Object.assign(Object.create(KnomoView.prototype), {
 		viewStateController: { activeNav: "favorites" },
 		favoriteService: { status: "ready", cardState: () => ({ favoriteId: "star" }) },
+		syncRecordStatsSource: () => {},
 	});
 	const { getScopedContext, getResultStatus, filterMemos, onResultsAccepted } = Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
 	const progress = { persisted: 33, located: 32, matched: 0, missing: 0, waiting: 0 };

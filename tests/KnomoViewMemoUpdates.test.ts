@@ -119,6 +119,122 @@ test("首次设置所需的原生 ID 写入只更新既有成员，不扩充其�
 	}
 });
 
+test("补锚点的 Vault 通知早于写入确认时，两个窗格保留原卡，随机组可继续接续 YAML 改行", async t => {
+	const h = await fixture({ immediate: true });
+	const other = await h.createView();
+	h.view.viewStateController.activeNav = "random";
+	other.view.viewStateController.activeNav = "shuffleDay";
+	await h.edit(h.memos[0]!, "edited before starring");
+	const member = h.random.getSnapshot().memos![1]!;
+	const first = attachCardFlow(h.view), second = attachCardFlow(other.view);
+	const app = Reflect.get(h.view, "app") as import("obsidian").App;
+	const modifies: Array<(file: TFile) => void> = [];
+	Object.assign(app.vault, { on: (event: string, listener: (file: TFile) => void) => {
+		if (event === "modify") modifies.push(listener);
+		return {};
+	} });
+	for (const view of [h.view, other.view]) {
+		Object.assign(view, { anchorWrites: h.mutations, registerEvent: () => {} });
+		view.registerConfirmedDailyFileEvents();
+	}
+	const entered = deferred<void>(), pending = deferred<void>();
+	const process = app.vault.process.bind(app.vault);
+	t.mock.method(app.vault, "process", async (file: TFile, update: (text: string) => string) => {
+		const result = await process(file, update);
+		for (const notify of modifies) notify(file);
+		entered.resolve();
+		await pending.promise;
+		return result;
+	});
+	const before = Array.from(first.root.querySelectorAll(".knomo-card"));
+	const dateCards = Array.from(second.root.querySelectorAll(".knomo-card"));
+	const write = h.mutations.createBlockReference({ observation: member.catalog!.observationHandle, sourcePath: PATH });
+	try {
+		await entered.promise;
+		assert.equal(first.findMemo(member.id), null, "等待落盘复核时旧操作不能再选中");
+		assert.deepEqual(Array.from(first.root.querySelectorAll(".knomo-card")), before);
+		assert.deepEqual(Array.from(second.root.querySelectorAll(".knomo-card")), dateCards);
+		assert.equal(first.root.querySelector("[data-knomo-readonly-transition]"), null);
+		assert.equal(other.shuffle.getSnapshot().memos.length, 3);
+		pending.resolve(); await write;
+		first.render(); second.render();
+		assert.deepEqual(Array.from(first.root.querySelectorAll(".knomo-card")), before);
+		assert.deepEqual(Array.from(second.root.querySelectorAll(".knomo-card")), dateCards);
+		assert.notEqual(h.random.getSnapshot().memos![1]!.id, member.id);
+		await h.externalReplace("---\nmodified: now\nextra: yes\n---\n" + h.body());
+		await h.view.checkConfirmedDailyFile(PATH);
+		await h.view.refreshRandomReunionBatch();
+		assert.deepEqual(h.random.getSnapshot().memos!.map(memo => memo.contentSnapshot), ["edited before starring", "same", "same"]);
+	} finally { pending.resolve(); await write; second.dispose(); first.dispose(); }
+});
+
+test("补锚点落盘后若同一通知期间发生外部改写，委托外部刷新并拒绝发布旧映射", async t => {
+	let presentations = 0;
+	const h = await fixture({ immediate: true, onConfirmed: () => presentations++ });
+	const app = Reflect.get(h.view, "app") as import("obsidian").App;
+	const process = app.vault.process.bind(app.vault);
+	const recovered: boolean[] = [];
+	t.mock.method(app.vault, "process", async (file: TFile, update: (text: string) => string) => {
+		const result = await process(file, update);
+		assert.equal(h.mutations.deferAnchorModify(file, h.view, confirmed => recovered.push(confirmed)), true);
+		h.vault.replace(PATH, "## Memos\n- 09:00 changed externally\n");
+		return result;
+	});
+	await h.mutations.createBlockReference({ observation: h.memos[0]!.catalog!.observationHandle, sourcePath: PATH });
+	assert.equal(presentations, 0);
+	assert.deepEqual(recovered, [false]);
+	assert.match(h.body(), /changed externally/u);
+});
+
+test("YAML 阅读映射按相对正文区间区分同文同时间记录，只接纳最新版本", async () => {
+	const { DailyBodyReadingContinuity } = await import("../src/ui/DailyBodyReadingContinuity");
+	const h = await fixture();
+	const app = Reflect.get(h.view, "app") as import("obsidian").App;
+	const file = app.vault.getAbstractFileByPath(PATH) as TFile;
+	const proof = new DailyBodyReadingContinuity(), before = h.memos;
+	await proof.capture(before, () => file, selected => app.vault.read(selected), () => true);
+	const original = h.body();
+	await h.externalReplace("---\nmodified: first\n---\n" + original);
+	const first = await h.loadMemos();
+	await proof.noteRevision(PATH, file, h.body(), first[0]!.catalog!.observationHandle.sourceRevision, () => true);
+	await h.externalReplace("---\nmodified: second\naliases: later\n---\n" + original);
+	const latest = await h.loadMemos();
+	await proof.noteRevision(PATH, file, h.body(), latest[0]!.catalog!.observationHandle.sourceRevision, () => true);
+	assert.equal(proof.match(before, first), undefined);
+	assert.deepEqual([...proof.match(before, latest)!.values()].map(memo => memo!.id), latest.map(memo => memo.id));
+	await h.externalReplace(h.body().replace("09:00 old", "09:00 changed"));
+	const changed = await h.loadMemos();
+	await proof.noteRevision(PATH, file, h.body(), changed[0]!.catalog!.observationHandle.sourceRevision, () => true);
+	assert.equal(proof.match(before, changed), undefined);
+});
+
+test("随机组在当前视口取得正文证明后，无需先编辑也可接续仅改 YAML 的外部更新", async () => {
+	const { DailyBodyReadingContinuity } = await import("../src/ui/DailyBodyReadingContinuity");
+	const h = await fixture({ immediate: true });
+	h.view.viewStateController.activeNav = "random";
+	const prior = h.random.getSnapshot().memos!;
+	const returnContext = {
+		position: { scrollTop: 160, visibleCount: 3, anchor: { renderKey: prior[1]!.id, offset: -8 } },
+		memoId: prior[2]!.id,
+	};
+	Object.assign(h.view, { randomDayReturnContext: returnContext });
+	const app = Reflect.get(h.view, "app") as import("obsidian").App;
+	const file = app.vault.getAbstractFileByPath(PATH) as TFile;
+	const reading = new DailyBodyReadingContinuity();
+	await reading.capture(prior, () => file, item => app.vault.read(item), () => true);
+	Object.assign(h.view, { dailyReadingBodies: reading });
+	await h.externalReplace("---\naliases: [same-body]\n---\n" + h.body());
+	await h.view.checkConfirmedDailyFile(PATH);
+	assert.equal(h.random.getSnapshot().memos!.length, prior.length);
+	await h.view.refreshRandomReunionBatch();
+	const current = h.random.getSnapshot().memos!;
+	assert.deepEqual(current.map(memo => memo.id), (await h.loadMemos()).map(memo => memo.id));
+	assert.deepEqual(current.map(memo => memo.contentSnapshot), prior.map(memo => memo.contentSnapshot));
+	assert.deepEqual(returnContext.position.anchor, { renderKey: current[1]!.id, offset: -8 });
+	assert.equal(returnContext.memoId, current[2]!.id);
+	assert.equal(h.randomLoads(), 1);
+});
+
 for (const entry of ["beacon", "copy-link"] as const) test(`${entry} 的纯锚点提交按各查询窗口接续，索引接管后继续分页`, async t => {
 	t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 10, 17, 12).getTime() });
 	const gate = deferred<void>(), confirmed = deferred<void>();
@@ -1897,10 +2013,15 @@ test("真实移动搜索三页经历连续外部保存、一次读取失败后�
 	const read = t.mock.method(app.vault, "read", () => reads[index++]!.promise);
 	const checks = [h.view.checkConfirmedDailyFile(PATH), h.view.checkConfirmedDailyFile(PATH)];
 	const latest = "---\naliases: latest\n---\n" + body;
-	await h.externalReplace(latest);
+	h.vault.replace(PATH, latest);
 	reads[0]!.resolve("---\naliases: older\n---\n" + body); await checks[0];
 	reads[1]!.resolve(latest); await checks[1]; read.mock.restore();
 	assert.equal(search.getDisplayedMemos().length, 0, "旧操作集合已经撤销");
+	t.mock.method(console, "warn", () => {});
+	await search.refreshAppliedResults();
+	assert.equal(search.session.requestStatus, "ready", "索引尚未跟上时保留上次结果状态");
+	assert.equal(search.getDisplayedMemos().length, 0, "等待索引时不重新接纳旧句柄");
+	await h.externalReplace(latest);
 	const queryPage = h.read.query.bind(h.read), pageEntered = deferred<void>();
 	const secondPage = deferred<Awaited<ReturnType<typeof queryPage>>>();
 	const partial = t.mock.method(h.read, "query", (request: Parameters<typeof queryPage>[0], signal?: AbortSignal) => {
@@ -1915,7 +2036,6 @@ test("真实移动搜索三页经历连续外部保存、一次读取失败后�
 	assert.ok((Reflect.get(h.view, "externallyInvalidatedDailyRevisions") as Map<string, unknown>).has(PATH), "第二页取消保留源版本约束");
 	assert.equal(search.getDisplayedMemos().length, 0);
 	const query = t.mock.method(h.read, "query", async () => { throw new Error("temporary failure"); });
-	t.mock.method(console, "warn", () => {});
 	await search.refreshAppliedResults();
 	assert.equal(search.session.requestStatus, "failed");
 	assert.ok((Reflect.get(h.view, "externallyInvalidatedDailyRevisions") as Map<string, unknown>).has(PATH));

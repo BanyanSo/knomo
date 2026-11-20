@@ -66,6 +66,24 @@ test("首次锚点写入后真有并发正文修改时，不保存新灯标", as
 	assert.deepEqual(h.data.beacon, oldBeacon);
 });
 
+test("同源 Memo 补锚点时灯标直接交接新版本，后续索引通知保持同一就绪状态", async () => {
+	const original = BODY.replace(" ^tail", "");
+	const h = await pinned(original), before = h.source;
+	const states: string[] = [];
+	h.service.subscribe(() => states.push(h.service.getSnapshot().state));
+	const after = await h.write(original.replace("tail", "tail ^added"));
+	const presentation = change(before, after);
+	presentation.change.updateExistingOnly = true;
+	const notify = h.service.stageConfirmedAnchor(presentation);
+	assert.ok(notify);
+	assert.equal(h.service.getSnapshot().memo?.catalog?.observationHandle.sourceRevision, after.sourceRevision);
+	assert.deepEqual(states, [], "先让窗格重绑，再发灯标通知");
+	notify();
+	h.service.observeSource(after);
+	await h.service.refreshIfNeeded();
+	assert.deepEqual(states, ["ready"]);
+});
+
 for (const existing of [false, true]) test(`活动编辑器${existing ? "已有" : "新建"} ID 尚未落盘，保留原灯标并提示保存后重试`, async () => {
 	const h = await pinned(); const saved = structuredClone(h.data.beacon);
 	await h.write(existing ? BODY.replace("tail", "unsaved tail") : BODY.replace(" ^tail", ""));

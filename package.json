@@ -12,15 +12,15 @@
 		"verify": "node scripts/verify.mjs",
 		"lint": "eslint src",
 		"lint:fix": "eslint src --fix",
-		"test": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js",
-		"test:quiet": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot",
-		"test:stress": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=stress",
-		"test:tooling": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=tooling",
-		"test:all": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=all",
-		"test:node": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=node",
-		"test:browser": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --suite=browser",
+		"test": "node scripts/test.mjs",
+		"test:quiet": "node scripts/test.mjs --test-reporter=dot",
+		"test:stress": "node scripts/test.mjs --suite=stress",
+		"test:tooling": "node scripts/test.mjs --suite=tooling",
+		"test:all": "node scripts/test.mjs --suite=all",
+		"test:node": "node scripts/test.mjs --suite=node",
+		"test:browser": "node scripts/test.mjs --suite=browser",
 		"test:browser:install": "playwright install chromium",
-		"test:file": "tsc -p tsconfig.test.json && node .tmp/knomo-tests/scripts/run-tests.js --test-reporter=dot --files"
+		"test:file": "node scripts/test.mjs --test-reporter=dot --files"
 	},
 	"keywords": [
 		"memo",

@@ -1218,6 +1218,34 @@ test("确认编辑使用既有提交映射更新主体阅读，不替换已选�
 	} finally { h.close(); }
 });
 
+test("引用者补锚点后原行与卡片保留到新索引接手，不等待正文重读", async () => {
+	const h = await fixture();
+	try {
+		const before = await h.seed("D.md", "- 10:00 A ^a\n- 11:00 B [[#^a]]\n");
+		await h.page.open(before[0]);
+		await settle();
+		const row = h.page.el!.querySelector<HTMLElement>("[data-relation-row]")!;
+		const card = row.querySelector(".knomo-card")!;
+		assert.ok(card);
+		const { buildDailyMemoPresentationChange } = await import("../src/services/DailyMemoPresentationChange");
+		const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+		const content = "- 10:00 A ^a\n- 11:00 B [[#^a]] ^b\n";
+		const after = await new DiaryMemoParser().parse({ sourcePath: "D.md", logicalDate: "2026-10-25", bytes: Buffer.from(content) });
+		const prepared = { sourcePath: "D.md", logicalDate: "2026-10-25",
+			before: { sourceRevision: before[0].sourceRevision, observations: before }, after };
+		const change = buildDailyMemoPresentationChange(prepared as Parameters<typeof buildDailyMemoPresentationChange>[0], before[1], after.observations[1]);
+		h.page.applyChange({ ...change, updateExistingOnly: true }, after.observations);
+		assert.equal(row.querySelector(".knomo-card"), card);
+		assert.equal(h.page.findMemo(observationHandleKey(before[1])), null);
+		assert.equal(h.page.findMemo(observationHandleKey(after.observations[1]))?.contentSnapshot, "B [[#^a]]");
+		await settle();
+		assert.equal(row.querySelector(".knomo-card"), card, "等待索引时原行仍可读");
+		await h.seed("D.md", content); await settle();
+		assert.equal(h.page.el!.querySelector("[data-relation-row]"), row);
+		assert.equal(row.querySelector(".knomo-card"), card);
+	} finally { h.close(); }
+});
+
 test("生产标准卡片操作在关联页不关闭原移动搜索、不记录随机回顾，排队写入保留原句柄", async () => {
 	const h = await fixture();
 	try {

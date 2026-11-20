@@ -3,9 +3,8 @@
 	"compilerOptions": {
 		"module": "CommonJS",
 		"rootDir": ".",
-		"outDir": ".tmp/knomo-tests",
+		"outDir": ".knomo-tests",
 		"incremental": true,
-		"tsBuildInfoFile": ".tmp/knomo-tests/tsconfig.tsbuildinfo",
 		"inlineSourceMap": false,
 		"sourceMap": true,
 		"types": ["node"]

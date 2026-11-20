@@ -47,6 +47,7 @@ interface CatalogPathRevision {
 }
 
 export interface CatalogIndexCoordinatorOptions {
+	deferSourceModify?: (file: TFile, finish: (confirmed: boolean) => void) => boolean;
 	onPresentationSource?: (source: BeaconSource) => void;
 	onSourceEvent?: (path: string, kind: "change" | "delete" | "rename", newPath?: string) => void;
 	enabled?: boolean;
@@ -77,6 +78,7 @@ export class CatalogIndexCoordinator {
 	private readonly onProgress: ((coverage: CatalogCoverage, scan: CatalogScanSnapshot) => void | Promise<void>) | null;
 	private readonly onPresentationSource: CatalogIndexCoordinatorOptions["onPresentationSource"];
 	private readonly onSourceEvent: CatalogIndexCoordinatorOptions["onSourceEvent"];
+	private readonly deferSourceModify: CatalogIndexCoordinatorOptions["deferSourceModify"];
 	private readonly onCatalogSettled: (() => void | Promise<void>) | null;
 	private readonly onDailyPeriodsChanged: ((periods: readonly string[]) => void | Promise<void>) | null;
 	private readonly preserveMetaKeysOnRebuild: readonly string[];
@@ -137,6 +139,7 @@ export class CatalogIndexCoordinator {
 		this.onProgress = options.onProgress ?? null;
 		this.onPresentationSource = options.onPresentationSource;
 		this.onSourceEvent = options.onSourceEvent;
+		this.deferSourceModify = options.deferSourceModify;
 		this.onCatalogSettled = options.onCatalogSettled ?? null;
 		this.onDailyPeriodsChanged = options.onDailyPeriodsChanged ?? null;
 		this.preserveMetaKeysOnRebuild = [...new Set(options.preserveMetaKeysOnRebuild ?? [])];
@@ -150,7 +153,10 @@ export class CatalogIndexCoordinator {
 		if (!this.enabled) {
 			return;
 		}
-		owner.registerEvent(this.app.vault.on("modify", (file) => this.handleFileChanged(file)));
+		owner.registerEvent(this.app.vault.on("modify", (file) => {
+			if (file instanceof TFile && this.deferSourceModify?.(file, confirmed => this.handleFileChanged(file, confirmed))) return;
+			this.handleFileChanged(file);
+		}));
 		owner.registerEvent(this.app.vault.on("create", (file) => this.handleFileChanged(file)));
 		owner.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.handleFileRenamed(file, oldPath)));
 		owner.registerEvent(this.app.vault.on("delete", (file) => this.handleFileDeleted(file)));
@@ -315,11 +321,11 @@ export class CatalogIndexCoordinator {
 		return buildRefreshResult(before, after, [...this.failedPaths.values()]);
 	}
 
-	private handleFileChanged(file: unknown): void {
-		if (!(file instanceof TFile) || file.extension !== "md") {
+	private handleFileChanged(file: unknown, confirmed = false): void {
+		if (!(file instanceof TFile) || file.extension !== "md" || this.isStopped()) {
 			return;
 		}
-		this.onSourceEvent?.(file.path, "change");
+		if (!confirmed) this.onSourceEvent?.(file.path, "change");
 		const entry = this.toInventoryEntry(file);
 		if (entry === null) return;
 		if (this.reconciling || this.reconcileQueued) this.reconcileAgain = true;

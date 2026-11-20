@@ -23,8 +23,9 @@ export class MemoReadingPosition {
 			const rect = card.getBoundingClientRect();
 			return { index, offset: rect.top - bounds.top + error, bottom: rect.bottom - bounds.top };
 		});
-		const first = positions.findIndex(position => position.bottom > 0);
-		this.candidates = first < 0 ? [] : [...positions.slice(first), ...positions.slice(0, first).reverse()];
+		const lastVisible = bounds.bottom > bounds.top ? bounds.bottom - bounds.top : Infinity;
+		const visible = positions.filter(position => position.bottom > 0 && position.offset < lastVisible);
+		this.candidates = visible;
 	}
 
 	target(after: readonly MountedMemoCard[], changes?: ReadonlyMap<string, MemoViewItem | null>, positional = false): number {

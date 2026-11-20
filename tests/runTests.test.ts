@@ -14,6 +14,8 @@ import {
 	prepareTestEnvironment,
 } from "../scripts/run-tests";
 
+const runnerPath = require.resolve("../scripts/run-tests");
+
 test("stress suite selects scale checks while all retains every source", () => {
 	const sources = ["MemoRelationsUi.test.ts", "Other.test.ts", "runTests.test.ts"];
 	assert.deepEqual(getRunTestSelection(sources, ["--suite=stress"]), {
@@ -43,11 +45,12 @@ test("Node 与浏览器集合互斥，全量按顺序覆盖两者，显式文件
 test("全量只执行各文件一次，Node 失败停止，浏览器失败传回退出状态", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-test-phases-"));
 	try {
-		const compiled = path.join(root, ".tmp", "knomo-tests");
-		for (const directory of ["src/assets", "tests", ".tmp/knomo-tests/scripts", ".tmp/knomo-tests/tests/helpers"]) {
-			fs.mkdirSync(path.join(root, directory), { recursive: true });
+		const compiled = path.join(root, ".knomo-tests-fixture");
+		for (const directory of [path.join(root, "src/assets"), path.join(root, "tests"),
+			path.join(compiled, "scripts"), path.join(compiled, "tests/helpers")]) {
+			fs.mkdirSync(directory, { recursive: true });
 		}
-		fs.copyFileSync(path.resolve(".tmp/knomo-tests/scripts/run-tests.js"), path.join(compiled, "scripts/run-tests.js"));
+		fs.copyFileSync(runnerPath, path.join(compiled, "scripts/run-tests.js"));
 		fs.copyFileSync(path.join(__dirname, "helpers/obsidianStub.js"), path.join(compiled, "tests/helpers/obsidianStub.js"));
 		for (const name of ["Banyan-WeChat-Reward.png", "buymeacoffe-code.png", "share-reflection-cover.webp"]) {
 			fs.writeFileSync(path.join(root, "src/assets", name), "");
@@ -90,7 +93,7 @@ test("node 集合显式关闭浏览器，局部测试仍保留调用者的环境
 
 test("all 和 browser 缺少浏览器依赖时返回失败并说明安装方法", () => {
 	for (const suite of ["all", "browser"]) {
-		const result = spawnSync(process.execPath, [path.resolve(".tmp/knomo-tests/scripts/run-tests.js"), `--suite=${suite}`], {
+		const result = spawnSync(process.execPath, [runnerPath, `--suite=${suite}`], {
 			encoding: "utf8", env: { ...process.env, KNOMO_LAYOUT_PLAYWRIGHT: path.join(os.tmpdir(), "knomo-no-playwright-installed.cjs") },
 		});
 		assert.equal(result.status, 1, result.stderr);
@@ -103,7 +106,7 @@ test("all 和 browser 缺少浏览器依赖时返回失败并说明安装方法"
 test("安装了 Playwright 但缺少 Chromium 时仍拒绝全量验证", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-no-browser-"));
 	try {
-		const result = spawnSync(process.execPath, [path.resolve(".tmp/knomo-tests/scripts/run-tests.js"), "--suite=all"], {
+		const result = spawnSync(process.execPath, [runnerPath, "--suite=all"], {
 			encoding: "utf8", env: { ...process.env, KNOMO_LAYOUT_PLAYWRIGHT: require.resolve("playwright"), KNOMO_LAYOUT_BROWSER: "chromium", PLAYWRIGHT_BROWSERS_PATH: root },
 		});
 		assert.equal(result.status, 1, result.stderr);

@@ -30,6 +30,7 @@ import { toParsedCatalogMemoItem } from "../../src/services/CatalogReadService";
 import { BeaconService } from "../../src/services/BeaconService";
 import { PluginDataStore } from "../../src/services/PluginDataStore";
 import { toCatalogMemoView } from "../../src/types/memoView";
+import { DailyBodyReadingContinuity } from "../../src/ui/DailyBodyReadingContinuity";
 
 export function installDomHelpers(): void {
 	Object.assign(HTMLElement.prototype, {
@@ -591,6 +592,59 @@ export async function geometry(options: { review: boolean; recent: boolean; imag
 		render(); samples.push(sample()); await h.settle(); samples.push(sample());
 	}
 	return { samples, sameImage: image === flow.querySelector("img"), loads: h.loads() };
+}
+
+export async function yamlAndFeedbackGeometry(mobile: boolean) {
+	const { view, flow, context, settle, hold, release } = fixture(mobile);
+	context.enabled = false;
+	const path = "Daily/2026-11-08.md", date = "2026-11-08";
+	const body = Array.from({ length: 40 }, (_, index) => `- 09:00 Reading card ${index}\n`).join("");
+	const file = Object.assign(new TFile(), { path });
+	const parser = new DiaryMemoParser();
+	const parse = async (content: string) => {
+		const parsed = await parser.parse({ sourcePath: path, logicalDate: date, bytes: new TextEncoder().encode(content) });
+		return { revision: parsed.sourceRevision,
+			memos: parsed.observations.map(observation => toCatalogMemoView(toParsedCatalogMemoItem(observation,
+				createCatalogCapabilities({ kind: "complete", coveredFromDate: date, pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 })))) };
+	};
+	const previous = await parse("---\nmodified: old\n---\n" + body);
+	const continuity = new DailyBodyReadingContinuity();
+	await continuity.capture(previous.memos, () => file, async () => "---\nmodified: old\n---\n" + body, () => true);
+	const updated = "---\nmodified: new\naliases: [example]\n---\n" + body;
+	const current = await parse(updated);
+	await continuity.noteRevision(path, file, updated, current.revision, () => true);
+	const feedback = flow.ownerDocument.createElement("aside");
+	feedback.className = "knomo-page-feedback";
+	feedback.hidden = true;
+	feedback.append(flow.ownerDocument.createElement("span"));
+	flow.before(feedback);
+	Object.assign(view, { dailyReadingBodies: continuity, pageFeedbackEl: feedback,
+		getPageFeedbackContext: () => "reading", pageFeedbackContext: "reading" });
+	const render = (memos: MemoViewItem[]) => view.syncCardFlowPresentation({ type: "items", mode: "memo", headers: [], memos }, null);
+	const card = (text: string) => [...flow.querySelectorAll<HTMLElement>(".knomo-card")].find(el => el.textContent?.includes(text))!;
+	render(previous.memos); await settle();
+	const preview = card("Reading card 7").createDiv({ cls: "knomo-memo-referrers", text: "Referenced memo preview" });
+	preview.createDiv({ text: "Preserve this preview while the relation refreshes" });
+	const reader = card("Reading card 8");
+	flow.scrollTop += reader.getBoundingClientRect().top - flow.getBoundingClientRect().top + 12;
+	await frames();
+	const sample = () => ({
+		card: card("Reading card 8").getBoundingClientRect().top,
+		flow: flow.getBoundingClientRect().top,
+		scroll: flow.scrollTop,
+		count: flow.querySelectorAll(".knomo-card").length,
+		preview: !!card("Reading card 7").querySelector(".knomo-memo-referrers"),
+	});
+	const before = sample();
+	view.pageRefreshError = "This source is still waiting to refresh.";
+	view.syncPageFeedback();
+	const pending = sample();
+	hold(); render(current.memos);
+	const accepted = sample();
+	view.pageRefreshError = null; view.syncPageFeedback();
+	const dismissed = sample();
+	await release();
+	return { before, pending, accepted, dismissed, settled: sample() };
 }
 
 export async function pagedEditGeometry(options: { surface: "feed" | "buoy"; mobile: boolean; editAbove: boolean; external?: boolean; readonlySource?: boolean }) {

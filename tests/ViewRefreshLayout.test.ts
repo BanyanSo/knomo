@@ -11,7 +11,7 @@ declare global { interface Window { refreshFixture: typeof Fixture } }
 async function browserFixture(locale = "en") {
 	const bundle = await build({
 		stdin: { contents: `import { getLanguage } from "obsidian"; getLanguage.set(${JSON.stringify(locale)}); import("./tests/helpers/viewRefreshBrowserFixture").then(fixture => { window.refreshFixture = fixture; fixture.installDomHelpers(); });`, resolveDir: process.cwd() },
-		alias: { obsidian: path.resolve(".tmp/knomo-tests/node_modules/obsidian/index.js") },
+		alias: { obsidian: path.resolve(__dirname, "../node_modules/obsidian/index.js") },
 		bundle: true, write: false, format: "iife", platform: "browser",
 		loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" },
 	});
@@ -34,6 +34,23 @@ async function browserFixture(locale = "en") {
 	await page.waitForFunction(() => !!window.refreshFixture);
 	return { page, close: () => browser.close() };
 }
+
+test("深页 YAML 增行接续引用预览，刷新提示出现和收起时卡片窗格位移不超过 1px",
+	{ skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+		const h = await browserFixture();
+		try {
+			for (const mobile of [false, true]) {
+				const result = await h.page.evaluate(mobile => window.refreshFixture.yamlAndFeedbackGeometry(mobile), mobile);
+				assert.ok(result.before.scroll > 1);
+				assert.ok(result.pending.flow > result.before.flow);
+				for (const state of [result.pending, result.accepted, result.dismissed, result.settled]) {
+					assert.equal(state.count, result.before.count);
+					assert.equal(state.preview, true);
+					assert.ok(Math.abs(state.card - result.before.card) <= 1, JSON.stringify({ mobile, result }));
+				}
+			}
+		} finally { await h.close(); }
+	});
 
 test("灯标设置和移出保留阅读位置，浮标状态改变时接续图片与扫光", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const h = await browserFixture();

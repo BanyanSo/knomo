@@ -4,7 +4,7 @@ import path from "node:path";
 import { prepareObsidianStub } from "../tests/helpers/obsidianStub";
 
 const TESTS_DIR = "tests";
-const COMPILED_TESTS_DIR = path.join(".tmp", "knomo-tests", "tests");
+const COMPILED_TESTS_DIR = path.resolve(__dirname, "../tests");
 const TEST_FILES_MARKER = "--files";
 const TOOLING_TEST_FILES = new Set([
 	"ReleaseCheck.test.ts",
@@ -141,7 +141,7 @@ export async function runTests(args: readonly string[] = []): Promise<number> {
 	const missingCompiledTests = getMissingFiles(compiledRuns.flatMap(run => run.files));
 
 	if (missingCompiledTests.length > 0) {
-		console.error("Compiled test files are missing. Run `tsc -p tsconfig.test.json` first:");
+		console.error("Compiled test files are missing. Rerun the npm test command to compile them:");
 		for (const filePath of missingCompiledTests) {
 			console.error(`- ${filePath}`);
 		}

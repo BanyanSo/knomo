@@ -123,6 +123,13 @@ export class DailyMemoWriteGateway {
 		return { mode: prepared.mode, before: prepared.before, after: prepared.after };
 	}
 
+	async isCommittedContentCurrent(prepared: PreparedDailyWrite): Promise<boolean> {
+		const content = await this.app.vault.read(prepared.file);
+		this.assertTarget(prepared);
+		const editor = this.getActiveEditor(prepared.file);
+		return content === prepared.afterContent && (!editor || editor.getValue() === content);
+	}
+
 	private replayPreparedUpdate(prepared: PreparedDailyWrite, currentContent: string): string {
 		this.assertTarget(prepared);
 		if (currentContent !== prepared.beforeContent) {

@@ -1,13 +1,13 @@
 import { setIcon } from "obsidian";
 import { t } from "../i18n";
-import type { ObservationHandle } from "../types/catalog";
+import { sameObservationHandle, type MemoObservation, type ObservationHandle } from "../types/catalog";
 import type { MemoRelationNode } from "../types/memoRelations";
 import { toCatalogMemoView, type MemoViewItem } from "../types/memoView";
 import type { CatalogReadService } from "../services/CatalogReadService";
 import { observationHandleKey, type DailyMemoPresentationChange } from "../services/DailyMemoPresentationChange";
 import { MemoRelationWindow } from "./MemoRelationWindow";
 import { MemoRelationSubjectUnavailableError, MemoRelationsChangedError, relationChangeAffects } from "../services/MemoRelationService";
-import { CatalogDiscoveryInvalidatedError } from "../services/CatalogReadService";
+import { CatalogDiscoveryInvalidatedError, toParsedCatalogMemoItem } from "../services/CatalogReadService";
 import { DelayedLoadingIndicator } from "./DelayedLoadingIndicator";
 import { canRetainMemoCard, rebindMemoCard } from "./MemoRenderRevision";
 import { remapUnchangedMemo } from "./ConfirmedMemoPresentation";
@@ -29,6 +29,7 @@ export interface MemoRelationsPageOptions {
 	onError: (message: string) => void;
 	canFocus?: () => boolean;
 	isMobile?: () => boolean;
+	isSourcePending?: (path: string) => boolean;
 }
 
 export class MemoRelationsPage {
@@ -148,7 +149,7 @@ export class MemoRelationsPage {
 
 	dispose(): void { this.disposed = true; this.close(false); this.unsubscribe(); }
 
-	applyChange(change: DailyMemoPresentationChange): void {
+	applyChange(change: DailyMemoPresentationChange, observations?: readonly MemoObservation[]): void {
 		const current = this.frames[this.frames.length - 1];
 		const affected = current?.handle.sourcePath === change.sourcePath
 			|| (this.referrers ?? []).some(node => node.handle.sourcePath === change.sourcePath);
@@ -171,19 +172,46 @@ export class MemoRelationsPage {
 		if (!affected) return;
 		this.controller?.abort();
 		this.rowController.abort(); this.rowController = new AbortController();
-		const remap = (node: MemoRelationNode): MemoRelationNode => {
-			const after = replacements.get(observationHandleKey(node.handle));
-			return after && after.rawBlockHash === node.handle.rawBlockHash ? { ...node, handle: after } : node;
+		const anchorOnly = change.updateExistingOnly === true && observations !== undefined;
+		const changedAnchor = anchorOnly && change.changed
+			? observations.find(memo => sameObservationHandle(memo, change.changed!)) : undefined;
+		const replacementMemo = (memo: MemoViewItem, after: ObservationHandle): MemoViewItem | null => {
+			if (changedAnchor && memo.catalog && sameObservationHandle(changedAnchor, after)) {
+				const current = toCatalogMemoView(toParsedCatalogMemoItem(changedAnchor, memo.catalog.capabilities.catalog));
+				return canRetainMemoCard(memo, current, true) ? current : null;
+			}
+			return remapUnchangedMemo(memo, after);
 		};
-		this.referrersWindow?.remap(change, (row, before, after) => {
+		const remap = (node: MemoRelationNode): MemoRelationNode => {
+			const key = observationHandleKey(node.handle), after = replacements.get(key);
+			const before = this.memos.get(key);
+			return after && (after.rawBlockHash === node.handle.rawBlockHash
+				|| changedAnchor && sameObservationHandle(changedAnchor, after) && (!before || replacementMemo(before, after)))
+				? { ...node, handle: after } : node;
+		};
+		if (anchorOnly && this.subject?.dataset.subject) {
+			const before = this.memos.get(this.subject.dataset.subject);
+			const after = before && replacements.get(before.id);
+			const memo = before && after ? replacementMemo(before, after) : null;
+			if (memo) this.renderSubject(memo, true);
+		}
+		const referrers = this.referrers?.map(remap);
+		this.referrersWindow?.remap(remap, (row, before, after) => {
 			const old = this.memos.get(observationHandleKey(before.handle));
-			const memo = old ? remapUnchangedMemo(old, after.handle) : null;
+			const memo = old ? replacementMemo(old, after.handle) : null;
 			const card = row.querySelector<HTMLElement>(".knomo-card");
 			if (memo && card) { this.memos.delete(old!.id); this.memos.set(memo.id, memo); rebindMemoCard(card, memo); this.options.retainCard?.(card, memo); }
 		});
-		if (this.referrers) this.referrers = this.referrers.map(remap);
-		this.markStale();
-		this.refresh();
+		if (referrers) this.referrers = referrers;
+		if (!anchorOnly) {
+			this.markStale();
+			this.refresh();
+		} else {
+			// 索引还在旧版时等订阅通知；索引先到则直接刷新已经接续的窗口。
+			void this.options.read.getFileSourceRevision(change.sourcePath).then(revision => {
+				if (revision === change.sourceRevision) this.refresh();
+			}, () => this.refresh());
+		}
 	}
 
 	refresh(): void {
@@ -278,11 +306,11 @@ export class MemoRelationsPage {
 		this.syncLoading(true);
 	}
 
-	private renderSubject(memo: MemoViewItem): void {
+	private renderSubject(memo: MemoViewItem, anchorOnly = false): void {
 		if (!this.subject || this.subject.dataset.subject === memo.id) return;
 		const old = this.subject.dataset.subject;
 		const before = old ? this.memos.get(old) : null, card = this.subject.querySelector<HTMLElement>(".knomo-card");
-		if (before && card && canRetainMemoCard(before, memo)) {
+		if (before && card && canRetainMemoCard(before, memo, anchorOnly)) {
 			this.memos.delete(before.id); this.memos.set(memo.id, memo); this.subject.dataset.subject = memo.id;
 			rebindMemoCard(card, memo); this.options.retainCard?.(card, memo); return;
 		}
@@ -322,6 +350,9 @@ export class MemoRelationsPage {
 		const controller = this.controller = new AbortController();
 		const signal = controller.signal;
 		const frame = this.frames[this.frames.length - 1];
+		const sourcePending = () => this.options.isSourcePending?.(frame.handle.sourcePath)
+			|| this.referrers?.some(node => this.options.isSourcePending?.(node.handle.sourcePath));
+		if (sourcePending()) return;
 		let phase: "subject" | "relations" = "subject";
 		try {
 			await this.options.read.relations.verifyHandle(frame.handle, signal);
@@ -329,13 +360,15 @@ export class MemoRelationsPage {
 			const key = observationHandleKey(frame.handle);
 			if (this.subject?.dataset.subject !== key) {
 				const [item] = await this.options.read.readMemoItems([frame.handle], signal);
-				signal.throwIfAborted(); this.renderSubject(toCatalogMemoView(item));
+				signal.throwIfAborted();
+				if (sourcePending()) return;
+				this.renderSubject(toCatalogMemoView(item));
 			}
 			phase = "relations";
 			const snapshot = await this.options.read.relations.read(signal, [frame.handle]);
 			await this.options.read.relations.assertCurrent(snapshot, signal, [frame.handle]);
 			signal.throwIfAborted();
-			if (!this.el || frame !== this.frames[this.frames.length - 1]) return;
+			if (!this.el || frame !== this.frames[this.frames.length - 1] || sourcePending()) return;
 			const incoming = snapshot.referrers.get(key) ?? [];
 			if (snapshot.complete || this.referrers === null || this.referrers.length === 0) this.referrers = incoming;
 			this.listTitle!.textContent = snapshot.complete

@@ -241,7 +241,9 @@ export default class KnomoPlugin extends Plugin {
 			() => Promise.resolve(getEffectiveDailyConfig()),
 			{
 				enabled: CATALOG_SCANNER_ENABLED,
+				deferSourceModify: (file, finish) => markdownMutationService.deferAnchorModify(file, dailyInventory, finish),
 				onPresentationSource: source => {
+					if (markdownMutationService.isAnchorWritePending(source.path)) return;
 					this.beaconService?.observeSource(source);
 					this.favoriteService?.observeSource(source);
 				},
@@ -273,11 +275,14 @@ export default class KnomoPlugin extends Plugin {
 					if (leaf.view instanceof KnomoView) leaf.view.handleConfirmedCatalogSettled(change);
 				}
 			},
+			canPresentDailyChange: change => {
+				if (lowPriorityWorkQueue.signal.aborted) return false;
+				const date = parseDailyNoteDateFromPath(change.sourcePath, getEffectiveDailyConfig());
+				return date !== null && formatDatePart(date) === change.logicalDate;
+			},
 			onDailyConfirmed: (presentation) => {
-				if (lowPriorityWorkQueue.signal.aborted) return;
-				const date = parseDailyNoteDateFromPath(presentation.change.sourcePath, getEffectiveDailyConfig());
-				if (date === null || formatDatePart(date) !== presentation.change.logicalDate) return;
-				this.beaconService?.confirmed(presentation);
+				const notifyBeacon = this.beaconService?.stageConfirmedAnchor(presentation);
+				if (!notifyBeacon) this.beaconService?.confirmed(presentation);
 				this.favoriteService?.confirmed(presentation);
 				void this.beaconService?.refreshIfNeeded();
 				for (const leaf of this.app.workspace.getLeavesOfType(KNOMO_VIEW_TYPE)) {
@@ -285,6 +290,7 @@ export default class KnomoPlugin extends Plugin {
 					try { leaf.view.handleConfirmedDailyMemoChange(presentation); }
 					catch (error) { leaf.view.reportViewRefreshFailure(error, "confirmed-render"); }
 				}
+				notifyBeacon?.();
 			},
 			getWriteHeading: getEffectiveWriteHeading,
 			getDailyFileForDate: (logicalDate) => {
@@ -534,6 +540,7 @@ export default class KnomoPlugin extends Plugin {
 				() => this.quickCommandController?.cancel(),
 				this.beaconService,
 				this.favoriteService,
+				markdownMutationService,
 			),
 		);
 		this.registerAttachmentEvents();

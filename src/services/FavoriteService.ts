@@ -206,8 +206,16 @@ export class FavoriteService {
 
 	confirmed(presentation: ConfirmedDailyMemoPresentation): void {
 		const { change, observations, blockAnchors } = presentation;
+		const source = { path: change.sourcePath, logicalDate: change.logicalDate, sourceRevision: change.sourceRevision, observations, blockAnchors };
+		if (change.updateExistingOnly && !this.closed && this.status === "ready" && this.byPath.has(source.path) && blockAnchors) {
+			this.reads.delete(source.path);
+			this.sourceSequence.set(source.path, (this.sourceSequence.get(source.path) ?? 0) + 1);
+			this.acceptSource(source);
+			this.notify(false, [source.path]);
+			return;
+		}
 		this.sourceChanged(change.sourcePath, "change");
-		this.observeSource({ path: change.sourcePath, logicalDate: change.logicalDate, sourceRevision: change.sourceRevision, observations, blockAnchors });
+		this.observeSource(source);
 	}
 
 	trashConfirmed(snapshotId: string, presentation: ConfirmedDailyMemoPresentation, deleted?: MemoObservation,

@@ -208,6 +208,23 @@ export class BeaconService {
 
 	configurationChanged(): void { this.configuration++; this.invalidate(); }
 
+	stageConfirmedAnchor(presentation: ConfirmedDailyMemoPresentation): (() => void) | null {
+		const { change, observations, blockAnchors } = presentation;
+		const previous = this.snapshot.memo?.catalog?.observationHandle;
+		const reference = this.reference;
+		if (!change.updateExistingOnly || !this.readable || this.closed || this.deleted || this.pending
+			|| !previous || !reference || this.selectedPath() !== change.sourcePath || blockAnchors?.[reference.blockId] !== 1) return null;
+		const handle = change.replacements.find(item => sameBeaconHandle(item.before, previous))?.after;
+		const observation = handle && observations.find(item => item.existingBlockId === reference.blockId && sameBeaconHandle(item, handle));
+		if (!observation || handle!.rawBlockHash !== previous.rawBlockHash || observation.time !== reference.memoTime) return null;
+		this.generation++;
+		this.source = { path: change.sourcePath, logicalDate: change.logicalDate, sourceRevision: change.sourceRevision, observations, blockAnchors };
+		// 先让每个视图沿提交映射更新卡片，再通知灯标订阅者，避免夹入定位占位。
+		this.publish("ready", undefined, toCatalogMemoView(this.options.fromObservation(observation)), false);
+		const staged = this.snapshot;
+		return () => { if (this.snapshot === staged) this.notify(); };
+	}
+
 	confirmed(presentation: ConfirmedDailyMemoPresentation, deletedTarget?: MemoObservation,
 		beforeBlockAnchors?: Readonly<Record<string, number>>): void {
 		const ref = this.reference, change = presentation.change;
@@ -322,14 +339,14 @@ export class BeaconService {
 		if (!this.readable) return;
 		this.publish(this.raw === undefined ? "unset" : "locating");
 	}
-	private publish(state: BeaconSnapshot["state"], reason?: BeaconSnapshot["reason"], memo?: BeaconSnapshot["memo"]): void {
+	private publish(state: BeaconSnapshot["state"], reason?: BeaconSnapshot["reason"], memo?: BeaconSnapshot["memo"], notify = true): void {
 		// 只保留上次实际展示过的路径/版本，供明确改名时等待旧卡；不参与目标匹配或写入。
 		if (state === "ready" && memo?.catalog) this.presentedSource = { path: memo.dailyRef.path, sourceRevision: memo.catalog.observationHandle.sourceRevision };
 		const next: BeaconSnapshot = { state, selection: this.selection,
 			...(this.renamedSources.size ? { previousSources: [...this.renamedSources.values()] } : {}),
 			...(reason ? { reason } : {}), ...(memo ? { memo } : {}) };
 		if (JSON.stringify(next) === JSON.stringify(this.snapshot)) return;
-		this.snapshot = next; this.notify();
+		this.snapshot = next; if (notify) this.notify();
 	}
 	private notify(): void {
 		if (!this.closed) for (const listener of this.listeners) {

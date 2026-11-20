@@ -629,7 +629,10 @@ export default class KnomoPlugin extends Plugin {
 	}
 
 	async onExternalSettingsChange(): Promise<void> {
-		await Promise.all([this.settingsService.loadSettings().catch(() => undefined), this.beaconService?.reload()]);
+		await Promise.all([
+			this.settingsService.loadSettings().catch(() => undefined),
+			this.beaconService?.reload() ?? Promise.resolve(),
+		]);
 	}
 
 	async activateView(): Promise<void> {

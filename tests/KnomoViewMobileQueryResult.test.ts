@@ -6,6 +6,7 @@ import type { MemoViewItem } from "../src/types/memoView";
 import type { CatalogFeatureQuery, CatalogMemoCountResult, CatalogMemoPage } from "../src/types/catalogView";
 import { createCatalogCapabilities } from "../src/services/MemoCapabilityModel";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+import { catalogCoverageKey } from "../src/ui/KnomoViewStateKeys";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("移动查询保留普通列表数组及其 occurrence，接受结果只属于移动会话", async () => {
@@ -180,6 +181,41 @@ test("移动拾星统计钻取接纳新版 Catalog 后可继续分页", async ()
 		assert.equal(h.search.getDisplayedMemos().length, 51);
 		assert.equal(h.search.getDisplayedCount(), 51);
 	} finally { h.close(); }
+});
+
+test("手机主列表按文字搜索转到移动搜索框并把光标放在右引号后", async () => {
+	const h = await createHarness();
+	const dom = new JSDOM('<main><button data-search-date-action="literal"></button></main><input id="mobile"><input id="compact" hidden>');
+	try {
+		const doc = dom.window.document;
+		const input = doc.querySelector<HTMLInputElement>("#mobile")!;
+		const state: KnomoViewStateController = h.view.viewStateController;
+		state.activeNav = "things";
+		state.activeTag = "Work";
+		state.activeTagKey = "work";
+		state.setSearchQuery("memo 2026-10-19 same");
+		h.view.commitDesktopSearchResult(h.view.buildCatalogActiveQuery(true), 7, catalogCoverageKey(h.coverage), new Date());
+		h.search.isOpen = false;
+		Object.assign(h.search, { inputEl: input });
+		Object.assign(h.view, {
+			cardFlowEl: doc.querySelector("main"), compactInlineSearchInputEl: doc.querySelector("#compact"),
+			cancelPendingQuickCommand: () => {}, clearSearchDebounce: () => {}, catalogDesktopQueryRun: 0,
+		});
+		h.service.query = async request => {
+			h.queries.push(request);
+			return { ...h.page(), items: [], nextCursor: null };
+		};
+
+		await h.view.handleRootClick({ target: doc.querySelector("button") } as unknown as MouseEvent);
+		assert.equal(h.search.isOpen, true);
+		assert.equal(doc.activeElement, input);
+		assert.equal(input.value, 'memo "2026-10-19" same');
+		const caret = 'memo "2026-10-19"'.length;
+		assert.deepEqual([input.selectionStart, input.selectionEnd], [caret, caret]);
+		await settle();
+		assert.equal(h.queries.length, 1);
+		assert.deepEqual(h.search.session.result?.filter, { hasTask: true, tags: ["work"], textTerms: ["memo", "2026-10-19", "same"] });
+	} finally { h.close(); dom.window.close(); }
 });
 
 for (const invalidation of ["cancel", "context", "close"] as const) {

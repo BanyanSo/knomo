@@ -1015,12 +1015,14 @@ export class KnomoView extends ItemView {
 			getResultStatus: (filter, result) => {
 				if (this.getMobileSearchCollection() === "favorites" && this.favoriteService) {
 					const status = this.favoriteService.status;
-					const feedback = getFavoriteFeedback(status, result.accepted ? this.mobileFavoriteProgress : undefined,
-						result.hasMemos, this.mobileFavoriteHasMore);
+					const progress = result.accepted ? this.mobileFavoriteProgress : undefined;
+					const hasMore = this.mobileFavoriteHasMore;
+					const feedback = getFavoriteFeedback(status, progress, result.hasMemos, hasMore);
 					return {
 						headers: feedback && !feedback.loading ? [{ type: "summary", text: `${feedback.title} ${feedback.description}`.trim(), feedback: true }] : [],
 						loadingTitle: feedback?.loading ? feedback.title : undefined,
-						complete: !feedback,
+						complete: status === "ready" && progress !== undefined && progress.waiting === 0 && progress.missing === 0
+							&& (result.hasMemos || !hasMore),
 						blocked: status === "error" || status === "conflict",
 					};
 				}
@@ -6528,14 +6530,21 @@ export class KnomoView extends ItemView {
 		const dateAction = target?.closest?.("[data-search-date-action]");
 		if (dateAction && this.cardFlowEl?.contains(dateAction)) {
 			if (!this.canApplySearchDateAction()) return;
-			const input = this.getVisibleDesktopSearchInput();
+			const mobile = this.currentLayout === "mobile";
+			const input = mobile ? null : this.getVisibleDesktopSearchInput();
 			const session = this.viewStateController.search;
 			if (input) session.updateDraft(input.value, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length);
-			if (session.searchDateAsText()) {
-				this.invalidateSearchDraft();
-				this.submitSearchDraft();
-				input?.focus({ preventScroll: true });
+			if (!session.searchDateAsText()) return;
+			if (mobile) {
+				const { selectionStart, selectionEnd } = session.draft;
+				this.openMobileSearchPage({ focusInput: false, changeIntent: "view-scope-change" });
+				this.mobileSearchController.input?.setSelectionRange(selectionStart, selectionEnd);
+				this.mobileSearchController.focusInputNow();
+				return;
 			}
+			this.invalidateSearchDraft();
+			this.submitSearchDraft();
+			input?.focus({ preventScroll: true });
 			return;
 		}
 		await this.userActionController.handleRootClick(event);

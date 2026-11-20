@@ -1231,7 +1231,7 @@ export class MobileSearchController {
 		}
 		if (memos.length === 0 && status) {
 			const canContinueFavorites = !!this.cursor?.favorites && !readStatus?.blocked && this.queryError === null && !this.acceptedResultsInvalidated;
-			this.syncResultMetadata(0, 0, canContinueFavorites, false);
+			this.syncResultMetadata(0, 0, canContinueFavorites, this.getDisplayedCount() === 0);
 			completeRender();
 			return;
 		}

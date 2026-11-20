@@ -319,6 +319,54 @@ test("移动拾星搜索保留空批次的续页按钮，继续加载后可显�
 	} finally { h.controller.removePage(); }
 });
 
+test("移动拾星搜索确认零条后显示计数，并可把日期改为文字搜索", async () => {
+	await ensureObsidianStub();
+	const { MobileSearchController } = await import("../src/ui/MobileSearchController");
+	const { KnomoView } = await import("../src/ui/KnomoView");
+	const { t } = await import("../src/i18n");
+	const page = makeRemotePage([]);
+	const view = Object.assign(Object.create(KnomoView.prototype), {
+		viewStateController: { activeNav: "favorites" },
+		favoriteService: { status: "ready", revision: 1 },
+		catalogRevision: page.catalogRevision, catalogCoverage: page.coverage,
+		syncRecordStatsSource: () => {},
+	});
+	const { getScopedContext, getResultStatus, getFavoriteQueryState, getCatalogRevision, getCoverageKey, onResultsAccepted } =
+		Reflect.get(view.createMobileSearchController(), "options") as MobileSearchControllerOptions;
+	const date = "2026-10-09";
+	const match = makeMemo("date-in-text", `提到 ${date}`);
+	const requests: Parameters<LoadRemoteResults>[0][] = [];
+	const progress = { persisted: 1, located: 0, matched: 0, missing: 0, waiting: 1 };
+	const h = createControllerHarness(MobileSearchController, [], undefined, async filter => {
+		requests.push(filter);
+		return filter.textTerms?.includes(date)
+			? { ...page, items: [match], favoriteProgress: { ...progress, located: 1, matched: 1 } }
+			: { ...page, favoriteProgress: { ...progress } };
+	}, { getScopedContext, getResultStatus, getFavoriteQueryState, getCatalogRevision, getCoverageKey, onResultsAccepted });
+	try {
+		h.controller.searchQuery = date;
+		h.controller.openPage({ focusInput: false });
+		await settle();
+		assert.equal(h.controller.getDisplayedCount(), null);
+		assert.equal(h.root.find("[data-search-date-action]"), null);
+
+		progress.waiting = 0;
+		await h.controller.refreshAppliedResults();
+		assert.equal(h.root.find(".knomo-search-result-feedback")?.getText(), `${t("favorite.noMatch.title")} ${t("favorite.noMatch.description")}`);
+		assert.equal(h.controller.getDisplayedCount(), 0);
+		assert.equal(h.root.find(".knomo-result-summary-value")?.getText(), "0");
+		const button = h.root.find("[data-search-date-action]");
+		assert.ok(button);
+		h.dispatch(h.controller.results as unknown as TestElement, "click", {
+			...createKeyboardEvent(""), target: { closest: () => button },
+		});
+		await settle();
+		assert.equal(h.controller.input?.value, `"${date}"`);
+		assert.deepEqual(requests.at(-1), { textTerms: [date] });
+		assert.equal(h.root.find(".knomo-card")?.getAttr("data-memo-id"), match.id);
+	} finally { h.controller.removePage(); }
+});
+
 test("移动搜索延迟出现无阶段文案的骨架；部分空结果不能冒充无匹配", async () => {
 	await ensureObsidianStub();
 	const { MobileSearchController } = await import("../src/ui/MobileSearchController");

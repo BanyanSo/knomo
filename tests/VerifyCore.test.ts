@@ -149,19 +149,6 @@ test("verify 仅豁免编辑器的单次精确动态高度写入", async () => {
 			fs.writeFileSync(file, `${statement}   `);
 			withCapturedConsoleError(() => assert.equal(core.scanFiles([file], /[ \t]+$/u), 1));
 		}
-	} finally {
-		process.chdir(previousCwd);
-		fs.rmSync(tempDir, { recursive: true, force: true });
-	}
-});
-
-
-test("已移除的迁移删除语句不再享有检查豁免", async () => {
-	const core = await loadVerifyCore();
-	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "knomo-verify-"));
-	const previousCwd = process.cwd();
-	try {
-		process.chdir(tempDir);
 		for (const [file, statement] of [
 			["src/services/LegacyTrashMigrationService.ts", "await this.app.vault.delete(folder, true);"],
 			["src/settings/MonthlyFolderMigrationService.ts", "await this.plugin.app.vault.delete(sourceFile);"],

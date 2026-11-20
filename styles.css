@@ -52,26 +52,157 @@ body {
 	margin-block-end: var(--size-4-4);
 }
 
-.knomo-plugin .knomo-card.has-time-buoy {
+.knomo-plugin .knomo-card.has-time-buoy,
+.knomo-plugin .knomo-card.has-beacon {
 	padding-block-end: 18px;
 }
 
-.knomo-plugin .knomo-card-time-buoy {
+.knomo-plugin .knomo-card.has-beacon {
+	--knomo-beacon-tower-width: 32px;
+	--knomo-beacon-tower-right: 8px;
+}
+
+.knomo-plugin .knomo-card-beacon-decoration {
+	--knomo-beacon-tower-bottom: -1px;
+	/* 图形的灯室中心为 (58, 52)，图形宽 116、高 174。 */
+	--knomo-beacon-lamp-right: calc(var(--knomo-beacon-tower-right) + var(--knomo-beacon-tower-width) / 2);
+	--knomo-beacon-lamp-bottom: calc(var(--knomo-beacon-tower-bottom) + var(--knomo-beacon-tower-width) * 122 / 116);
+	--knomo-beacon-lamp: calc(100% - var(--knomo-beacon-lamp-right)) calc(100% - var(--knomo-beacon-lamp-bottom));
+	--knomo-beacon-warm: 239, 174, 66;
+	--knomo-beacon-ambient: 0.19;
+	--knomo-beacon-beam: 0.85;
+	--knomo-beacon-tower-face: #bed3da;
+	--knomo-beacon-tower-shade: #8fabb8;
+	--knomo-beacon-tower-lamp: #ffe8a9;
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	overflow: hidden;
+	border-radius: inherit;
+	pointer-events: none;
+	background:
+		radial-gradient(circle 28px at var(--knomo-beacon-lamp), rgba(var(--knomo-beacon-warm), 0.32), transparent 90%),
+		radial-gradient(ellipse 145% 170% at var(--knomo-beacon-lamp), rgba(var(--knomo-beacon-warm), var(--knomo-beacon-ambient)), rgba(var(--knomo-beacon-warm), 0.065) 62%, transparent 100%),
+		radial-gradient(ellipse 85% 100% at left top, rgba(var(--knomo-beacon-warm), 0.075), transparent 96%);
+}
+
+.theme-dark .knomo-plugin .knomo-card-beacon-decoration {
+	--knomo-beacon-warm: 255, 194, 104;
+	--knomo-beacon-ambient: 0.12;
+	--knomo-beacon-beam: 0.61;
+	--knomo-beacon-tower-face: #688a97;
+	--knomo-beacon-tower-shade: #395965;
+}
+
+.knomo-plugin:is(.is-layout-desktop-narrow, .is-layout-mobile) .knomo-card.has-beacon {
+	--knomo-beacon-tower-width: 26px;
+	--knomo-beacon-tower-right: 7px;
+}
+
+/* 装饰在卡头之前绘制。内容在其上方，卡头继续作为菜单的定位基准。 */
+.knomo-plugin .knomo-card.has-beacon > :is(.knomo-card-body, .knomo-card-meta, .knomo-memo-referrers) {
+	position: relative;
+}
+
+.knomo-plugin .knomo-card-beacon-tower {
+	display: block;
+	position: absolute;
+	right: var(--knomo-beacon-tower-right);
+	bottom: var(--knomo-beacon-tower-bottom);
+	width: var(--knomo-beacon-tower-width);
+	height: auto;
+}
+
+.knomo-plugin .knomo-card-beacon-tower-face { fill: var(--knomo-beacon-tower-face); }
+.knomo-plugin .knomo-card-beacon-tower-shade { fill: var(--knomo-beacon-tower-shade); }
+.knomo-plugin .knomo-card-beacon-tower-lamp { fill: var(--knomo-beacon-tower-lamp); }
+
+.knomo-plugin .knomo-card-beacon-sweep { display: none; }
+
+@supports (width: 1cqw) and (transform: rotate(atan2(1px, 1px))) and (mask-image: radial-gradient(black, transparent)) and (background: conic-gradient(black, transparent)) {
+	@media (prefers-reduced-motion: no-preference) {
+		.knomo-plugin .knomo-card-beacon-decoration { container-type: size; }
+
+		.knomo-plugin:not(.is-mobile-search-open) .knomo-card[data-knomo-beacon-in-view]:not([inert]) .knomo-card-beacon-sweep {
+			/* 按实卡宽高朝左缘的 88% 和 15% 高度取角，同一灯头适配长短卡。 */
+			--knomo-beacon-reach: clamp(380px, max(135cqw, 135cqh), 840px);
+			--knomo-beacon-left-distance: max(1px, calc(100cqw - var(--knomo-beacon-lamp-right)));
+			--knomo-beacon-sweep-start: atan2(calc(12cqh - var(--knomo-beacon-lamp-bottom)), var(--knomo-beacon-left-distance));
+			--knomo-beacon-sweep-end: atan2(calc(85cqh - var(--knomo-beacon-lamp-bottom)), var(--knomo-beacon-left-distance));
+			--knomo-beacon-sweep-span: calc(var(--knomo-beacon-sweep-end) - var(--knomo-beacon-sweep-start));
+			--knomo-beacon-spread: clamp(7deg, atan2(38cqh, 80cqw), 25deg);
+			display: block;
+			position: absolute;
+			width: var(--knomo-beacon-reach);
+			height: var(--knomo-beacon-reach);
+			right: var(--knomo-beacon-lamp-right);
+			bottom: calc(var(--knomo-beacon-lamp-bottom) - var(--knomo-beacon-reach) / 2);
+			transform-origin: right center;
+			background: conic-gradient(from 270deg at right center,
+				rgba(var(--knomo-beacon-warm), 0.30) 0deg,
+				rgba(var(--knomo-beacon-warm), 0.13) calc(var(--knomo-beacon-spread) * 0.42),
+				transparent var(--knomo-beacon-spread) calc(360deg - var(--knomo-beacon-spread)),
+				rgba(var(--knomo-beacon-warm), 0.13) calc(360deg - var(--knomo-beacon-spread) * 0.42),
+				rgba(var(--knomo-beacon-warm), 0.30) 360deg);
+			mask-image: radial-gradient(circle var(--knomo-beacon-reach) at right center, black 7%, rgba(0, 0, 0, 0.76) 52%, transparent 98%);
+			animation: knomo-beacon-sweep 6s linear infinite;
+		}
+	}
+}
+
+@keyframes knomo-beacon-sweep {
+	0% { transform: rotate(var(--knomo-beacon-sweep-start)); opacity: 0; animation-timing-function: cubic-bezier(0.35, 0, 0.17, 1); }
+	12% { transform: rotate(calc(var(--knomo-beacon-sweep-start) + var(--knomo-beacon-sweep-span) * 0.13)); opacity: var(--knomo-beacon-beam); }
+	36% { transform: rotate(calc(var(--knomo-beacon-sweep-start) + var(--knomo-beacon-sweep-span) * 0.46)); opacity: calc(var(--knomo-beacon-beam) * 0.96); }
+	58% { transform: rotate(calc(var(--knomo-beacon-sweep-start) + var(--knomo-beacon-sweep-span) * 0.79)); opacity: calc(var(--knomo-beacon-beam) * 0.96); }
+	72% { transform: rotate(var(--knomo-beacon-sweep-end)); opacity: calc(var(--knomo-beacon-beam) * 0.94); }
+	91%, 100% { transform: rotate(calc(var(--knomo-beacon-sweep-end) + var(--knomo-beacon-sweep-span) * 0.12)); opacity: 0; }
+}
+
+.knomo-plugin .knomo-card[data-beacon-placeholder],
+.knomo-plugin .knomo-card[data-beacon-placeholder] * { visibility: hidden; }
+
+.knomo-plugin .knomo-beacon-status {
+	margin-block: var(--size-4-3);
+	color: var(--text-muted);
+	font-size: var(--knomo-text-ui-base);
+}
+
+.knomo-plugin .knomo-beacon-status button { min-height: 44px; margin-block-start: var(--size-4-2); }
+
+.knomo-plugin .knomo-card-status-icons {
 	position: absolute;
 	right: 12px;
 	bottom: 0;
 	z-index: 2;
-	display: block;
-	width: 18px;
-	height: 18px;
+	display: flex;
+	gap: 4px;
 	color: var(--interactive-accent);
 	pointer-events: none;
 }
 
-.knomo-plugin .knomo-card-time-buoy > svg {
+.knomo-plugin .knomo-card.has-beacon > .knomo-card-status-icons {
+	right: calc(var(--knomo-beacon-tower-right) + var(--knomo-beacon-tower-width) + 4px);
+}
+
+.knomo-plugin .knomo-card-status-icons > span {
+	display: block;
+	flex: 0 0 18px;
+	width: 18px;
+	height: 18px;
+}
+
+.knomo-plugin .knomo-card-status-icons svg {
 	display: block;
 	width: 100%;
 	height: 100%;
+}
+
+.knomo-plugin .knomo-card-favorite svg {
+	width: 14px;
+	height: 14px;
+	margin: 2px;
+	fill: currentColor;
 }
 
 .knomo-plugin .knomo-card.is-time-buoy-past .knomo-card-time-buoy {
@@ -1353,6 +1484,22 @@ body .workspace-leaf-content[data-type="knomo-view"] .knomo-plugin.is-resizing-s
 	transform: translateY(0) scale(1);
 	visibility: visible;
 	pointer-events: auto;
+}
+
+.knomo-plugin .knomo-result-summary-line.has-date-action {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.knomo-plugin .knomo-result-summary-line.has-date-action > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.knomo-plugin .knomo-result-summary-line.has-date-action > button {
+	flex: 0 0 auto;
 }
 
 .knomo-plugin .knomo-search-menu-option,
@@ -3352,7 +3499,8 @@ body .knomo-mobile-create-fab.is-hidden {
 		padding: var(--size-4-2) var(--size-4-3);
 	}
 
-	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-time-buoy {
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-time-buoy,
+	.knomo-plugin.is-layout-mobile.is-mobile-compact .knomo-card.has-beacon {
 		padding-block-end: 18px;
 	}
 
@@ -4184,6 +4332,15 @@ body .knomo-mobile-create-fab.is-hidden {
 	line-height: 1.3;
 	text-align: center;
 	white-space: normal;
+}
+
+.knomo-plugin .knomo-record-stats-metric-description {
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	color: var(--text-muted);
+	font-size: var(--knomo-text-caption);
+	line-height: 1.3;
+	text-align: center;
 }
 
 .knomo-plugin .knomo-record-stats-view-controls,

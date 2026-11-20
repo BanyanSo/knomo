@@ -9,6 +9,8 @@ export type RecordStatsMetricFilterType =
 	| "with-image"
 	| "references"
 	| "referenced"
+	| "things"
+	| "favorites"
 	| "max-daily-notes"
 	| "max-daily-words";
 
@@ -58,6 +60,7 @@ export function getRecordStatsMetricSearchFilter(
 	type: RecordStatsMetricFilterType,
 	snapshot?: RecordStatsSnapshot,
 	blocked = false,
+	count?: number | null,
 ): RecordStatsSearchFilter | null {
 	if (selected === null) {
 		return null;
@@ -77,6 +80,9 @@ export function getRecordStatsMetricSearchFilter(
 		};
 	}
 	if (type === "referenced" && isReferencedMemoStatsAvailable(selected, snapshot, blocked) && (selected.referenced?.count ?? 0) > 0) {
+		return { type, startDate: selected.startDate, endDateExclusive: selected.endDateExclusive };
+	}
+	if ((type === "things" || type === "favorites") && !blocked && (count ?? 0) > 0) {
 		return { type, startDate: selected.startDate, endDateExclusive: selected.endDateExclusive };
 	}
 	if (type === "with-tag" && selected.range.taggedMemoCount > 0) {

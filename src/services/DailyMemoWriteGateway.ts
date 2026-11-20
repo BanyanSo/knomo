@@ -113,9 +113,21 @@ export class DailyMemoWriteGateway {
 				}] });
 			}
 		} else {
-			await this.app.vault.process(prepared.file, (content) => this.replayPreparedUpdate(prepared, content));
+			await this.app.vault.process(prepared.file, (content) => {
+				// 等待磁盘提交时用户可能已打开该 Daily 并输入尚未保存的内容。
+				const editor = this.getActiveEditor(prepared.file);
+				if (editor && editor.getValue() !== content) throw new StaleDailyWriteError(prepared.sourcePath);
+				return this.replayPreparedUpdate(prepared, content);
+			});
 		}
 		return { mode: prepared.mode, before: prepared.before, after: prepared.after };
+	}
+
+	async isCommittedContentCurrent(prepared: PreparedDailyWrite): Promise<boolean> {
+		const content = await this.app.vault.read(prepared.file);
+		this.assertTarget(prepared);
+		const editor = this.getActiveEditor(prepared.file);
+		return content === prepared.afterContent && (!editor || editor.getValue() === content);
 	}
 
 	private replayPreparedUpdate(prepared: PreparedDailyWrite, currentContent: string): string {

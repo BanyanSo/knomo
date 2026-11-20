@@ -30,7 +30,7 @@ test("启动等待布局并合并并发请求，只初始化配置且不访问 T
  assert.equal(f.service.getSnapshot().status, "ready");
  assert.deepEqual(f.calls, ["config"]);
  assert.equal(f.vault.read("Daily/2026-08-22.md"), "- 09:00 memo\n");
- assert.equal(f.vault.paths().some(p => /identity|receipts|writer|current-state|segments/.test(p)), false);
+ assert.deepEqual(f.vault.paths(), ["Daily/2026-08-22.md"]);
 });
 
 test("布局就绪前卸载取消，后到回调不再创建文件", async () => {

@@ -1,6 +1,5 @@
 import type { MemoRelationNode } from "../types/memoRelations";
 import { observationHandleKey } from "../services/DailyMemoPresentationChange";
-import type { DailyMemoPresentationChange } from "../services/DailyMemoPresentationChange";
 import { ReadyCardImageHandoff } from "./KnomoCardImages";
 
 // 高度只保留数字；正文、DOM 与渲染任务仅保留当前窗口及正在操作的一行。
@@ -82,12 +81,12 @@ export class MemoRelationWindow {
 		for (const row of this.rows.values()) row.setAttribute("aria-setsize", String(complete ? this.nodes.length : -1));
 	}
 
-	remap(change: DailyMemoPresentationChange, rebind: (row: HTMLElement, before: MemoRelationNode, after: MemoRelationNode) => void): void {
-		const replacements = new Map(change.replacements.map(item => [observationHandleKey(item.before), item.after]));
+	remap(remapNode: (node: MemoRelationNode) => MemoRelationNode,
+		rebind: (row: HTMLElement, before: MemoRelationNode, after: MemoRelationNode) => void): void {
 		this.nodes = this.nodes.map(node => {
-			const key = observationHandleKey(node.handle), after = replacements.get(key);
-			if (!after || after.rawBlockHash !== node.handle.rawBlockHash) return node;
-			const current = { ...node, handle: after }, nextKey = observationHandleKey(after), row = this.rows.get(key);
+			const current = remapNode(node);
+			if (current === node) return node;
+			const key = observationHandleKey(node.handle), nextKey = observationHandleKey(current.handle), row = this.rows.get(key);
 			if (row) {
 				this.rows.delete(key); this.rows.set(nextKey, row); row.dataset.relationRow = nextKey;
 				rebind(row, node, current);

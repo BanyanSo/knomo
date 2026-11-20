@@ -11,7 +11,7 @@ declare global { interface Window { refreshFixture: typeof Fixture } }
 async function browserFixture(locale = "en") {
 	const bundle = await build({
 		stdin: { contents: `import { getLanguage } from "obsidian"; getLanguage.set(${JSON.stringify(locale)}); import("./tests/helpers/viewRefreshBrowserFixture").then(fixture => { window.refreshFixture = fixture; fixture.installDomHelpers(); });`, resolveDir: process.cwd() },
-		alias: { obsidian: path.resolve(".tmp/knomo-tests/node_modules/obsidian/index.js") },
+		alias: { obsidian: path.resolve(__dirname, "../node_modules/obsidian/index.js") },
 		bundle: true, write: false, format: "iife", platform: "browser",
 		loader: { ".png": "dataurl", ".jpg": "dataurl", ".webp": "dataurl" },
 	});
@@ -34,6 +34,172 @@ async function browserFixture(locale = "en") {
 	await page.waitForFunction(() => !!window.refreshFixture);
 	return { page, close: () => browser.close() };
 }
+
+test("深页 YAML 增行接续引用预览，刷新提示出现和收起时卡片窗格位移不超过 1px",
+	{ skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+		const h = await browserFixture();
+		try {
+			for (const mobile of [false, true]) {
+				const result = await h.page.evaluate(mobile => window.refreshFixture.yamlAndFeedbackGeometry(mobile), mobile);
+				assert.ok(result.before.scroll > 1);
+				assert.ok(result.pending.flow > result.before.flow);
+				for (const state of [result.pending, result.accepted, result.dismissed, result.settled]) {
+					assert.equal(state.count, result.before.count);
+					assert.equal(state.preview, true);
+					assert.ok(Math.abs(state.card - result.before.card) <= 1, JSON.stringify({ mobile, result }));
+				}
+			}
+		} finally { await h.close(); }
+	});
+
+test("灯标设置和移出保留阅读位置，浮标状态改变时接续图片与扫光", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) for (const today of [false, true]) for (const loaded of [false, true]) {
+			await h.page.setViewportSize({ width: mobile ? 390 : 1100, height: 800 });
+			const options = { mobile, today, loaded, dark: mobile, reduce: mobile };
+			const result = await h.page.evaluate(options => window.refreshFixture.beaconGeometry(options), options);
+			const evidence = JSON.stringify({ options, result });
+			assert.equal(result.pinned.topCount, 1, evidence); assert.equal(result.pinned.selectedCount, 1, evidence);
+			assert.equal(result.pinned.count, result.ordinaryCount + (loaded ? 0 : 1), evidence);
+			assert.equal(result.pinned.anchor, result.before.anchor, evidence);
+			assert.ok(Math.abs(result.pinned.offset - result.before.offset) <= 1, evidence);
+			assert.equal(result.pinned.animating, 0, evidence);
+			assert.equal(result.visual.animating, 1, evidence);
+			assert.equal(result.visual.buoy, today ? "today" : "past", evidence);
+			assert.equal(result.dateFlip.buoy, today ? "past" : "today", evidence);
+			assert.equal(result.labelOnly.label, "Two dates", evidence);
+			for (const combined of [result.visual, result.dateFlip]) {
+				assert.equal(combined.wave, 0, evidence);
+				assert.equal(combined.light, 1, evidence);
+				assert.equal(combined.tower, 1, evidence);
+			}
+			assert.equal(result.disabled.tower, 1, evidence);
+			assert.equal(result.disabled.buoy, undefined, evidence);
+			assert.deepEqual(result.retained, { card: true, layer: true, tower: true, image: true, animation: true }, evidence);
+			assert.equal(result.visual.position, "relative", evidence);
+			assert.equal(result.deferred.hidden, true, evidence); assert.equal(result.deferred.inert, true, evidence);
+			assert.equal(result.deferred.focused, true, evidence); assert.equal(result.deferred.heightChange, 0, evidence);
+			assert.equal(result.deferred.animating, 0, evidence);
+			assert.equal(result.removed.topCount, 0, evidence);
+			assert.equal(result.removed.selectedCount, loaded ? 1 : 0, evidence);
+			assert.deepEqual(result.released, { wave: loaded && today, buoy: loaded ? today ? "today" : "past" : undefined, decoration: false }, evidence);
+			assert.equal(result.delayed.top, 0, evidence); assert.equal(result.delayed.new, 0, evidence);
+			assert.equal(result.delayed.status, undefined, evidence);
+			await h.page.screenshot({ path: `.tmp/beacon-${mobile ? "mobile-dark" : "desktop-light"}-${today ? "today" : "light"}-${loaded ? "loaded" : "outside"}.png` });
+		}
+	} finally { await h.close(); }
+});
+
+test("两个默认视图分别接纳源与查询，隐藏恢复及移除保持各自窗口", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) {
+			const result = await h.page.evaluate(mobile => window.refreshFixture.beaconTwoViews(mobile), mobile);
+			const evidence = JSON.stringify(result);
+			for (const sample of result.samples) for (const count of sample.counts) assert.ok(count <= 1, evidence);
+			assert.deepEqual(result.samples.find(item => item.phase === "hidden resumed")!.counts, [1, 1], evidence);
+			assert.deepEqual(result.samples.find(item => item.phase === "binding first")!.tops, [0, 0], evidence);
+			assert.deepEqual(result.samples.at(-1)!.counts, [1, 0], evidence);
+			assert.equal(result.filteredTop, 0, evidence); assert.equal(result.writes, 2, evidence);
+			assert.deepEqual(result.sizes, [35, 5], evidence);
+			assert.deepEqual(result.initialMotion, [1, 1], evidence);
+			assert.deepEqual(result.hiddenMotion, [1, 0], evidence);
+			assert.deepEqual(result.resumedMotion, [1, 1], evidence);
+			assert.deepEqual(result.removedMotion, [0, 0], evidence);
+		}
+	} finally { await h.close(); }
+});
+
+test("真实灯标服务刷新保留撤权占位、输入焦点，确认后一次恢复和去重", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) for (const loaded of [false, true]) {
+			const result = await h.page.evaluate(options => window.refreshFixture.beaconSourceRefresh(options), { mobile, loaded });
+			const evidence = JSON.stringify({ mobile, loaded, result });
+			assert.equal(result.waiting.state, "locating", evidence); assert.equal(result.waiting.count, 1, evidence);
+			assert.equal(result.waiting.hidden, true, evidence); assert.equal(result.waiting.inert, true, evidence);
+			assert.equal(result.waiting.status, undefined, evidence);
+			assert.equal(result.waiting.heightChange, 0, evidence); assert.equal(result.waiting.focused, true, evidence);
+			assert.equal(result.ready.state, "ready", evidence); assert.equal(result.ready.count, 1, evidence);
+			assert.equal(result.ready.selected, 1, evidence); assert.equal(result.ready.focused, true, evidence);
+			assert.equal(result.ready.placeholder, 0, evidence); assert.equal(result.ready.total, result.ready.expected, evidence);
+			assert.equal(result.updated.state, "ready", evidence); assert.equal(result.updated.content, "Changed target", evidence);
+			assert.equal(result.unreadable.reason, "unreadable", evidence);
+			assert.equal(result.unreadable.status, undefined, evidence); assert.equal(result.unreadable.placeholder, 0, evidence);
+			assert.equal(result.rejected.reason, "missing-id", evidence); assert.equal(result.rejected.placeholder, 0, evidence);
+			assert.equal(result.rejected.status, "Can't find your Beacon. Set it again from a memo’s menu.", evidence);
+			assert.equal(result.rejected.remove, "Remove from Beacon", evidence);
+			assert.equal(result.removed.state, "unset", evidence); assert.equal(result.removed.top, 0, evidence);
+			assert.equal(result.removed.placeholder, 0, evidence);
+		}
+	} finally { await h.close(); }
+});
+
+test("灯标扫光的关键帧、灯头坐标、浅深主题和减少动态降级遵循 V12", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture("zh-CN");
+	try {
+		for (const [width, mobile] of [[700, false], [420, false], [390, true], [320, true]] as const)
+		for (const dark of [false, true]) for (const status of [undefined, "today", "upcoming", "past"] as const) {
+			await h.page.setViewportSize({ width, height: 800 });
+			const options = { mobile, dark, status };
+			const result = await h.page.evaluate(options => window.refreshFixture.beaconStylePreview(options), options);
+			const evidence = JSON.stringify({ width, options, result });
+			assert.equal(result.cardCount, 3, evidence);
+			assert.equal(result.towerCount, 1, evidence);
+			assert.equal(result.waveCount, 0, evidence);
+			assert.match(result.time ?? "", /2026-11-12 08:30$/u, evidence);
+			assert.equal(result.pointerEvents, "none", evidence);
+			assert.equal(result.buttonHit, true, evidence);
+			assert.equal(result.coversCard, true, evidence);
+			assert.equal(result.radius, "8px", evidence);
+			assert.equal(result.duration, 6000, evidence);
+			assert.match(result.staticGlow, /radial-gradient/u, evidence);
+			assert.equal(new Set(result.keyframes.map(frame => frame.staticGlow)).size, 1, evidence);
+			assert.equal(new Set(result.keyframes.map(frame => frame.cardHeight)).size, 1, evidence);
+			const [start, entering, bright, upper, faded, end, loop] = result.keyframes;
+			assert.ok(start.angle < bright.angle && bright.angle < upper.angle && upper.angle < faded.angle, evidence);
+			assert.ok(entering.opacity > 0 && entering.opacity < bright.opacity && upper.opacity > 0, evidence);
+			assert.deepEqual([start.opacity, faded.opacity, end.opacity, loop.opacity], [0, 0, 0, 0], evidence);
+			assert.equal(loop.angle, start.angle, evidence);
+			assert.ok(Math.abs(start.leftHeight - 0.88) < 0.012 && Math.abs(upper.leftHeight - 0.15) < 0.012, evidence);
+			assert.ok(result.originalLamp?.every(offset => Math.abs(offset) < 1), evidence);
+			assert.ok(result.movedLamp?.every(offset => Math.abs(offset) < 1), evidence);
+			if (status) {
+				assert.equal(result.originalBadgeGap, 4, evidence);
+				assert.equal(result.movedBadgeGap, 4, evidence);
+				assert.equal(result.badgeColor, status === "past" ? dark ? "rgb(142, 153, 171)" : "rgb(114, 119, 128)"
+					: dark ? "rgb(68, 138, 255)" : "rgb(132, 104, 220)", evidence);
+			}
+			if (!status || status === "past") await h.page.locator("main").screenshot({ path: `.tmp/beacon-v12-${width}-${dark ? "dark" : "light"}-${status ?? "tower"}.png` });
+		}
+		const tall = await h.page.evaluate(() => window.refreshFixture.beaconStylePreview({ mobile: true, dark: false, tall: true }));
+		assert.ok(tall.keyframes[0].cardHeight > 350);
+		assert.ok(Math.abs(tall.keyframes[0].leftHeight - 0.88) < 0.012 && Math.abs(tall.keyframes[3].leftHeight - 0.15) < 0.012);
+		await h.page.locator("main").screenshot({ path: ".tmp/beacon-v12-320-light-tall.png" });
+		await h.page.emulateMedia({ reducedMotion: "reduce" });
+		const reduced = await h.page.evaluate(() => window.refreshFixture.beaconStylePreview({ mobile: true, dark: true, status: "past" }));
+		assert.equal(reduced.keyframes.length, 0);
+		assert.equal(reduced.towerCount, 1);
+		assert.equal(reduced.originalBadgeGap, 4);
+		assert.match(reduced.staticGlow, /radial-gradient/u);
+	} finally { await h.close(); }
+});
+
+test("灯标装饰和合并态在桌面宽窄及 320/390 紧凑布局下保留正文、图片与菜单几何", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const [width, mobile] of [[700, false], [420, false], [390, true], [320, true]] as const) {
+			await h.page.setViewportSize({ width, height: 800 });
+			const states = await h.page.evaluate(options => window.refreshFixture.beaconCardLayout(options), { mobile, dark: mobile });
+			for (const state of states.filter(state => state.top)) {
+				const reference = states.find(item => !item.top && item.buoy && item.content === state.content)!;
+				assert.deepEqual(state, { ...reference, top: true, buoy: state.buoy });
+				assert.ok(state.card[0] <= width);
+			}
+		}
+	} finally { await h.close(); }
+});
 
 test("普通列表与移动搜索的摘要保持中英文自然数字间距与换行，过渡只产生原句布局变化", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
 	const traces: unknown[] = [];
@@ -131,6 +297,21 @@ test("普通列表保留 A 的只读画面时更新上方 B，重建仍保留 A 
 				assert.equal(sample.count, first.count, evidence); assert.equal(sample.anchor, first.anchor, evidence);
 				assert.ok(Math.abs(sample.offset - first.offset) <= 1, evidence);
 			}
+		}
+	} finally { await h.close(); }
+});
+
+test("拾星集重读时保持当前卡片与图片，移除当前卡后保留用户的新阅读位置", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
+	const h = await browserFixture();
+	try {
+		for (const mobile of [false, true]) {
+			const result = await h.page.evaluate(mobile => window.refreshFixture.favoriteRefreshGeometry(mobile), mobile);
+			const evidence = JSON.stringify({ mobile, ...result });
+			assert.ok(result.retained && result.paused && result.interactiveAgain && result.sameImage, evidence);
+			assert.ok(result.start > 0, evidence);
+			assert.ok(Math.abs(result.waitingScroll - result.start) <= 1, evidence);
+			assert.equal(result.count, 23, evidence);
+			assert.ok(Math.abs(result.finalOffset - result.neighborOffset) <= 1, evidence);
 		}
 	} finally { await h.close(); }
 });

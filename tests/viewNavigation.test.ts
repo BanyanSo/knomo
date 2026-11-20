@@ -22,7 +22,7 @@ const baseTitleState: ViewTitleState = {
 
 test("标题菜单分三组，被引用是独立固定筛选并在两端显示相同标题", () => {
 	assert.deepEqual(TITLE_MODE_OPTIONS.map(item => [item.mode, item.group]), [
-		["all", "views"], ["things", "views"],
+		["all", "views"], ["things", "views"], ["favorites", "views"],
 		["no-tag", "filters"], ["with-link", "filters"], ["with-image", "filters"], ["referenced", "filters"],
 		["anniversary", "revisit"], ["review", "revisit"], ["random", "revisit"], ["shuffleDay", "revisit"],
 	]);

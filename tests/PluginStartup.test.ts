@@ -4,6 +4,10 @@ import "fake-indexeddb/auto";
 import type { App, PluginManifest } from "obsidian";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import type { CatalogQueryPage } from "../src/types/catalog";
+import type { FavoriteService } from "../src/services/FavoriteService";
+import type { BeaconService } from "../src/services/BeaconService";
+import type { MemoCommandService } from "../src/services/MemoCommandService";
+import { DEFAULT_DAILY_HEADING } from "../src/constants";
 
 let Plugin: typeof import("../src/main").default;
 let Settings: typeof import("../src/services/SettingsService").SettingsService;
@@ -38,6 +42,198 @@ function deferred() {
 // 只推进一个事件循环边界，不依赖任意毫秒延迟。
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
+test("生产启动与外部配置入口加载灯标，损坏引用和读取失败只降级灯标", async t => {
+	const h = harness(t);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	const beacon = (h.plugin as unknown as { beaconService: import("../src/services/BeaconService").BeaconService }).beaconService;
+	assert.equal(beacon.getSnapshot().state, "unset");
+	const saved = h.saved() as Record<string, unknown>;
+	const withBeacon = { ...saved, beacon: { invalid: true }, unknownField: "preserve" };
+	await h.plugin.saveData(withBeacon);
+	await h.plugin.onExternalSettingsChange();
+	assert.equal(beacon.getSnapshot().state, "unavailable");
+	assert.deepEqual((h.saved() as Record<string, unknown>).beacon, withBeacon.beacon);
+	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
+	const read = h.plugin.loadData;
+	const { Notice } = await import("obsidian");
+	const notices = (Notice as unknown as { messages: string[] }).messages;
+	const noticeCount = notices.length;
+	h.plugin.loadData = async () => { throw new Error("unavailable"); };
+	await h.plugin.onExternalSettingsChange();
+	assert.equal(beacon.getSnapshot().reason, "unreadable");
+	assert.equal(notices.length, noticeCount);
+	await assert.rejects(beacon.remove(beacon.getSnapshot().selection));
+	assert.deepEqual((h.saved() as Record<string, unknown>).beacon, withBeacon.beacon);
+	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
+	h.plugin.loadData = read;
+	await h.plugin.onExternalSettingsChange();
+	await beacon.remove(beacon.getSnapshot().selection);
+	assert.equal(beacon.getSnapshot().state, "unset");
+	assert.equal((h.saved() as Record<string, unknown>).unknownField, "preserve");
+	h.plugin.unload();
+});
+
+test("等待灯标读取不阻断视图注册，卸载后的读取结果不继续发布", async t => {
+	const h = harness(t), entered = deferred(), release = deferred();
+	let reads = 0;
+	h.plugin.loadData = async () => {
+		if (++reads === 2) { entered.resolve(); await release.promise; }
+		return h.saved();
+	};
+	t.after(() => release.resolve());
+	const loading = h.plugin.onload(); h.release(); await entered.promise;
+	h.plugin.unload(); release.resolve(); await loading;
+	assert.equal(h.calls.includes("view"), true);
+	assert.equal(h.getPrimary().getLifecycle().writable, false);
+});
+
+for (const mark of ["favorite", "beacon"] as const) test(`${mark} 正文写入遵守维护屏障，维护等待已开始的操作`, async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	t.after(() => h.monthly.resolve());
+	const { InMemoryVault } = await import("./helpers/InMemoryVault");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Daily/2026-10-13.md", content = "- 09:00 memo\n";
+	const vault = new InMemoryVault({ [path]: content });
+	Object.assign(h.plugin.app.vault, vault.app.vault);
+	Object.assign(h.plugin.app.workspace, { layoutReady: true, getActiveViewOfType: () => null });
+	const runtime = h.plugin as unknown as {
+		favoriteService: FavoriteService; beaconService: BeaconService;
+		memoCommandService: MemoCommandService; catalogIndexCoordinator: InstanceType<typeof Coordinator>;
+	};
+	t.mock.method(runtime.catalogIndexCoordinator, "replaceCommittedFile", async () => undefined);
+	await runtime.beaconService.reload();
+	await runtime.favoriteService.retry();
+	const parsed = await new DiaryMemoParser().parse({ sourcePath: path, logicalDate: "2026-10-13", bytes: Buffer.from(content) });
+	const markMemo = () => mark === "favorite" ? runtime.favoriteService.star(parsed.observations[0]!)
+		: runtime.beaconService.set(parsed.observations[0]!);
+	const pause = (action: () => Promise<void>) => runtime.memoCommandService.runWithMutationsPaused(action);
+	await pause(async () => {
+		await assert.rejects(markMemo(), /being rebuilt/u);
+		assert.equal(vault.read(path), content);
+	});
+
+	const entered = deferred(), release = deferred();
+	t.after(() => release.resolve());
+	const process = h.plugin.app.vault.process.bind(h.plugin.app.vault);
+	h.plugin.app.vault.process = async (file, update) => {
+		if (file.path === path) { entered.resolve(); await release.promise; }
+		return process(file, update);
+	};
+	const marking = markMemo();
+	await entered.promise;
+	let maintenanceStarted = false;
+	const maintenance = pause(async () => { maintenanceStarted = true; });
+	await turn();
+	assert.equal(maintenanceStarted, false);
+	release.resolve();
+	await Promise.all([marking, maintenance]);
+	assert.equal(maintenanceStarted, true);
+	assert.match(vault.read(path)!, / \^[a-z0-9-]+\n$/iu);
+});
+
+for (const degraded of [false, true]) test(`首次生成灯标锚点后文件通知晚到，精确落盘、${degraded ? "索引故障仍展示" : "Catalog 接管"}与幂等保存`, async t => {
+	const h = harness(t, "ready", true);
+	const loading = h.plugin.onload(); h.release(); await loading;
+	t.after(() => h.monthly.resolve());
+	const { TFile } = await import("obsidian"), { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { parseBeaconReference } = await import("../src/utils/pluginData");
+	const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md", extension: "md", stat: { mtime: 1, size: 0 } });
+	let content = "- 09:00 before\n", indexUnavailable = false;
+	let lateFileNotice = false, fileNotices = 0;
+	let beforeBinaryRead: (() => Promise<void>) | undefined;
+	const parser = new DiaryMemoParser();
+	const source = async () => ({ path: file.path, logicalDate: "2026-10-13", content,
+		...await parser.parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(content) }) });
+	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
+	Object.assign(h.plugin.app.vault, { getAbstractFileByPath: (path: string) => path === file.path ? file : null,
+		read: async () => content, readBinary: async () => {
+			await beforeBinaryRead?.();
+			if (lateFileNotice) {
+				lateFileNotice = false;
+				file.stat = { ctime: 1, mtime: file.stat.mtime + 1, size: Buffer.byteLength(content) };
+				fileNotices++;
+			}
+			return Buffer.from(content);
+		},
+		process: async (_file: unknown, update: (text: string) => string) => {
+			content = update(content); indexUnavailable = degraded; lateFileNotice = fileNotices === 0;
+		} });
+	const runtime = h.plugin as unknown as {
+		beaconService: import("../src/services/BeaconService").BeaconService;
+		catalogIndexCoordinator: InstanceType<typeof Coordinator>;
+		memoCatalogService: import("../src/services/MemoCatalogService").MemoCatalogService;
+		catalogReadService: import("../src/services/CatalogReadService").CatalogReadService;
+		memoCommandService: import("../src/services/MemoCommandService").MemoCommandService;
+	};
+	let stamp = 1, writes = 0;
+	const save = h.plugin.saveData.bind(h.plugin);
+	t.mock.method(h.plugin, "saveData", async (data: unknown) => { writes++; await save(data); });
+	const publish = async (input: import("../src/services/MarkdownMutationService").MarkdownCatalogCommitInput) => {
+		await runtime.memoCatalogService.replaceFile({ inventory: { sourcePath: file.path, logicalDate: input.logicalDate, mtime: stamp++, size: content.length },
+			...input.parsed, parserVersion: 19, settingsFingerprint: "test", auditedAt: stamp });
+	};
+	t.mock.method(runtime.catalogIndexCoordinator, "replaceCommittedFile", async (input: import("../src/services/MarkdownMutationService").MarkdownCatalogCommitInput) => {
+		if (indexUnavailable) throw new Error("Catalog publication failed"); await publish(input);
+	});
+	const store = runtime.memoCatalogService.getStore(), getCoverage = store.getCoverage.bind(store);
+	t.mock.method(store, "getCoverage", async () => { if (indexUnavailable) throw new Error("Catalog unavailable"); return getCoverage(); });
+	const before = await source();
+	await publish({ file, logicalDate: before.logicalDate, content, parsed: { ...before, observations: [...before.observations] } });
+	assert.equal(h.getCurrent().getStatus(), "missing");
+	await runtime.beaconService.set(before.observations[0]!);
+	assert.equal(fileNotices, 1);
+	assert.equal(runtime.beaconService.getSnapshot().state, "ready", "首次设置无需等待 Monthly 配置核验");
+	h.monthly.resolve(); await h.getCurrent().initialize();
+	const savingBefore = writes;
+	const item = runtime.beaconService.getSnapshot().memo!.catalog!;
+	const operation = runtime.memoCommandService.startEdit(item, "after");
+	await Promise.all([operation.dailyCommitted, operation.settled]);
+	await runtime.beaconService.refresh();
+	const binding = parseBeaconReference((h.saved() as { beacon: unknown }).beacon)!;
+	assert.equal(content, `- 09:00 after ^${binding.blockId}\n`);
+	assert.equal(runtime.beaconService.getSnapshot().memo?.contentSnapshot, "after");
+	const after = await source(), saved = h.saved() as { beacon: unknown };
+	assert.equal(parseBeaconReference(saved.beacon)!.blockId, binding.blockId);
+	assert.equal(runtime.beaconService.getSnapshot().memo!.catalog!.observationHandle.sourceRevision, after.sourceRevision);
+	assert.equal(writes - savingBefore, 0);
+	assert.equal(await runtime.catalogReadService.getFileSourceRevision(file.path), degraded ? before.sourceRevision : after.sourceRevision);
+	await runtime.beaconService.refresh(); assert.equal(writes - savingBefore, 0);
+	if (degraded) { h.plugin.unload(); return; }
+
+	const originalLoad = h.plugin.loadData.bind(h.plugin);
+	let failConfigRead = false;
+	t.mock.method(h.plugin, "loadData", async () => {
+		if (failConfigRead) throw new Error("Plugin data read failed");
+		return originalLoad();
+	});
+	const entered = deferred(), release = deferred();
+	beforeBinaryRead = async () => { entered.resolve(); await release.promise; };
+	content = content.replace("09:00", "10:00");
+	runtime.beaconService.sourceChanged(file.path);
+	const slow = runtime.beaconService.refresh();
+	await entered.promise;
+	failConfigRead = true;
+	await h.plugin.onExternalSettingsChange();
+	release.resolve(); await slow;
+	assert.equal(runtime.beaconService.getSnapshot().reason, "unreadable");
+	assert.equal(parseBeaconReference((h.saved() as { beacon: unknown }).beacon)?.memoTime, "09:00");
+
+	failConfigRead = false; beforeBinaryRead = undefined;
+	await h.plugin.onExternalSettingsChange();
+	assert.equal(runtime.beaconService.getSnapshot().state, "ready");
+	assert.equal(parseBeaconReference((h.saved() as { beacon: unknown }).beacon)?.memoTime, "10:00");
+	const unloading = deferred(), late = deferred();
+	beforeBinaryRead = async () => { unloading.resolve(); await late.promise; };
+	runtime.beaconService.sourceChanged(file.path);
+	const duringUnload = runtime.beaconService.refresh();
+	await unloading.promise;
+	const lastSnapshot = runtime.beaconService.getSnapshot();
+	h.plugin.unload();
+	late.resolve(); await duringUnload;
+	assert.equal(runtime.beaconService.getSnapshot(), lastSnapshot);
+});
+
 for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {
 	test(`生产装配的 Monthly 事件在 ${mode} 时保留待协调状态，卸载后不再发布`, async t => {
 		const h = harness(t, mode === "disabled" ? "disabled" : "ready", true);
@@ -67,46 +263,57 @@ for (const mode of ["not-ready", "disabled", "settings-failed"] as const) {
 	});
 }
 
-test("启动读取旧迁移 completion 挂起时，生产命令仍可提交 Daily 编辑", async t => {
-	const h = harness(t, "ready", true);
-	const loading = h.plugin.onload();
-	h.release();
-	await loading;
-	h.layout();
-	h.monthly.resolve();
-	await h.getBootstrap().initialize();
+const savedSettings = { monthlyMemoFolder: "Archive", dailyHeading: "## Capture" };
+const completedMarker = { completed: true, legacySystemRoot: "Archive/_knomo-system", sourceRevision: "a".repeat(64) };
+for (const [state, marker, settings] of [
+	["缺失", undefined, savedSettings],
+	["已完成", completedMarker, savedSettings],
+	["损坏", { completed: false }, savedSettings],
+	["是唯一字段", completedMarker, undefined],
+] as const) {
+	test(`旧迁移标记${state}时，启动和设置重试不处理旧目录`, async t => {
+		const h = harness(t, "ready", true);
+		const { InMemoryVault } = await import("./helpers/InMemoryVault");
+		const original = { "Archive/_knomo-system/indexes/memo-index-2026-08.json": "{}" };
+		const vault = new InMemoryVault(original);
+		const oldFolderAccesses: string[] = [];
+		const lookup = vault.app.vault.getAbstractFileByPath;
+		vault.app.vault.getAbstractFileByPath = path => {
+			if (path.startsWith("Archive/_knomo-system")) oldFolderAccesses.push(path);
+			return lookup(path);
+		};
+		Object.assign(h.plugin.app.vault, vault.app.vault);
+		let retryRuntimeState!: () => Promise<void>;
+		Object.assign(h.plugin, {
+			addSettingTab: (tab: { retryRuntimeState(): Promise<void> }) => {
+				retryRuntimeState = () => tab.retryRuntimeState();
+			},
+		});
+		await h.plugin.saveData({
+			...(settings === undefined ? {} : { settings }),
+			...(marker === undefined ? {} : { legacyMigration: marker }),
+		});
 
-	const { TFile } = await import("obsidian");
-	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const file = Object.assign(new TFile(), { path: "Daily/2026-10-13.md" });
-	let content = "- 09:00 before\n";
-	const parsed = await new DiaryMemoParser().parse({ sourcePath: file.path, logicalDate: "2026-10-13", bytes: Buffer.from(content) });
-	Object.assign(h.plugin.app.workspace, { getActiveViewOfType: () => null });
-	Object.assign(h.plugin.app.vault, {
-		getAbstractFileByPath: (path: string) => path === file.path ? file : null,
-		read: async () => content,
-		process: async (_file: unknown, update: (value: string) => string) => { content = update(content); return content; },
+		const loading = h.plugin.onload();
+		h.release();
+		await loading;
+		h.layout();
+		h.monthly.resolve();
+		await h.getBootstrap().initialize();
+		h.background.resolve();
+		await turn();
+		await retryRuntimeState();
+
+		assert.equal((await h.queries[0])!.lifecycle.state, "ready");
+		assert.equal(h.getBootstrap().getSnapshot().status, "ready");
+		assert.equal(h.plugin.settingsService.getSettings().dailyHeading, settings?.dailyHeading ?? DEFAULT_DAILY_HEADING);
+		const persisted = h.saved() as { settings?: { timeBuoyEnabled?: boolean }; legacyMigration?: unknown };
+		assert.equal(persisted.settings?.timeBuoyEnabled, true);
+		assert.deepEqual(persisted.legacyMigration, marker);
+		assert.deepEqual(oldFolderAccesses, []);
+		assert.deepEqual(vault.snapshot(), original);
 	});
-	Object.assign(h.plugin, { updateCommittedCatalogPartition: async () => {} });
-	const entered = deferred(), release = deferred();
-	t.after(() => release.resolve());
-	h.plugin.loadData = async () => { entered.resolve(); await release.promise; return h.saved(); };
-	h.background.resolve();
-	await entered.promise;
-	const { memoCommandService, legacyTrashMigrationService } = h.plugin as unknown as {
-		memoCommandService: import("../src/services/MemoCommandService").MemoCommandService;
-		legacyTrashMigrationService: import("../src/services/LegacyTrashMigrationService").LegacyTrashMigrationService;
-	};
-	const editing = memoCommandService.startEdit({ observationHandle: parsed.observations[0]! } as unknown as import("../src/types/catalogView").CatalogMemoItem, "after");
-	const settled = Promise.all([editing.dailyCommitted, editing.settled]);
-	try {
-		await settled;
-		assert.equal(content, "- 09:00 after\n");
-	} finally {
-		release.resolve();
-		await legacyTrashMigrationService.waitForIdle();
-	}
-});
+}
 
 for (const stage of ["read", "process", "committed"] as const) {
 	test(`普通 Daily 写入在 ${stage} 阶段卸载插件，取消未提交写入并保留已提交正文`, async t => {
@@ -159,22 +366,20 @@ for (const stage of ["read", "process", "committed"] as const) {
 	});
 }
 
-test("生产手动刷新仅刷新 Catalog 和视图，不运行旧源迁移", async () => {
-	let refreshed = 0, views = 0, imported = 0;
+test("生产手动刷新合并重复请求并刷新 Catalog 和视图", async () => {
+	let refreshed = 0, views = 0;
 	const result = { scannedFiles: 1, created: 0, updated: 0, deleted: 0, skipped: 1, failed: 0, errors: [] };
 	const plugin = Object.create(Plugin.prototype) as { runManualRefresh(): Promise<unknown> };
 	Object.assign(plugin, {
 		manualRefreshPromise: null,
 		memoCommandService: { refreshLocalCatalog: async () => { refreshed++; return result; } },
 		refreshOpenViews: async () => { views++; },
-		legacyTrashMigrationService: { run: async () => { imported++; } },
 	});
 	const first = plugin.runManualRefresh();
 	assert.equal(plugin.runManualRefresh(), first);
 	assert.equal(await first, result);
 	assert.equal(refreshed, 1);
 	assert.equal(views, 1);
-	assert.equal(imported, 0);
 });
 
 function harness(t: TestContext, dailyState: "ready" | "disabled" | "unavailable" = "ready", p2 = false) {

@@ -1,111 +1,16 @@
 import assert from "node:assert/strict";
-import test, { before, after } from "node:test";
-import { JSDOM } from "jsdom";
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import test from "node:test";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
-import { DiaryMemoParser } from "../src/services/DiaryMemoParser";
-import { MemoCatalogService } from "../src/services/MemoCatalogService";
-import { InMemoryMemoCatalogStore } from "../src/services/MemoCatalogStore";
 import { observationHandleKey } from "../src/services/DailyMemoPresentationChange";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { MemoRelationNode } from "../src/types/memoRelations";
-import type { MemoRelationOptions } from "../src/services/MemoRelationService";
 import type { MemoRelationsPageOptions } from "../src/ui/MemoRelationsPage";
+import { fixture, settle, setupMemoRelationsTestWindow } from "./helpers/memoRelationsUiFixture";
 
-const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout: globalThis.setTimeout } }));
-after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
+setupMemoRelationsTestWindow();
 const relationScale = process.env.KNOMO_TEST_SCALE === "stress" ? 10000 : 150;
 
-async function fixture(withPreviews = false, withProductionCache = false, relations?: MemoRelationOptions,
-	renderCard?: MemoRelationsPageOptions["renderCard"]) {
-	await ensureObsidianStub();
-	const dom = new JSDOM("<!doctype html><body><main></main></body>", { pretendToBeVisual: true });
-	const win = dom.window;
-	const focusState = { mobile: false };
-	win.focus = () => {};
-	Object.defineProperties(win.HTMLElement.prototype, { win: { get() { return win; } }, doc: { get() { return win.document; } } });
-	Object.assign(win.HTMLElement.prototype, {
-		createEl(this: HTMLElement, tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> } = {}) {
-			const element = this.ownerDocument.createElement(tag);
-			if (options.cls) element.className = options.cls;
-			if (options.text) element.textContent = options.text;
-			for (const [key, value] of Object.entries(options.attr ?? {})) element.setAttribute(key, value);
-			return this.appendChild(element);
-		},
-		createDiv(this: HTMLElement, options?: object) { return this.createEl("div", options); },
-		createSpan(this: HTMLElement, options?: object) { return this.createEl("span", options); },
-		find(this: HTMLElement, selector: string) { return this.querySelector(selector); },
-		findAll(this: HTMLElement, selector: string) { return Array.from(this.querySelectorAll(selector)); },
-		getAttr(this: HTMLElement, name: string) { return this.getAttribute(name); },
-		setAttr(this: HTMLElement, name: string, value: string) { this.setAttribute(name, value); },
-		addClass(this: HTMLElement, ...classes: string[]) { this.classList.add(...classes); },
-		empty(this: HTMLElement) { this.replaceChildren(); },
-		setCssProps(this: HTMLElement, values: Record<string, string>) { for (const [key, value] of Object.entries(values)) this.style.setProperty(key, value); },
-	});
-	if (withPreviews) {
-		win.HTMLElement.prototype.getClientRects = () => [new win.DOMRect(0, 0, 360, 260)] as unknown as DOMRectList;
-		Object.defineProperty(win.HTMLElement.prototype, "clientHeight", { configurable: true, get() { return 600; } });
-	}
-	const store = new InMemoryMemoCatalogStore(50000), catalog = new MemoCatalogService(store);
-	await catalog.open();
-	const parser = new DiaryMemoParser(async bytes => createHash("sha256").update(bytes).digest("hex"));
-	const seed = async (path: string, content: string) => {
-		const parsed = await parser.parse({ sourcePath: path, logicalDate: "2026-10-25", bytes: Buffer.from(content) });
-		await catalog.replaceFile({ inventory: { sourcePath: path, logicalDate: "2026-10-25", mtime: 1, size: content.length },
-			sourceRevision: parsed.sourceRevision, observations: parsed.observations, blockAnchors: parsed.blockAnchors,
-			parserVersion: 14, settingsFingerprint: "test", auditedAt: 1 });
-		await store.setCoverage({ kind: "complete", pendingFileCount: 0, coveredFromDate: null, coveredFileCount: 1, totalFileCount: 1 });
-		return parsed.observations;
-	};
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const { MemoRelationsPage } = await import("../src/ui/MemoRelationsPage");
-	const { MemoRelationCards } = await import("../src/ui/MemoRelationCards");
-	const { toCatalogMemoView } = await import("../src/types/memoView");
-	const { MemoCardPreviewCache } = await import("../src/ui/MemoCardPreviewCache");
-	const { parseMemoCardPreviewLite } = await import("../src/ui/MemoCardPreview");
-	const cache = new MemoCardPreviewCache((_memo, text) => parseMemoCardPreviewLite(text));
-	let cacheView: { getMemoCardPreview: (memo: MemoViewItem) => unknown; releaseRelationCard: (row: HTMLElement) => void; memos: MemoViewItem[] } | null = null;
-	if (withProductionCache) {
-		const { KnomoView } = await import("../src/ui/KnomoView");
-		cacheView = Object.assign(Object.create(KnomoView.prototype), { memos: [], memoCardPreviewCache: cache,
-			memoMarkdownRenderer: { releaseCard: () => {} }, cardImageLoadQueue: { forget: () => {} },
-			randomReunionController: { getSnapshot: () => ({ memos: [] }) }, trashMemoController: { getSnapshot: () => ({ trashMemos: [] }) } });
-	}
-	const read = new CatalogReadService({ catalog, relations });
-	const host = win.document.querySelector<HTMLElement>("main")!;
-	const actions: string[] = [], errors: string[] = [];
-	let bodyReads = 0;
-	const original = catalog.readObservationSnapshot.bind(catalog);
-	catalog.readObservationSnapshot = async (keys, signal) => { bodyReads += keys.length; return original(keys, signal); };
-	const page = new MemoRelationsPage({ read, getHost: () => host, onChanged: open => { actions.push(String(open)); }, onError: error => errors.push(error),
-		isMobile: () => focusState.mobile,
-		renderCard: renderCard ?? ((row, memo) => {
-			cacheView?.getMemoCardPreview(memo);
-			const card = row.createEl("article", { cls: "knomo-card", attr: { "data-memo-id": memo.id } });
-			card.createEl("button", { cls: "knomo-card-menu", text: "menu" });
-			card.createDiv({ cls: "knomo-card-content", text: memo.contentSnapshot });
-			cards?.observe(card, memo);
-			return card;
-		}), releaseCard: row => cacheView?.releaseRelationCard(row) });
-	const { KnomoView } = await import("../src/ui/KnomoView");
-	const previewView = Object.assign(Object.create(KnomoView.prototype), { catalogReadService: read,
-		containerEl: host, rootEl: host, relationsPage: page, closeCardMenu: () => {},
-		cardFlowEl: withPreviews ? host.createDiv({ cls: "knomo-card-flow" }) : null, trashViewClosed: false,
-		openMemoRelations: (handle: Parameters<typeof page.open>[0], trigger: HTMLElement, focusVisible: boolean) => page.open(handle, trigger, focusVisible) });
-	// 使用真实视图接线，覆盖原先固定写入主卡片流顶部的状态回调。
-	const cards: InstanceType<typeof MemoRelationCards> | null = withPreviews ? previewView.ensureRelationCards() : null;
-	if (cacheView) Object.assign(cacheView, { relationsPage: page, relationCards: cards });
-	return { dom, win, host, page, read, catalog, seed, errors, actions, cards, previewView, focusState, bodyReads: () => bodyReads,
-		cache, cacheView, cacheSize: () => (cache as unknown as { entries: Map<string, unknown> }).entries.size,
-		memo: async (handle: Parameters<typeof read.readMemoItems>[0][number]) => toCatalogMemoView((await read.readMemoItems([handle]))[0]),
-		close: () => { cards?.dispose(); page.dispose(); read.relations.dispose(); dom.window.close(); } };
-}
-
-const settle = () => new Promise(resolve => setTimeout(resolve, 80));
-
-test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并保留主体", async () => {
+test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并保留主体", { timeout: 5000 }, async () => {
 	const h = await fixture(true);
 	try {
 		const [target] = await h.seed("A.md", "## Memos\n\n- 09:00 subject ^target\n");
@@ -125,9 +30,18 @@ test("隐藏的关联页与摘要合并更新，恢复后读取最新关系并�
 		h.read.relations.invalidateResolution(["B.md"]);
 		await settle();
 		assert.equal(queries, 0);
+		let rendered!: () => void;
+		const ready = new Promise<void>(resolve => { rendered = resolve; });
+		const options = (h.page as unknown as { options: MemoRelationsPageOptions }).options;
+		const render = options.renderCard;
+		options.renderCard = (...args) => {
+			const card = render(...args);
+			if (args[1].contentSnapshot.includes("first")) rendered();
+			return card;
+		};
 		h.page.setPresentationPaused(false);
 		h.cards!.setPresentationPaused(false);
-		await settle();
+		await ready;
 		assert.ok(queries > 0);
 		assert.match(h.page.el!.querySelector(".knomo-relations-list")!.textContent!, /first/);
 		assert.equal(h.page.el!.querySelector(".knomo-relations-subject .knomo-card"), originalCard);
@@ -275,7 +189,7 @@ test("卡片菜单随被引用信息加载、增删更新，只有引用来源�
 		assert.equal(target.querySelector('[data-memo-action="relations"]'), null);
 		await settle(); await settle();
 		assert.deepEqual(Array.from(target.querySelectorAll<HTMLElement>("[data-memo-action]")).map(item => item.dataset.memoAction),
-			["reference", "edit", "share-image", "copy-text", "open-daily", "copy-link", "relations", "delete"]);
+			["reference", "edit", "share-image", "copy-text", "set-beacon", "open-daily", "copy-link", "relations", "delete"]);
 		assert.equal(source.querySelector('[data-memo-action="relations"]'), null);
 		await h.seed("C.md", "- 12:00 C [[D#^b]]\n"); await settle(); await settle();
 		assert.ok(source.querySelector('[data-memo-action="relations"]'));
@@ -346,135 +260,6 @@ test("移动端关联详情使用顶部返回，关闭后恢复统计页原生�
 		assert.equal(returns, 1);
 		assert.deepEqual(h.errors, []);
 	} finally { h.close(); }
-});
-
-test("关联详情在中英文、主题强调色及窄屏大字体下保持标题和返回按钮可见", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
-	const h = await fixture();
-	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
-	const browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge" });
-	try {
-		const { translate } = await import("../src/i18n");
-		const [a] = await h.seed("A.md", "- 10:00 A ^a\n");
-		await h.page.open(a);
-		h.page.el!.classList.add("has-host-header");
-		const subjectCard = h.page.el!.querySelector<HTMLElement>(".knomo-relations-subject .knomo-card")!;
-		const cardHead = subjectCard.createDiv({ cls: "knomo-card-head" });
-		cardHead.createSpan({ cls: "knomo-card-time", text: "10:00" });
-		cardHead.appendChild(subjectCard.querySelector(".knomo-card-menu")!);
-		subjectCard.prepend(cardHead);
-		const css = readFileSync("styles.css", "utf8");
-		const page = await browser.newPage();
-		for (const locale of ["zh-CN", "en"] as const) for (const theme of ["theme-light", "theme-dark", "theme-custom"]) {
-			for (const width of [320, 390, 768, 1024]) for (const font of [14, 22]) {
-				h.page.el!.querySelector(".knomo-relations-section-header h3")!.textContent = translate(locale, "relations.current");
-				h.page.el!.querySelector(".knomo-relations-back")!.setAttribute("aria-label", translate(locale, "relations.backList"));
-				h.page.el!.querySelector("h3[tabindex]")!.textContent = translate(locale, "relations.referrers", { count: 10000 });
-				await page.setViewportSize({ width, height: 800 });
-				await page.setContent(`<style>
-					* { box-sizing:border-box; }
-					body { margin:0; font:${font}px/1.5 Arial; --font-ui-small:${font}px; --font-ui-medium:${font}px;
-						--size-4-2:8px; --h3-line-height:1.3;
-						--text-normal:#222; --text-muted:#666; --text-accent:#6340c2; --interactive-accent:#6340c2;
-						--background-primary:#fff; --background-secondary:#eee; --background-modifier-hover:rgba(127,127,127,.14); }
-					.theme-dark { --text-normal:#eee; --text-muted:#bbb; --text-accent:#b19afa; --background-primary:#202020; }
-					.theme-custom { font-family:Georgia; --h3-line-height:1.5; --text-accent:#00756b; --background-primary:#f8f2e7; }
-					h3 { line-height:var(--h3-line-height); }
-					button { font:inherit; }
-					${css}
-				</style><body class="${theme}"><main class="knomo-plugin has-memo-relations is-record-stats is-sidebar-collapsed ${width < 768 ? "is-layout-mobile" : width < 1024 ? "is-layout-desktop-narrow" : "is-layout-desktop-wide"}"
-					style="display:block;width:100%;height:100vh;--knomo-text-ui-base:${font}px">
-					<div class="knomo-topbar"><button class="knomo-record-stats-back">Back</button></div>
-					<div class="knomo-compact-header"><button class="knomo-record-stats-back">Back</button></div>
-					${h.page.el!.outerHTML}<span class="fixture-accent" style="color:var(--text-accent)"></span>
-					<div class="knomo-recent-flow-decoration knomo-recent-flow-date"><span>Today</span></div>
-				</main></body>`);
-				await page.mouse.move(0, 0);
-				const actual = await page.evaluate(() => {
-					const relationPage = document.querySelector<HTMLElement>(".knomo-relations-page")!;
-					const header = relationPage.querySelector<HTMLElement>(".knomo-relations-header")!;
-					const row = relationPage.querySelector<HTMLElement>(".knomo-relations-section-header")!;
-					const title = row.querySelector("h3")!;
-					const back = row.querySelector<HTMLButtonElement>("button")!;
-					const listTitle = relationPage.querySelector<HTMLElement>("h3[tabindex]")!;
-					const cardMenu = relationPage.querySelector<HTMLElement>(".knomo-relations-subject .knomo-card-menu")!;
-					const textLeft = (el: HTMLElement) => {
-						const range = document.createRange(); range.selectNodeContents(el);
-						return range.getBoundingClientRect().left;
-					};
-					const reference = document.querySelector<HTMLButtonElement>(".knomo-topbar .knomo-record-stats-back")!;
-					const appearance = (el: HTMLElement) => {
-						const style = getComputedStyle(el);
-						return [style.padding, style.borderWidth, style.borderRadius, style.color, style.backgroundColor, style.boxShadow, style.cursor];
-					};
-					const resting = appearance(back), referenceResting = appearance(reference);
-					const rect = back.getBoundingClientRect();
-					const rowRect = row.getBoundingClientRect(), titleRect = title.getBoundingClientRect();
-					const menuRect = cardMenu.getBoundingClientRect(), listStyle = getComputedStyle(listTitle);
-					const subjectCard = cardMenu.closest<HTMLElement>(".knomo-card")!, subjectRect = subjectCard.getBoundingClientRect();
-					const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.bottom - 1);
-					const cardHit = document.elementFromPoint(rect.x + rect.width / 2, subjectRect.top + 1);
-					back.focus();
-					const focused = appearance(back);
-					// 移动布局会隐藏桌面标题栏，临时移出后才能比较其真实聚焦样式。
-					const referenceParent = reference.parentElement!;
-					relationPage.parentElement!.appendChild(reference);
-					reference.style.display = "inline-flex"; reference.focus();
-					const referenceFocused = appearance(reference);
-					reference.style.removeProperty("display"); referenceParent.appendChild(reference); back.focus();
-					const focusedSurface = getComputedStyle(back, "::before");
-					return { headerHeight: header.getBoundingClientRect().height, overflow: relationPage.scrollWidth > relationPage.clientWidth,
-						rowOverflow: row.scrollWidth > row.clientWidth, buttonWidth: rect.width, buttonHeight: rect.height,
-						buttonRight: rect.right, titleRight: title.getBoundingClientRect().right, buttonLeft: rect.left,
-						currentSpacing: [titleRect.top - rowRect.top, rowRect.bottom - titleRect.bottom],
-						listSpacing: [listStyle.paddingTop, listStyle.paddingBottom, listStyle.marginTop, listStyle.marginBottom],
-						subjectGap: listTitle.getBoundingClientRect().top - subjectRect.bottom,
-						leftOffsets: [textLeft(title), textLeft(listTitle), textLeft(document.querySelector<HTMLElement>(".knomo-recent-flow-date")!)],
-						buttonCenterOffset: rect.y + rect.height / 2 - titleRect.y - titleRect.height / 2,
-						buttonMenuCenterOffset: rect.x + rect.width / 2 - menuRect.x - menuRect.width / 2,
-						buttonWithinHeader: rect.top >= rowRect.top && rect.bottom <= rowRect.bottom,
-						buttonHit: hit?.closest(".knomo-relations-back") === back, cardHit: cardHit?.closest(".knomo-card") === subjectCard,
-						focusSurface: [focusedSurface.width, focusedSurface.height, focusedSurface.backgroundColor, focusedSurface.pointerEvents],
-						colors: [...relationPage.querySelectorAll("h3")].map(el => getComputedStyle(el).color),
-						accent: getComputedStyle(document.querySelector(".fixture-accent")!).color,
-						resting, referenceResting, focusedAppearance: focused, referenceFocused,
-						outline: getComputedStyle(back).outlineStyle, outlineOffset: getComputedStyle(back).outlineOffset, focused: document.activeElement === back,
-						hostBacksHidden: [...document.querySelectorAll(".knomo-record-stats-back")].every(el => getComputedStyle(el).display === "none") };
-				});
-				const context = JSON.stringify({ locale, theme, width, font, actual });
-				assert.equal(actual.headerHeight, 0, context);
-				assert.equal(actual.overflow || actual.rowOverflow, false, context);
-				assert.ok(Math.abs(actual.currentSpacing[0] - (width < 768 ? 8 : 10)) < 0.1, context);
-				assert.ok(Math.abs(actual.currentSpacing[1] - 8) < 0.1, context);
-				assert.deepEqual(actual.listSpacing, ["10px", "8px", "0px", "0px"], context);
-				assert.equal(actual.subjectGap, 8, context);
-				assert.ok(actual.leftOffsets.every((left: number) => Math.abs(left - actual.leftOffsets[2]) < 0.1), context);
-				assert.deepEqual(actual.colors, [actual.accent, actual.accent], context);
-				if (width < 768) {
-					assert.equal(actual.buttonWidth, 0, context);
-					assert.equal(actual.buttonHeight, 0, context);
-					continue;
-				}
-				const buttonSize = 32;
-				assert.equal(actual.buttonWidth, buttonSize, context);
-				assert.equal(actual.buttonHeight, buttonSize, context);
-				assert.deepEqual(actual.resting, actual.referenceResting, context);
-				assert.equal(actual.focusedAppearance[3], actual.referenceFocused[3], context);
-				assert.equal(actual.focusedAppearance[4], "rgba(0, 0, 0, 0)", context);
-				assert.deepEqual(actual.focusSurface, ["28px", "28px", actual.referenceFocused[4], "none"], context);
-				assert.ok(actual.buttonRight <= width && actual.titleRight <= actual.buttonLeft, context);
-				assert.ok(Math.abs(actual.buttonCenterOffset) < 0.1 && Math.abs(actual.buttonMenuCenterOffset) < 0.1, context);
-				assert.equal(actual.buttonWithinHeader && actual.buttonHit && actual.cardHit, true, context);
-				assert.equal(actual.outlineOffset, "-4px", context);
-				assert.equal(actual.focused && actual.outline === "solid" && actual.hostBacksHidden, true, context);
-				await page.locator(".knomo-relations-back").hover();
-				const hovered = await page.locator(".knomo-relations-back").evaluate((button: HTMLElement) => {
-					const surface = getComputedStyle(button, "::before");
-					return [getComputedStyle(button).backgroundColor, surface.width, surface.height, surface.backgroundColor];
-				});
-				assert.deepEqual(hovered, ["rgba(0, 0, 0, 0)", "28px", "28px", actual.referenceFocused[4]], context);
-			}
-		}
-	} finally { await browser.close(); h.close(); }
 });
 
 test("被引用指标局部撤下旧数值与入口，正常更新不播报，持续故障只保留一个原位说明", async () => {
@@ -1180,54 +965,6 @@ test("日记外部连续保存期间被引用摘要保持占位，当前关系�
 	} finally { h.close(); }
 });
 
-test("被引用行刷新在宿主禁用样式下保持相同文字外观", { skip: !process.env.KNOMO_LAYOUT_PLAYWRIGHT }, async () => {
-	const h = await fixture(true);
-	const { chromium } = require(process.env.KNOMO_LAYOUT_PLAYWRIGHT!);
-	const browser = await chromium.launch({ headless: true, channel: process.env.KNOMO_LAYOUT_BROWSER || "msedge" });
-	try {
-		const { createMemoRenderPlaceholders } = await import("../src/ui/MemoRenderPlaceholder");
-		const before = await h.seed("D.md", "- 10:00 target ^a\n- 11:00 被引用的摘要 ref [[#^a]]\n- 12:00 other\n");
-		const memo = await h.memo(before[0]);
-		const card = h.host.createEl("article", { cls: "knomo-card" });
-		h.cards!.observe(card, memo); await settle(); await settle();
-		const initial = card.outerHTML;
-		const seed = createMemoRenderPlaceholders([{ memo, card }]);
-		const after = await h.seed("D.md", "- 10:00 target ^a\n- 11:00 被引用的摘要 ref [[#^a]]\n- 12:00 edited\n");
-		h.cards!.release(card); card.remove();
-		const next = h.host.createEl("article", { cls: "knomo-card" });
-		const current = await h.memo(after[0]); seed(current, next);
-		const pending = next.outerHTML;
-		h.cards!.observe(next, current); await settle(); await settle();
-		const ready = next.outerHTML;
-		const page = await browser.newPage();
-		const css = readFileSync("styles.css", "utf8");
-		for (const theme of ["theme-light", "theme-dark", "theme-custom"]) for (const width of [320, 1024]) {
-			await page.setViewportSize({ width, height: 300 });
-			await page.setContent(`<style>
-				body { margin:0; font:14px/1.5 Arial; --text-faint:#777; --text-muted:#555; --font-normal:400; background:#fff; }
-				.theme-dark { --text-faint:#aaa; --text-muted:#ccc; background:#222; }
-				.theme-custom { --text-faint:#876548; --text-muted:#654321; font-family:Georgia; background:#f8f2e7; }
-				button { font:inherit; } button:disabled { opacity:0.4; }
-				${css}
-			</style><body class="${theme}"><main id="fixture" class="knomo-plugin" style="display:block;width:100%;--knomo-text-meta:14px"></main></body>`);
-			await page.mouse.move(0, 299);
-			const appearances = [], pixels = [];
-			for (const html of [initial, pending, ready]) {
-				await page.evaluate((value: string) => { document.getElementById("fixture")!.innerHTML = value; }, html);
-				appearances.push(await page.locator(".knomo-referrer-preview").evaluate((button: HTMLElement) => {
-					const style = getComputedStyle(button), rect = button.getBoundingClientRect();
-					return [style.opacity, style.color, style.fontFamily, style.fontSize, style.fontWeight, style.lineHeight, rect.width, rect.height];
-				}));
-				pixels.push(await page.locator(".knomo-memo-referrers").screenshot());
-			}
-			const context = JSON.stringify({ theme, width, appearances });
-			assert.deepEqual(appearances[1], appearances[0], context);
-			assert.deepEqual(appearances[2], appearances[0], context);
-			assert.ok(pixels[0].equals(pixels[1]) && pixels[0].equals(pixels[2]), context);
-		}
-	} finally { await browser.close(); h.close(); }
-});
-
 test("引用者文件其它内容保存后相同摘要保留 DOM 与焦点，摘要真实改变仍更新", async () => {
 	const h = await fixture(true);
 	try {
@@ -1478,6 +1215,34 @@ test("确认编辑使用既有提交映射更新主体阅读，不替换已选�
 		assert.equal(h.page.el!.querySelector(".knomo-relations-subject .knomo-card-content")?.textContent, "edited A");
 		assert.equal(selected.catalog!.observationHandle.sourceRevision, before[0].sourceRevision);
 		assert.equal(h.page.findMemo(observationHandleKey(after[0]))!.catalog!.observationHandle.sourceRevision, after[0].sourceRevision);
+	} finally { h.close(); }
+});
+
+test("引用者补锚点后原行与卡片保留到新索引接手，不等待正文重读", async () => {
+	const h = await fixture();
+	try {
+		const before = await h.seed("D.md", "- 10:00 A ^a\n- 11:00 B [[#^a]]\n");
+		await h.page.open(before[0]);
+		await settle();
+		const row = h.page.el!.querySelector<HTMLElement>("[data-relation-row]")!;
+		const card = row.querySelector(".knomo-card")!;
+		assert.ok(card);
+		const { buildDailyMemoPresentationChange } = await import("../src/services/DailyMemoPresentationChange");
+		const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+		const content = "- 10:00 A ^a\n- 11:00 B [[#^a]] ^b\n";
+		const after = await new DiaryMemoParser().parse({ sourcePath: "D.md", logicalDate: "2026-10-25", bytes: Buffer.from(content) });
+		const prepared = { sourcePath: "D.md", logicalDate: "2026-10-25",
+			before: { sourceRevision: before[0].sourceRevision, observations: before }, after };
+		const change = buildDailyMemoPresentationChange(prepared as Parameters<typeof buildDailyMemoPresentationChange>[0], before[1], after.observations[1]);
+		h.page.applyChange({ ...change, updateExistingOnly: true }, after.observations);
+		assert.equal(row.querySelector(".knomo-card"), card);
+		assert.equal(h.page.findMemo(observationHandleKey(before[1])), null);
+		assert.equal(h.page.findMemo(observationHandleKey(after.observations[1]))?.contentSnapshot, "B [[#^a]]");
+		await settle();
+		assert.equal(row.querySelector(".knomo-card"), card, "等待索引时原行仍可读");
+		await h.seed("D.md", content); await settle();
+		assert.equal(h.page.el!.querySelector("[data-relation-row]"), row);
+		assert.equal(row.querySelector(".knomo-card"), card);
 	} finally { h.close(); }
 });
 

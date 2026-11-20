@@ -36,6 +36,7 @@ export interface MarkdownCatalogCommitInput {
 
 export interface MarkdownMutationServiceOptions {
 	onDailyConfirmed?: (presentation: ConfirmedDailyMemoPresentation) => void;
+	canPresentDailyChange?: (change: DailyMemoPresentationChange) => boolean;
 	onCatalogUpdateSettled?: (change: DailyMemoPresentationChange) => void;
 	getWriteHeading: () => string | null;
 	getDailyFileForDate: (logicalDate: string) => Promise<TFile>;
@@ -81,6 +82,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 	private readonly now: () => Date;
 	private readonly random: () => number;
 	private readonly catalogUpdateQueues = new Map<string, Promise<void>>();
+	private readonly anchorWrites = new Map<string, { file: TFile; events: number; listeners: Map<object, (confirmed: boolean) => void> }>();
 
 	constructor(
 		private readonly app: App,
@@ -89,6 +91,19 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 	) {
 		this.now = options.now ?? (() => new Date());
 		this.random = options.random ?? Math.random;
+	}
+
+	isAnchorWritePending(path?: string): boolean {
+		return path === undefined ? this.anchorWrites.size > 0 : this.anchorWrites.has(path);
+	}
+
+	// modify 可以在 Vault.process 返回前发出；先留住展示，失败时交还原刷新入口。
+	deferAnchorModify(file: TFile, owner: object, finish: (confirmed: boolean) => void): boolean {
+		const write = this.anchorWrites.get(file.path);
+		if (!write || write.file !== file || this.app.vault.getAbstractFileByPath(file.path) !== file) return false;
+		write.events++;
+		write.listeners.set(owner, finish);
+		return true;
 	}
 
 	async create(input: MarkdownCreateInput): Promise<MarkdownMutationResult> {
@@ -194,7 +209,7 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 				return { ...committedResult(current, false), blockId };
 			}
 			const changed = findReplacementObservation(prepared, current, afterRawBlock, blockId);
-			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed);
+			const catalogUpdatePending = await this.commitAndUpdateCatalog(prepared, undefined, undefined, requireObservation(beforeObservation), changed, false, true);
 			return { ...committedResult(changed, catalogUpdatePending), blockId };
 		});
 	}
@@ -233,27 +248,43 @@ export class MarkdownMutationService implements MarkdownMutationContract {
 		changedBefore: MemoObservation | null = null,
 		changedAfter: MemoObservation | null = insertedObservation ?? null,
 		retainRandomReunion = false,
+		updateExistingOnly = false,
 	): Promise<boolean> {
 		let bodyProof: DailyMemoBodyProof | undefined;
-		if (retainRandomReunion && this.options.onDailyConfirmed) {
+		if ((retainRandomReunion || updateExistingOnly) && this.options.onDailyConfirmed) {
 			try { bodyProof = await createDailyMemoBodyProof(prepared.afterContent); }
 			catch (error) { logContinuationFailure("save", "continuation-proof", error); }
 		}
-		await this.dailyGateway.commit(prepared);
 		const presentationChange = buildDailyMemoPresentationChange(prepared, changedBefore, changedAfter);
-		// 编辑器事务不等于落盘；未确认磁盘内容时保留设备草稿供用户核对。
-		let diskConfirmed = prepared.mode !== "active_editor";
-		if (!diskConfirmed && (onDailyCommitted || this.options.onDailyConfirmed)) {
-			try { diskConfirmed = await this.app.vault.read(prepared.file) === prepared.afterContent; }
-			catch { diskConfirmed = false; }
-		}
+		if (updateExistingOnly) presentationChange.updateExistingOnly = true;
+		const anchorWrite = updateExistingOnly && this.options.onDailyConfirmed && !this.anchorWrites.has(prepared.sourcePath)
+			? { file: prepared.file, events: 0, listeners: new Map<object, (confirmed: boolean) => void>() } : null;
+		if (anchorWrite) this.anchorWrites.set(prepared.sourcePath, anchorWrite);
+		let diskConfirmed = false, presented = false;
 		try {
-			if (diskConfirmed && this.options.onDailyConfirmed) this.options.onDailyConfirmed({
-				change: presentationChange, observations: prepared.after.observations,
-				...(bodyProof ? { bodyProof } : {}),
-			});
-		} catch (error) {
-			logContinuationFailure("save", "confirmed-render", error);
+			await this.dailyGateway.commit(prepared);
+			// 编辑器事务不等于落盘；锚点交接也要核对提前通知时是否又有外部覆盖。
+			diskConfirmed = prepared.mode !== "active_editor" && !updateExistingOnly;
+			if (!diskConfirmed && (onDailyCommitted || this.options.onDailyConfirmed)) {
+				const events = anchorWrite?.events;
+				try { diskConfirmed = await this.dailyGateway.isCommittedContentCurrent(prepared) && events === anchorWrite?.events; }
+				catch { diskConfirmed = false; }
+			}
+			try {
+				if (diskConfirmed && this.options.onDailyConfirmed && (this.options.canPresentDailyChange?.(presentationChange) ?? true)) {
+					this.options.onDailyConfirmed({ change: presentationChange, observations: prepared.after.observations,
+						blockAnchors: prepared.after.blockAnchors, ...(bodyProof ? { bodyProof } : {}) });
+					presented = true;
+				}
+			} catch (error) { logContinuationFailure("save", "confirmed-render", error); }
+		} finally {
+			if (anchorWrite) {
+				this.anchorWrites.delete(prepared.sourcePath);
+				for (const finish of anchorWrite.listeners.values()) {
+					try { finish(presented); }
+					catch (error) { logContinuationFailure("view", "anchor-source-refresh", error); }
+				}
+			}
 		}
 		try {
 			onDailyCommitted?.(diskConfirmed);

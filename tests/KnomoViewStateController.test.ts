@@ -125,7 +125,7 @@ test("search query moves the view back to all notes and clears card menu only", 
 	assert.equal(state.activeTagKey, null);
 });
 
-test("search date toggles filter and clears record statistics search", () => {
+test("search date toggles without clearing the record statistics source or its tag", () => {
 	const state = new KnomoViewStateController();
 	state.recordStatsSearchFilter = {
 		type: "range",
@@ -141,9 +141,9 @@ test("search date toggles filter and clears record statistics search", () => {
 
 	assert.equal(first.clearCardMenu, true);
 	assert.equal(state.searchDateFilter, "week");
-	assert.equal(state.recordStatsSearchFilter, null);
-	assert.equal(state.activeTag, null);
-	assert.equal(state.activeTagKey, null);
+	assert.equal(state.recordStatsSearchFilter?.type, "range");
+	assert.equal(state.activeTag, "Work");
+	assert.equal(state.activeTagKey, "work");
 	assert.equal(state.activeNav, "all");
 	assert.equal(state.scopeFilter, "all");
 	assert.equal(state.desktopSearchOpen, false);
@@ -151,6 +151,21 @@ test("search date toggles filter and clears record statistics search", () => {
 
 	state.setSearchDateFilter("week");
 	assert.equal(state.searchDateFilter, null);
+	assert.deepEqual(state.getSearchSource(), { fromDate: "2026-06-01", toDate: "2026-06-30", tags: ["work"] });
+});
+
+test("桌面被引用在提交、清空和快捷日期切换时保留直接引用范围", () => {
+	const state = new KnomoViewStateController();
+	state.setScope("referenced");
+	state.setSearchQuery('2026-10 "项目 复盘"');
+	assert.deepEqual(state.search.applied.terms, ["项目 复盘"]);
+	assert.equal(state.getSearchSource().hasReferrers, true);
+	state.setSearchDateFilter("last-month");
+	state.setSearchQuery("");
+	assert.equal(state.searchDateFilter, "last-month");
+	state.setSearchDateFilter("last-month");
+	assert.equal(state.search.hasConditions, false);
+	assert.deepEqual(state.getSearchSource(), { hasReferrers: true });
 });
 
 test("sidebar navigation stores and restores record statistics return state", () => {

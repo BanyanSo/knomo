@@ -19,7 +19,7 @@ test("原生菜单有无自身锚点均显示固定的引用和复制链接", as
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
 			assert.equal(menu.items[0].title, "Reference");
-			assert.equal(menu.items[5].title, "Copy link");
+			assert.equal(menu.items.find(item => item.icon === "link")?.title, "Copy link");
 			h.controller.close();
 		}
 	} finally { h.close(); }
@@ -37,12 +37,13 @@ test("移动端卡片菜单使用原生分区，删除独立成组且不插入�
 			syncMemoCardRelationsAction(h.f.card, h.originalMemo, hasReferrers);
 			h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus.at(-1)!;
-			assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy",
+			assert.deepEqual(menu.items.map(item => item.icon), ["message-square-quote", "pencil", "share", "copy", "knomo-beacon",
 				...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : []), "trash-2", "text"]);
 			const sections = new Map<string, string[]>();
 			for (const item of menu.items) sections.set(item.section, [...(sections.get(item.section) ?? []), item.icon]);
 			assert.deepEqual([...sections], [
 				["knomo-card-primary", ["message-square-quote", "pencil", "share", "copy"]],
+				["knomo-card-marks", ["knomo-beacon"]],
 				["knomo-card-navigation", [...(randomCard ? ["calendar-search"] : []), "calendar-days", "link", ...(hasReferrers ? ["network"] : [])]],
 				["knomo-card-danger", ["trash-2"]],
 				["knomo-card-info", ["text"]],
@@ -234,7 +235,7 @@ test("mobile Card Menu delegates to host and retains the selected observation in
 	} finally { h.close(); }
 });
 
-test("Scope Menu keeps ten modes in three native sections and checks only the current mode; delayed old hide cannot close a new menu", async () => {
+test("Scope Menu groups all modes in three native sections and checks only the current mode; delayed old hide cannot close a new menu", async () => {
 	const h = await createHarness();
 	const { TITLE_MODE_OPTIONS } = await import("../src/ui/viewNavigation");
 	try {
@@ -246,16 +247,16 @@ test("Scope Menu keeps ten modes in three native sections and checks only the cu
 		assert.ok(menu.items[0].dom.closest(".knomo-mobile-menu-scope"));
 		assert.deepEqual(menu.items.map(item => item.title), TITLE_MODE_OPTIONS.map(item => item.label));
 		assert.deepEqual(menu.items.map(item => item.section), [
-			...Array(2).fill("knomo-scope-views"), ...Array(4).fill("knomo-scope-filters"), ...Array(4).fill("knomo-scope-revisit"),
+			...Array(3).fill("knomo-scope-views"), ...Array(4).fill("knomo-scope-filters"), ...Array(4).fill("knomo-scope-revisit"),
 		]);
 		assert.deepEqual(menu.separators, [], "原生 section 不额外叠加分隔行");
-		assert.deepEqual(menu.items.map((item, index) => item.checked ? index : -1).filter(index => index >= 0), [4]);
+		assert.deepEqual(menu.items.filter(item => item.checked).map(item => item.title), ["With images"]);
 		old.hidden!(); old.items[0].click!();
 		assert.equal(h.controller.kind, "scope");
 		assert.equal(h.f.popup.scopeMenuOpen, true);
 		assert.deepEqual(h.actions, []);
 		// 模拟宿主先隐藏再派发本次选项的合法顺序。
-		menu.hidden!(); menu.items[3].click!();
+		menu.hidden!(); menu.items.find(item => item.title === "With links")!.click!();
 		assert.deepEqual(h.scopes, ["with-link"]);
 		assert.equal(h.f.popup.scopeMenuOpen, false);
 	} finally { h.close(); }
@@ -357,7 +358,7 @@ test("the first iOS menu-item touch executes the selected Card or Scope action o
 		const h = await createHarness();
 		try {
 			if (kind === "card") h.view.toggleCardMenu(h.originalMemo.id); else h.view.toggleScopeMenu();
-			const item = h.menus[0].items[kind === "card" ? 1 : 3];
+			const item = kind === "card" ? h.menus[0].items[1] : h.menus[0].items.find(item => item.title === "With links")!;
 			const end = tap(h, item.dom.querySelector("span")!);
 			assert.equal(h.controller.kind, null);
 			assert.equal(end.defaultPrevented, true);
@@ -378,6 +379,7 @@ test("宿主手机与浮动菜单的首次轻触通过真实导航往返全部�
 		["random", "all", "all"], ["review", "all", "all"],
 		["review", "random", "random"], ["random", "review", "review"],
 		["all", "things", "things"], ["things", "all", "all"],
+		["all", "favorites", "favorites"], ["favorites", "all", "all"],
 	];
 	for (const presentation of ["phone", "floating", "trailing-backdrop"] as const) {
 		for (const [from, mode, to] of routes) await t.test(`${presentation}: ${from} → ${to}`, async () => {
@@ -446,7 +448,7 @@ test("没有自身蒙版的浮动菜单仍接管菜单项轻触，不接管相�
 		assert.equal(menu.items[0].dom.closest(".menu")!.previousElementSibling, unrelated);
 		assert.equal(tap(h, unrelated).defaultPrevented, false, "不能接管其他组件的蒙版");
 		assert.equal(h.controller.kind, "scope");
-		assert.equal(tap(h, menu.items[3].dom).defaultPrevented, true);
+		assert.equal(tap(h, menu.items.find(item => item.title === "With links")!.dom).defaultPrevented, true);
 		assert.deepEqual(h.scopes, ["with-link"]);
 		assert.equal(unrelated.isConnected, true);
 	} finally { h.close(); }
@@ -457,7 +459,7 @@ test("menu touch activation yields to scrolling, host gestures, cancellation, mu
 		const h = await createHarness();
 		try {
 			h.view.toggleScopeMenu();
-			const item = h.menus[0].items[3].dom;
+			const item = h.menus[0].items.find(item => item.title === "With links")!.dom;
 			// 宿主在元素的 touchstart 中先注册 window 的手势回调。
 			if (scenario === "host-gesture") item.addEventListener("touchstart", () => {
 				h.f.win.addEventListener("touchmove", event => event.preventDefault(), { once: true, passive: false });
@@ -487,7 +489,7 @@ test("closing or replacing a menu cancels its in-flight touch and releases liste
 		touch(h, old.items[0].dom, "touchend");
 		assert.deepEqual(h.actions, []);
 		assert.equal(h.controller.kind, "scope");
-		tap(h, h.menus[1].items[3].dom);
+		tap(h, h.menus[1].items.find(item => item.title === "With links")!.dom);
 		assert.deepEqual(h.scopes, ["with-link"]);
 		const ordinary = h.f.win.document.body.createEl("button", { text: "下层按钮" });
 		assert.equal(tap(h, ordinary).defaultPrevented, false, "菜单关闭不能残留全局触摸拦截");
@@ -545,6 +547,48 @@ test("desktop Card and Scope keep their existing popovers and never instantiate 
 		assert.equal(h.f.popup.activeMenuMemoId, null);
 		assert.equal(h.f.popup.scopeMenuOpen, true);
 		assert.equal(h.menus.length, 0);
+	} finally { h.close(); }
+});
+
+test("桌面仅同步打开的灯标菜单；手机原生菜单保留打开时的移除令牌", async () => {
+	const h = await createHarness();
+	const { KNOMO_BEACON_ICON } = await import("../src/constants");
+	try {
+		h.originalMemo.catalog = createReferenceMemo("selected").catalog;
+		h.view.mobileSearchPageOpen = false;
+		let currentSelection = 8, memoLookups = 0;
+		const received: Array<{ action: MemoAction; selection: number | undefined }> = [];
+		Object.assign(h.view, {
+			positionOpenCardMenu: () => {},
+			findMemoById: () => { memoLookups++; return h.originalMemo; },
+			beaconService: { getSnapshot: () => ({ selection: currentSelection }), isSelectedHandle: () => currentSelection === 8 },
+			handleMemoAction: async (action: MemoAction, _memo: MemoViewItem, _focus: boolean, selection?: number) => {
+				received.push({ action, selection });
+			},
+		});
+		h.view.currentLayout = "desktop-wide";
+		h.view.syncCardMenuState(); assert.equal(memoLookups, 0);
+		h.view.toggleCardMenu(h.originalMemo.id);
+		const button = h.f.card.querySelector("[data-memo-action='remove-beacon']")!;
+		assert.equal(button.getAttribute("data-beacon-selection"), "8");
+		currentSelection = 9;
+		Reflect.get(h.view, "syncOpenCardBeaconActions").call(h.view);
+		assert.equal(button.getAttribute("data-memo-action"), "set-beacon");
+		assert.equal(button.hasAttribute("data-beacon-selection"), false);
+		h.view.toggleCardMenu(h.originalMemo.id);
+		const closedLookups = memoLookups;
+		currentSelection = 8;
+		Reflect.get(h.view, "syncOpenCardBeaconActions").call(h.view);
+		assert.equal(memoLookups, closedLookups);
+		assert.equal(button.getAttribute("data-memo-action"), "set-beacon");
+
+		h.view.currentLayout = "mobile";
+		h.view.toggleCardMenu(h.originalMemo.id);
+		const nativeAction = h.menus.at(-1)!.items.find(item => item.icon === KNOMO_BEACON_ICON)!;
+		assert.equal(nativeAction.title, "Remove from Beacon");
+		currentSelection = 9;
+		nativeAction.click!();
+		assert.deepEqual(received, [{ action: "remove-beacon", selection: 8 }]);
 	} finally { h.close(); }
 });
 
@@ -1135,7 +1179,8 @@ test("失焦输入动作修复不改变其他卡片菜单项、Scope 选项和�
 		try {
 			if (scenario === "scope") h.view.toggleScopeMenu(); else h.view.toggleCardMenu(h.originalMemo.id);
 			const menu = h.menus[0];
-			const target = scenario === "backdrop" ? menu.background! : menu.items[scenario === "daily" ? 4 : 3].dom;
+			const target = scenario === "backdrop" ? menu.background! : scenario === "scope" ? menu.items.find(item => item.title === "With links")!.dom
+				: menu.items[scenario === "daily" ? 4 : 3].dom;
 			assert.equal(tap(h, target).defaultPrevented, true, scenario);
 			assert.equal(h.controller.kind, null, scenario);
 			if (scenario === "copy" || scenario === "daily") assert.deepEqual(h.actions.map(item => item.action), [scenario === "copy" ? "copy-text" : "open-daily"]);

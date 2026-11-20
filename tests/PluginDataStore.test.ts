@@ -26,6 +26,32 @@ test("failed plugin data save releases the next mutation", async () => {
 	assert.equal(isRecord(savedData) ? savedData.saved : undefined, true);
 });
 
+test("a source change during load repeats preparation and reads the newest shared data", async () => {
+	let data: Record<string, unknown> = { shared: "first" };
+	let revision = 0, preparations = 0, mutations = 0, reads = 0;
+	const store = new PluginDataStore({
+		loadData: async () => {
+			const loaded = { ...data };
+			if (++reads === 1) {
+				data = { shared: "external" };
+				revision++;
+			}
+			return loaded;
+		},
+		saveData: async (value: Record<string, unknown>) => { data = value; },
+	} as Plugin);
+	await store.mutate(saved => {
+		mutations++;
+		return { nextData: { ...saved as Record<string, unknown>, beacon: "updated" }, result: undefined };
+	}, async () => {
+		preparations++;
+		const validated = revision;
+		return () => revision === validated;
+	});
+	assert.equal(preparations, 2); assert.equal(reads, 2); assert.equal(mutations, 1);
+	assert.deepEqual(data, { shared: "external", beacon: "updated" });
+});
+
 function createPluginHarness(initialData: unknown): {
 	plugin: Plugin;
 	failNextSave: () => void;

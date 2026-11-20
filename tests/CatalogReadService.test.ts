@@ -312,20 +312,6 @@ test("今日浮标按页读取并拒绝 revision 或覆盖变化后的游标", a
 	assert.equal((await service.queryTimeBuoysForDate("2026-08-22", first.nextCursor)).invalidated, true);
 });
 
-test("清理待处理状态独立于已完成迁移传递，成功后可清除", async () => {
-	await ensureObsidianStub();
-	const { CatalogReadService } = await import("../src/services/CatalogReadService");
-	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
-	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
-	let pending = true;
-	const service = new CatalogReadService({ catalog: new MemoCatalogService(new InMemoryMemoCatalogStore()),
-		getLegacyImportStatus: () => "ready", getLegacyCleanupPending: () => pending });
-	assert.equal(service.getRuntimeAttentionSnapshot().legacyMigration, "ready");
-	assert.equal(service.getRuntimeAttentionSnapshot().legacyCleanupPending, true);
-	pending = false;
-	assert.equal(service.getRuntimeAttentionSnapshot().legacyCleanupPending, false);
-});
-
 
 test("Catalog 查询失败时返回可展示的降级状态并请求后台扫描", async () => {
 	await ensureObsidianStub();

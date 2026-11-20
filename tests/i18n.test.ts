@@ -78,11 +78,10 @@ test("关联详情的标题、返回和引用计数中英文一致，英文区�
 	}
 });
 
-test("uses distinct migration and storage status copy", async () => {
+test("describes Catalog storage as the local cache", async () => {
 	await ensureObsidianStub();
 	const { translate } = await import("../src/i18n");
 
-	assert.match(translate("zh-CN", "settings.legacyMigration.description"), /旧版已删除记录/u);
 	assert.match(translate("zh-CN", "catalog.storageUnavailable"), /本机缓存/u);
 });
 
@@ -177,12 +176,9 @@ async function setObsidianLanguage(locale: string): Promise<void> {
 	(getLanguage as unknown as { set(value: string): void }).set(locale);
 }
 
-test("待迁移不误报旧源损坏，设置失败不承诺改用其他位置写入", async () => {
+test("设置失败时说明写入暂停", async () => {
  await ensureObsidianStub();
  const { translate } = await import("../src/i18n");
- assert.doesNotMatch(translate("zh-CN", "settings.legacyMigration.description"), /仍在变化|不完整/);
- assert.equal(translate("zh-CN", "settings.legacyMigration.retry"), "恢复旧版回收站");
- assert.match(translate("zh-CN", "settings.legacyMigration.description"), /主动恢复/);
  assert.match(translate("zh-CN", "catalog.settingsUnavailable"), /写入已暂停/);
  assert.match(translate("zh-CN", "settings.attention.settings.desc"), /写入已暂停/);
 });

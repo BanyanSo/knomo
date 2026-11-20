@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import { JSDOM } from "jsdom";
 import { t } from "../src/i18n";
 import type { CatalogCoverage } from "../src/types/catalog";
@@ -15,6 +15,11 @@ import { DelayedLoadingIndicator } from "../src/ui/DelayedLoadingIndicator";
 import { formatTimeBuoyDate } from "../src/utils/timeBuoyDate";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { createReferenceMemo } from "./helpers/referenceMemo";
+
+// 真实查询可以按时间预算让出；Node 夹具也须提供宿主窗口的计时器。
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+before(() => Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout } }));
+after(() => { if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 interface MemoLoad {
 	memos: MemoViewItem[];
@@ -87,6 +92,71 @@ test("两端真实空库在首次结果确认后显示空态，不停留在加�
 			assert.equal(h.title(), t("empty.generic"));
 			h.view.handleLocalDateChange();
 			assert.equal(h.title(), t("empty.generic"));
+		} finally { h.close(); }
+	}
+});
+
+test("拾星集延迟显示加载提示，来源异常按实际卡片区分空态和列表提示", async () => {
+	for (const mobile of [false, true]) {
+		const h = await createLoadingHarness(mobile);
+		try {
+			const favoriteService = { status: "loading", revision: 1, cardState: () => ({ favoriteId: "star" }) };
+			Object.assign(h.view, { favoriteService, getCatalogQueryFingerprint: () => "favorites-query" });
+			Reflect.deleteProperty(h.view, "renderHistoryLoadMore");
+			h.view.viewStateController.activeNav = "favorites";
+			h.view.renderCardFlow();
+			assert.equal(h.title(), null);
+			const summary = h.root.querySelector(".knomo-result-summary");
+			const summaryState = () => h.root.querySelector(".knomo-result-summary-count")?.getAttribute("data-state");
+			assert.ok(summary);
+			assert.equal(summaryState(), "pending");
+			h.revealLoading();
+			assert.equal(h.title(), t("favorite.loading.title"));
+			const announcement = h.root.querySelector(".knomo-empty-state[aria-live='polite']");
+			h.view.renderCardFlow();
+			assert.ok(announcement);
+			assert.equal(h.root.querySelector(".knomo-empty-state[aria-live='polite']"), announcement);
+
+			favoriteService.status = "ready";
+			const progress = { persisted: 2, located: 1, matched: 0, waiting: 0, missing: 1 };
+			const window = h.view.favoriteWindow = { key: "favorites-query", version: 1, memos: [] as MemoViewItem[],
+				cursor: null as import("../src/types/catalogView").CatalogFeatureCursor | null, progress };
+			h.view.renderCardFlow();
+			assert.equal(h.title(), t("favorite.missing.title"));
+			assert.equal(h.root.querySelector(".knomo-empty-description")?.textContent, t("favorite.missing.description"));
+			assert.equal(h.root.querySelector(".knomo-result-summary"), summary);
+			assert.equal(summaryState(), "unavailable");
+
+			window.memos = [createReferenceMemo()];
+			window.progress = { ...progress, matched: 1, missing: 0, waiting: 1 };
+			h.view.renderCardFlow();
+			assert.equal(h.cards().length, 1);
+			assert.equal(h.root.querySelector(".knomo-list-summary:not(.knomo-result-summary)")?.textContent, t("favorite.partial.title"));
+
+			window.memos = [];
+			window.progress = { ...progress, matched: 0, missing: 0 };
+			window.cursor = { catalog: null, favorites: { date: "2026-01-01", version: 1, catalogRevision: 0,
+				filter: "favorites-query", progress: window.progress } };
+			h.view.renderCardFlow();
+			assert.equal(h.title(), t("favorite.more.title"));
+			assert.ok(h.root.querySelector(".knomo-history-load-more"));
+
+			window.cursor = null;
+			h.view.renderCardFlow();
+			assert.equal(h.title(), t("favorite.noMatch.title"));
+			assert.equal(h.root.querySelector(".knomo-history-load-more"), null);
+			assert.equal(summaryState(), "ready");
+			assert.equal(h.root.querySelector(".knomo-result-summary")?.textContent,
+				t("filterSummary.label", { label: t("favorite.title"), count: 0 }));
+
+			h.view.viewStateController.activeTag = "Work";
+			h.view.viewStateController.activeTagKey = "work";
+			window.memos = [createReferenceMemo()];
+			window.progress = { ...progress, matched: 1, missing: 0 };
+			h.view.renderCardFlow();
+			assert.equal(h.root.querySelector(".knomo-result-summary")?.textContent, t("filterSummary.combo", {
+				conditions: [t("favorite.title"), "#Work"].join(t("filterSummary.separator")), count: 1,
+			}));
 		} finally { h.close(); }
 	}
 });
@@ -297,7 +367,7 @@ test("全部笔记首屏已有卡片后，后台快照前进或今日索引待�
 	const { TimeBuoyViewController } = await import("../src/ui/TimeBuoyViewController");
 	for (const mobile of [false, true]) {
 		for (const stage of ["list-invalidated", "list-busy", "today-invalidated", "today-revision", "today-pending", "today-incomplete", "today-io"] as const) {
-			await context.test(`${stage}, mobile=${mobile}`, async () => {
+			await context.test(`${stage}, mobile=${mobile}`, async t => {
 				const h = await createLoadingHarness(mobile);
 				const store = new InMemoryMemoCatalogStore(), catalog = new MemoCatalogService(store);
 				try {
@@ -339,6 +409,11 @@ test("全部笔记首屏已有卡片后，后台快照前进或今日索引待�
 					await h.loadInitial();
 					const card = h.root.querySelector(".knomo-card"); assert.ok(card);
 					shown.length = 0; changed = true;
+					if (stage === "list-invalidated") {
+						// 强制命中真实查询的时间让出边界，不能依赖小夹具始终在一个 slice 内完成。
+						let now = performance.now();
+						t.mock.method(performance, "now", () => now += 20);
+					}
 					if (stage === "today-pending") await store.setCoverage({ ...coverage, kind: "partial", pendingFileCount: 1 });
 					await h.view.reloadMemos(false);
 					assert.equal(h.root.querySelector(".knomo-card"), card, stage);
@@ -537,7 +612,10 @@ test("组合筛选首查和已有窗口切换时，等待、失败与不完整�
 				if (outcome === "failed") pending.reject(new Error("Combination query failed"));
 				else pending.resolve(outcome === "partial" ? buildingLoad([]) : readyLoad(outcome === "empty" ? [] : [target]));
 				await loading;
-				if (outcome === "empty") assert.match(h.title()!, /0 Memos/u);
+				if (outcome === "empty") {
+					assert.match(h.root.textContent!, /0 Memos/u);
+					assert.equal(h.root.querySelector("[data-search-date-action]"), null);
+				}
 				else assert.doesNotMatch(h.root.textContent!, /0 Memos/u);
 				if (outcome === "ready") assert.equal(h.cards().length, 1);
 				if (outcome === "failed") {

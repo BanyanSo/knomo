@@ -7,6 +7,55 @@ import { ensureObsidianStub } from "./helpers/obsidianStub";
 const PATH = "Daily/2026-09-08.md";
 const BODY = "## Memos\n- 10:30 same memo\n- 10:30 same memo\n";
 
+test("灯标删除通知只来自已确认落盘的原目标，Catalog 失败也不丢失确认", async () => {
+	for (const fail of ["none", "before", "readback", "catalog"] as const) {
+		const f = await fixture();
+		const confirmed: Array<{ change: import("../src/services/DailyMemoPresentationChange").ConfirmedDailyMemoPresentation; target?: import("../src/types/catalog").ObservationHandle }> = [];
+		f.options.onDailyConfirmed = (change, target) => { confirmed.push({ change, target }); };
+		const original = f.initial[1]!;
+		if (fail === "before") f.vault.app.vault.process = async () => { throw new Error("write failed"); };
+		if (fail === "readback") {
+			const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+			f.vault.app.vault.process = async (file, update) => {
+				const result = await process(file, update);
+				if (file.path === PATH) {
+					const read = f.vault.app.vault.read.bind(f.vault.app.vault);
+					f.vault.app.vault.read = async file => { if (file.path === PATH) throw new Error("unconfirmed"); return read(file); };
+				}
+				return result;
+			};
+		}
+		if (fail === "catalog") f.options.updateCatalogPartition = async () => { throw new Error("Catalog failed"); };
+		if (fail === "before" || fail === "readback") {
+			await assert.rejects(f.service.delete(original)); assert.equal(confirmed.length, 0);
+		} else {
+			const result = await f.service.delete(original);
+			assert.equal(result.state, "deleted"); assert.equal(confirmed.length, 1);
+			assert.deepEqual(confirmed[0]!.target, original);
+			assert.equal(confirmed[0]!.change.change.beforeSourceRevision, original.sourceRevision);
+			assert.equal(confirmed[0]!.change.observations.length, 1);
+			assert.equal(f.vault.read(PATH), "## Memos\n- 10:30 same memo\n");
+		}
+	}
+});
+
+test("已经导入的旧回收站记录可直接查看、恢复和永久删除", async () => {
+	const f = await fixture();
+	const restored = { snapshotId: "legacy_" + "a".repeat(64), deletedAt: "2026-09-08T12:00:00Z",
+		sourcePath: PATH, logicalDate: "2026-09-08", section: "## Memos", rawBlock: "- 11:30 previously imported" };
+	const purged = { ...restored, snapshotId: "legacy_" + "b".repeat(64), rawBlock: "- 12:30 discard" };
+	await f.vault.app.vault.create(f.store.path, JSON.stringify({ kind: "knomo-trash", items: [restored, purged] }));
+
+	assert.equal((await f.store.query()).items.length, 2);
+	assert.equal((await f.service.restore(await f.store.read(restored.snapshotId))).state, "restored");
+	assert.ok(f.vault.read(PATH)!.includes(restored.rawBlock));
+	assert.deepEqual((await f.store.query()).items, [purged]);
+	const afterRestore = f.vault.read(PATH);
+	await f.service.purge(await f.store.read(purged.snapshotId));
+	assert.equal(f.vault.read(PATH), afterRestore);
+	assert.deepEqual((await f.store.query()).items, []);
+});
+
 test("snapshot-first 删除不越过历史裸空行范围，子块 ID 展示与 raw 恢复保持一致", async () => {
 	for (const rawBlock of ["- 10:30 body", "- 10:30 intro\n  \n  - child ^child \t", "- 10:30 ^main\n  > quote"]) {
 		const suffix = "\n\n  outside\n- 11:00 neighbor\n";
@@ -244,6 +293,37 @@ test("restore 以完整 block ID 判断冲突，保留连字符和下划线边�
 	}
 });
 
+test("恢复带锚点的 Memo 时，同页引用和代码中的字面文本不构成冲突", async () => {
+	const f = await fixture("## Memos\n- 10:30 memo ^anchor\n- 11:00 [[#^anchor]]\n");
+	const deleted = await f.service.delete(f.initial[0]!);
+	f.vault.replace(PATH, f.vault.read(PATH)! + "\n```md\nexample ^anchor\n```\n");
+	const snapshot = await f.store.read(deleted.snapshotId);
+	const restored = await f.service.restore(snapshot);
+	assert.equal(restored.state, "restored");
+	assert.equal(restored.observation?.existingBlockId, "anchor");
+	assert.match(f.vault.read(PATH)!, /\[\[#\^anchor\]\]/u);
+	assert.equal((await f.store.query()).items.length, 0);
+});
+
+for (const operation of ["delete", "restore"] as const) test(`Trash ${operation} 提交时 Daily 范围变化，保留原文件和快照`, async () => {
+	const f = await fixture();
+	const selected = operation === "restore" ? await f.store.read((await f.service.delete(f.initial[0]!)).snapshotId) : null;
+	const before = f.vault.read(PATH);
+	let current = true;
+	f.options.getLogicalDateForPath = () => {
+		if (!current) throw new Error("Daily scope changed");
+		return "2026-09-08";
+	};
+	const process = f.vault.app.vault.process.bind(f.vault.app.vault);
+	f.vault.app.vault.process = (file, update) => {
+		if (file.path === PATH) current = false;
+		return process(file, update);
+	};
+	await assert.rejects(selected ? f.service.restore(selected) : f.service.delete(f.initial[0]!), /Daily/u);
+	assert.equal(f.vault.read(PATH), before);
+	assert.equal((await f.store.query()).items.length, 1);
+});
+
 test("restore 清理失败后仅重试清理，Daily 后续编辑不被重复追加或旧 Catalog 覆盖", async () => {
 	const f = await fixture();
 	const deleted = await f.service.delete(f.initial[0]!);
@@ -371,7 +451,7 @@ async function fixture(body = BODY) {
 	const refreshes: unknown[] = [];
 	let id = 0;
 	const options: import("../src/services/IndependentTrashService").IndependentTrashOptions = {
-		getLogicalDateForPath: async () => "2026-09-08",
+		getLogicalDateForPath: () => "2026-09-08",
 		getOriginalDailyFile: async (path) => vault.app.vault.getAbstractFileByPath(path) as TFile | null,
 		getDailyFileForDate: async (date) => vault.app.vault.create(`NewDaily/${date}.md`, "## Memos\n"),
 		updateCatalogPartition: async (input) => { catalog.push(input); }, refreshCatalogPaths: async (paths) => { refreshes.push(paths); },

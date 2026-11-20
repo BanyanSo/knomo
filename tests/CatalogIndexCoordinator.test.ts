@@ -7,6 +7,134 @@ import { LowPriorityWorkQueue } from "../src/services/LowPriorityWorkQueue";
 
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
+test("并发定向读取各自返回目标 Daily，候选 B 不竞争 A 的共享单槽或依赖索引", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const a = "Journal/2026-08-09.md", b = "Journal/2026-08-10.md";
+	const fixture = await createCoordinatorFixture([{ path: a, content: "- 09:00 A ^same\n", mtime: 1 },
+		{ path: b, content: "- 10:00 B ^same\n", mtime: 1 }]);
+	const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
+	coordinator.start(fixture.owner); const release = fixture.blockRead(a);
+	try {
+		const first = coordinator.readPresentationSource(a, "2026-08-09");
+		await waitUntil(async () => fixture.readCount() === 1);
+		const second = await coordinator.readPresentationSource(b, "2026-08-10");
+		assert.equal(second.path, b); assert.equal(second.observations[0]!.content, "B");
+		release(); const result = await first;
+		assert.equal(result.path, a); assert.equal(result.observations[0]!.content, "A");
+		assert.equal(result.blockAnchors?.same, 1); assert.equal(fixture.readCount(), 2);
+	} finally { release(); fixture.unload(); }
+});
+
+test("灯标读取期间同字节的索引重扫不撤销读取，同路径替换文件仍须拒绝", async () => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Journal/2026-08-09.md", date = "2026-08-09", body = "- 09:00 A ^beacon\n";
+	const fixture = await createCoordinatorFixture([{ path, content: body, mtime: 1 }]);
+	const coordinator = new CatalogIndexCoordinator(fixture.app, new MemoCatalogService(new InMemoryMemoCatalogStore()),
+		new DiaryMemoParser(), async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
+	coordinator.start(fixture.owner);
+	try {
+		await coordinator.initialize(); await coordinator.waitForIdle();
+		const releaseFirst = fixture.blockRead(path);
+		const reading = coordinator.readPresentationSource(path, date);
+		const refresh = coordinator.refreshPaths([path]);
+		releaseFirst();
+		const [source] = await Promise.all([reading, refresh]);
+		assert.equal(source.blockAnchors?.beacon, 1);
+		const releaseSecond = fixture.blockRead(path);
+		const replaced = coordinator.readPresentationSource(path, date);
+		fixture.removeFile(path);
+		fixture.setFile(path, body, 1);
+		releaseSecond();
+		await assert.rejects(replaced, /Daily source changed/u);
+	} finally { fixture.unload(); }
+});
+
+test("普通扫描将同轮完整解析交给展示，索引发布失败仍有当前数据且不额外解析", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const path = "Journal/2026-08-09.md", fixture = await createCoordinatorFixture([{ path, content: "- 09:00 A ^target\nNon-memo ^target\n", mtime: 1 }]);
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore()), parser = new DiaryMemoParser();
+	let parses = 0; const parse = parser.parse.bind(parser);
+	const sources: import("../src/services/BeaconService").BeaconSource[] = [];
+	t.mock.method(parser, "parse", (...args: Parameters<typeof parse>) => { parses++; return parse(...args); });
+	t.mock.method(catalog, "replaceFile", async () => { throw new Error("Index unavailable"); });
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, parser,
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), { onPresentationSource: source => sources.push(source) });
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+		assert.equal(parses, 1); assert.equal(fixture.readCount(), 1); assert.equal(sources.length, 1);
+		assert.equal(sources[0]!.path, path); assert.equal(sources[0]!.blockAnchors?.target, 2);
+		assert.equal(coordinator.getScanSnapshot().failedFileCount, 1);
+	} finally { fixture.unload(); }
+});
+
+test("改名前路径同字节重建且分区未变时，普通解析解除旧卡阻挡", async t => {
+	await ensureObsidianStub();
+	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
+	const { BeaconService } = await import("../src/services/BeaconService");
+	const { PluginDataStore } = await import("../src/services/PluginDataStore");
+	const { MemoCatalogService } = await import("../src/services/MemoCatalogService");
+	const { InMemoryMemoCatalogStore } = await import("../src/services/MemoCatalogStore");
+	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
+	const { toParsedCatalogMemoItem } = await import("../src/services/CatalogReadService");
+	const { createCatalogCapabilities } = await import("../src/services/MemoCapabilityModel");
+	const { buildBeaconPresentation } = await import("../src/ui/BeaconPresentation");
+	const path = "Journal/2026-08-09.md", next = "Journal/2026-08-10.md", body = "- 09:00 Memo ^target\n";
+	const fixture = await createCoordinatorFixture([{ path, content: body, mtime: 1 }]);
+	const catalog = new MemoCatalogService(new InMemoryMemoCatalogStore());
+	let data: unknown = { beacon: { sourcePath: path, blockId: "target", memoTime: "09:00" } };
+	let oldPathWrites = 0;
+	const replace = catalog.replaceFile.bind(catalog);
+	t.mock.method(catalog, "replaceFile", (input: Parameters<typeof replace>[0]) => {
+		if (input.inventory.sourcePath === path) oldPathWrites++;
+		return replace(input);
+	});
+	const capabilities = createCatalogCapabilities({ kind: "partial", coveredFromDate: null, pendingFileCount: 0, coveredFileCount: 0, totalFileCount: 0 });
+	const service = new BeaconService(new PluginDataStore({
+		loadData: async () => data, saveData: async (value: unknown) => { data = value; },
+	} as import("obsidian").Plugin), {
+		readSource: sourcePath => coordinator.readPresentationSource(sourcePath, sourcePath === path ? "2026-08-09" : "2026-08-10"),
+		isSourceCurrent: async source => {
+			const file = fixture.file(source.path);
+			if (!file) return false;
+			const bytes = await (fixture.app as App).vault.readBinary(file);
+			return fixture.file(source.path) === file && sha256(new Uint8Array(bytes)) === source.sourceRevision;
+		},
+		createBlockReference: async () => { throw new Error("Unexpected anchor write"); },
+		fromObservation: observation => toParsedCatalogMemoItem(observation, capabilities),
+		onFailure: error => { throw error; },
+	});
+	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(async bytes => sha256(bytes)),
+		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }), {
+			onPresentationSource: source => service.observeSource(source),
+			onSourceEvent: (sourcePath, kind, nextPath) => service.sourceChanged(sourcePath, kind, nextPath),
+		});
+	try {
+		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
+		await service.reload();
+		const old = service.getSnapshot().memo!;
+		assert.ok(old); assert.equal(oldPathWrites, 1);
+		fixture.renameFile(path, next, 1); fixture.emitVaultEvent("rename", fixture.file(next), path);
+		fixture.setFile(path, body, 1); fixture.emitVaultEvent("create", fixture.file(path));
+		await waitUntil(async () => service.getSnapshot().memo?.dailyRef.path === next && service.getSnapshot().previousSources === undefined);
+		await coordinator.waitForIdle();
+		assert.equal(oldPathWrites, 1, "旧路径使用 Catalog 原分区");
+		assert.deepEqual(buildBeaconPresentation(service.getSnapshot(), [old]).memos.map(memo => memo.dailyRef.path), [next, path]);
+	} finally { service.dispose(); fixture.unload(); }
+});
+
 test("阅读连续性计量：同字节重复保存与真实正文变化分别记录解析、发布及查询", async t => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
@@ -1333,7 +1461,7 @@ test("101 个 Daily 在短 slice 下每个只解析一次，checkpoint 仍按批
 	}
 });
 
-test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共享数据", async () => {
+test("Catalog rebuild 只重建本机缓存，保留 Vault 中的文件", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1343,7 +1471,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	const fixture = await createCoordinatorFixture([
 		{ path: "Journal/2026-08-10.md", content: "## Memos\n- 09:00 rebuild only\n", mtime: 10 },
 		{ path: "Memos/2026-08.md", content: "monthly bytes\n", mtime: 10 },
-		{ path: "Memos/_knomo-data/sentinel.md", content: "shared bytes\n", mtime: 10 },
+		{ path: "Notes/sentinel.md", content: "user bytes\n", mtime: 10 },
 	]);
 	const store = new InMemoryMemoCatalogStore();
 	const monthlyCheckpoint = {
@@ -1366,7 +1494,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 			],
 		},
 	);
-	const sharedBytes = fixture.snapshot();
+	const vaultBefore = fixture.snapshot();
 	try {
 		coordinator.start(fixture.owner);
 		await coordinator.initialize();
@@ -1376,7 +1504,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 		const page = await store.query({ limit: 50 });
 		assert.deepEqual(page.items.map((item) => item.content), ["rebuild only"]);
 		assert.equal(page.coverage.kind, "complete");
-		assert.deepEqual(fixture.snapshot(), sharedBytes);
+		assert.deepEqual(fixture.snapshot(), vaultBefore);
 		assert.deepEqual(await store.getMeta(MONTHLY_PROJECTION_CHECKPOINT_META_KEY), monthlyCheckpoint);
 		assert.equal(await store.getMeta("catalog-derived-sentinel"), null);
 	} finally {
@@ -1384,7 +1512,7 @@ test("Catalog rebuild 只重建本机缓存，不修改 Daily、Monthly 或共�
 	}
 });
 
-test("P8 Daily 先到 B，后到 Trash、marker 和旧开发文件的事件不改变 observations", async () => {
+test("Daily 先到 B，后到 Trash 和非 Daily 文件的事件不改变 observations", async () => {
 	await ensureObsidianStub();
 	const { CatalogIndexCoordinator } = await import("../src/services/CatalogIndexCoordinator");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
@@ -1397,16 +1525,14 @@ test("P8 Daily 先到 B，后到 Trash、marker 和旧开发文件的事件不�
 	const catalog = new MemoCatalogService(store);
 	const coordinator = new CatalogIndexCoordinator(fixture.app, catalog, new DiaryMemoParser(),
 		async () => ({ folder: "Journal", format: "YYYY-MM-DD" }));
-	const read = new CatalogReadService({ catalog, now: () => new Date(2026, 8, 8),
-		getLegacyImportStatus: () => "idle" });
+	const read = new CatalogReadService({ catalog, now: () => new Date(2026, 8, 8) });
 	try {
 		coordinator.start(fixture.owner); await coordinator.initialize(); await coordinator.waitForIdle();
 		const before = await store.query({ limit: 10 });
 		assert.equal((await read.query({ limit: 10, text: "duplicate", tags: ["project"] })).items.length, 2);
 		assert.equal((await read.getRandomReunionItems(10)).length, 2);
 		assert.equal(new Set(before.items.map((item) => item.observationKey)).size, 2);
-		for (const auxiliary of ["_knomo-data/trash/snapshot.json", "_knomo-data/migration-complete.json",
-			"_knomo-data/current-state.json", "_knomo-data/config/old.json", "_knomo-data/receipts/old.json",
+		for (const auxiliary of ["Memos/knomo-trash.json", "Notes/metadata.json",
 			"_knomo-system/indexes/memo-index-2026-08.json"]) {
 			fixture.setFile(auxiliary, body, 2);
 			const file = fixture.file(auxiliary)!;

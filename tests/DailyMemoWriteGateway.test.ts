@@ -125,6 +125,35 @@ test("expected revision and late editor changes reject stale Daily writes", asyn
 	assert.equal(editor.transactionCount, 0);
 });
 
+for (const dirty of [true, false]) test(`磁盘提交前打开同一 Daily，编辑器${dirty ? "已改写时拒绝" : "一致时继续"}`, async () => {
+	const file = makeFile("Daily/2026-08-09.md");
+	const original = "- 09:00 before\n";
+	let disk = original;
+	let active: { file: TFile; editor: MemoryEditor } | null = null;
+	const editor = new MemoryEditor(dirty ? "- 09:00 unsaved\n" : original);
+	const app = { workspace: { getActiveViewOfType: () => active }, vault: {
+		getAbstractFileByPath: () => file,
+		read: async () => disk,
+		process: async (_file: TFile, update: (content: string) => string) => {
+			active = { file, editor };
+			disk = update(disk);
+			return disk;
+		},
+	} } as unknown as App;
+	const gateway = makeGateway(app);
+	const prepared = await gateway.prepare({ file, logicalDate: "2026-08-09", expectedRevision: null,
+		update: (content) => content.replace("before", "after") });
+	if (dirty) {
+		await assert.rejects(gateway.commit(prepared), StaleDailyWriteError);
+		assert.equal(disk, original);
+		assert.equal(editor.getValue(), "- 09:00 unsaved\n");
+	} else {
+		await gateway.commit(prepared);
+		assert.equal(disk, "- 09:00 after\n");
+	}
+	assert.equal(editor.transactionCount, 0);
+});
+
 test("Daily 写入网关为大文件解析传入协作式 runtime", async () => {
 	const file = makeFile("Daily/2026-08-09.md");
 	const content = Array.from({ length: 600 }, (_, index) => `- 09:00 memo ${index}`).join("\n");

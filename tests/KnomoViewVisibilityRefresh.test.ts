@@ -19,7 +19,7 @@ async function harness() {
 		presentationHidden: false,
 		presentationVisibilityRevision: 0,
 		mobileBackgroundPaused: false,
-		containerEl: { isShown: () => shown, doc },
+		containerEl: { isShown: () => shown, doc, win: {} },
 		viewStateController: new KnomoViewStateController(),
 		cardFlowCoordinator: new KnomoCardFlowCoordinator(),
 		settingsService: { getSettings: () => ({ timeBuoyEnabled: false }) },
@@ -28,7 +28,7 @@ async function harness() {
 		refreshRandomReunionBatch: async () => {},
 		waitForAllMemosLoading: async () => {},
 		reloadMemos: async (_loadAll: boolean, force: boolean) => { queries.push(force); return true; },
-		cardFlowEl: { querySelectorAll: () => { referenceScans.push("card-flow"); return []; } },
+		cardFlowEl: { querySelector: () => null, querySelectorAll: () => { referenceScans.push("card-flow"); return []; } },
 		mobileSearchController: { isOpen: false, cancelPendingRequest: () => {}, suspendLoadingFeedback: () => {} },
 		cancelCatalogDesktopQuery: () => {},
 		cancelCatalogDesktopCount: () => {},
@@ -39,6 +39,18 @@ async function harness() {
 	});
 	return { view, queries, referenceScans, show: (value: boolean) => { shown = value; }, doc, markdownPauses, imagePauses };
 }
+
+test("恢复可见仅对未就绪灯标重试，普通列表刷新不重复发起源校验", async () => {
+	const h = await harness(); let retries = 0, ready = false;
+	Object.assign(h.view, { beaconService: { getSnapshot: () => ({ state: ready ? "ready" : "unavailable" }),
+		retry: async () => { retries++; } } });
+	h.show(false); h.view.syncPresentationVisibility();
+	h.show(true); h.view.syncPresentationVisibility(); await h.view.flushPresentationRefresh();
+	assert.equal(retries, 1);
+	await h.view.refresh(); await h.view.refresh(); assert.equal(retries, 1);
+	ready = true; h.show(false); h.view.syncPresentationVisibility(); h.show(true); h.view.syncPresentationVisibility();
+	await h.view.flushPresentationRefresh(); assert.equal(retries, 1);
+});
 
 test("隐藏标签合并刷新，后台文档继续暂停，恢复后仅查询一次并保留强制要求", async () => {
 	const { view, queries, referenceScans, show, doc } = await harness();

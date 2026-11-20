@@ -62,6 +62,7 @@ export class KnomoViewStateController {
 		this.search.applied.shortcut = filter;
 		if (filter !== null || this.search.applied.dateOrigin === "shortcut") {
 			this.search.applied.date = null;
+			this.search.applied.dateRange = undefined;
 			this.search.applied.dateOrigin = filter === null ? null : "shortcut";
 		}
 	}
@@ -110,9 +111,9 @@ export class KnomoViewStateController {
 	}
 
 	setSearchQuery(query: string): SearchStateResult {
-		this.search.updateDraft(query);
+		if (query !== this.search.draft.text) this.search.updateDraft(query);
 		if (!this.search.submit()) return { type: "changed" };
-		if (this.activeNav === "things") return { type: "changed", clearCardMenu: true };
+		if (this.preservesSearchSource()) return { type: "changed", clearCardMenu: true };
 		if (query.trim().length > 0 || this.searchDateFilter !== null || this.recordStatsSearchFilter !== null) {
 			this.clearActiveTag();
 			this.activeNav = "all";
@@ -124,12 +125,11 @@ export class KnomoViewStateController {
 
 	setSearchDateFilter(filter: SearchDateFilter): SearchStateResult {
 		if (!this.search.toggleShortcut(filter)) return { type: "changed" };
-		if (this.activeNav === "things") {
+		if (this.preservesSearchSource()) {
 			this.desktopSearchOpen = false;
 			this.compactSearchOpen = false;
 			return { type: "changed", clearCardMenu: true };
 		}
-		this.recordStatsSearchFilter = null;
 		this.clearActiveTag();
 		this.activeNav = "all";
 		this.scopeFilter = "all";
@@ -168,7 +168,9 @@ export class KnomoViewStateController {
 		} else if (nav !== "record-stats") {
 			this.recordStatsReturnState = null;
 		}
-		if (nav !== "things" || (previousNav !== "all" && previousNav !== "things") || this.recordStatsSearchFilter !== null) {
+		if (nav === "favorites" && previousNav === "favorites") {
+			// 重开拾星集时保留当前筛选，供文件恢复和重试。
+		} else if (nav !== "things" || (previousNav !== "all" && previousNav !== "things") || this.recordStatsSearchFilter !== null) {
 			this.clearDesktopSearchState();
 			this.clearActiveTag();
 		} else if (["week", "month", "last-month", "last-7", "last-30"].includes(this.scopeFilter)) {
@@ -183,7 +185,7 @@ export class KnomoViewStateController {
 			clearCardMenu: true,
 			clearRandomReunion: false,
 			clearShuffleDay: false,
-			reloadCatalogQuery: nav === "things" || nav === "review" || nav === "all",
+			reloadCatalogQuery: nav === "favorites" || nav === "things" || nav === "review" || nav === "all",
 			refreshRandomReunion: nav === "random",
 			refreshShuffleDay: nav === "shuffleDay" && previousNav !== "shuffleDay",
 			loadTrashMemos: nav === "trash",
@@ -227,7 +229,7 @@ export class KnomoViewStateController {
 			returnedNav: returnState.activeNav,
 			closeScopeMenu: true,
 			clearCardMenu: true,
-			reloadCatalogQuery: returnState.activeNav === "things" || returnState.activeNav === "review",
+			reloadCatalogQuery: returnState.activeNav === "favorites" || returnState.activeNav === "things" || returnState.activeNav === "review",
 			refreshRandomReunionIfEmpty: returnState.activeNav === "random",
 			loadTrashMemos: returnState.activeNav === "trash",
 			refreshShuffleDayIfEmpty: returnState.activeNav === "shuffleDay",
@@ -256,12 +258,21 @@ export class KnomoViewStateController {
 		this.recordStatsSearchFilter = null;
 	}
 
-	getSearchSource(today = new Date()) {
-		return buildSearchSourceScope({
+	getSearchSourceContext() {
+		return {
 			activeNav: this.activeNav, scopeFilter: this.scopeFilter,
 			activeTag: this.activeTag, activeTagKey: this.activeTagKey,
 			recordStatsSearchFilter: this.recordStatsSearchFilter,
-		}, today);
+		};
+	}
+
+	getSearchSource(today = new Date()) {
+		return buildSearchSourceScope(this.getSearchSourceContext(), today);
+	}
+
+	private preservesSearchSource(): boolean {
+		return this.activeNav === "things" || this.activeNav === "favorites"
+			|| this.recordStatsSearchFilter !== null || (this.activeNav === "all" && this.scopeFilter === "referenced");
 	}
 
 	clearActiveTag(): void {

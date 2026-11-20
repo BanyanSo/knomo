@@ -5,14 +5,22 @@ export interface ResultCountSummary {
 	params: TranslationParams;
 	count: number | null;
 	pending: boolean;
+	dateLiteral?: boolean;
+	searchDateFeedback?: {
+		feedback?: string;
+		conflict?: string;
+	};
 }
 
 interface SummaryNodes {
 	key: string;
+	line: HTMLElement;
 	slot: HTMLElement;
 	value: HTMLElement;
 	state: string;
 	revealed: boolean;
+	dateDetails?: HTMLElement;
+	dateButton?: HTMLButtonElement;
 }
 
 const summaryNodes = new WeakMap<HTMLElement, SummaryNodes>();
@@ -29,13 +37,15 @@ export function syncResultCountSummary(element: HTMLElement, summary: ResultCoun
 			const value = summary.params[name];
 			return value == null ? match : String(value);
 		});
-		element.createSpan({ cls: "knomo-result-summary-text", text: interpolate(before) });
-		const slot = element.createSpan({ cls: "knomo-result-summary-count", attr: { role: "status", "aria-live": "polite", "aria-atomic": "true" } });
+		const line = element.createSpan({ cls: "knomo-result-summary-line" });
+		const words = line.createSpan();
+		words.createSpan({ cls: "knomo-result-summary-text", text: interpolate(before) });
+		const slot = words.createSpan({ cls: "knomo-result-summary-count", attr: { role: "status", "aria-live": "polite", "aria-atomic": "true" } });
 		const value = slot.createSpan({ cls: "knomo-result-summary-value", attr: { "aria-hidden": "true" } });
 		const dots = slot.createSpan({ cls: "knomo-result-summary-dots", attr: { "aria-hidden": "true" } });
 		for (let index = 0; index < 3; index++) dots.createSpan();
-		element.createSpan({ cls: "knomo-result-summary-text", text: interpolate(after) });
-		nodes = { key, slot, value, state: "", revealed: false };
+		words.createSpan({ cls: "knomo-result-summary-text", text: interpolate(after) });
+		nodes = { key, line, slot, value, state: "", revealed: false };
 		summaryNodes.set(element, nodes);
 		slot.addEventListener("animationend", event => {
 			if (event.animationName === "knomo-result-count-reveal") slot.removeClass("is-revealing");
@@ -53,6 +63,28 @@ export function syncResultCountSummary(element: HTMLElement, summary: ResultCoun
 	const label = state === "pending" ? t("loading.label") : text;
 	if (nodes.slot.getAttribute("aria-label") !== label) nodes.slot.setAttr("aria-label", label);
 	nodes.state = state;
+	if (summary.dateLiteral) {
+		const button = nodes.dateButton ??= nodes.line.createEl("button", {
+			cls: "knomo-inline-button", attr: { type: "button", "data-search-date-action": "literal" },
+		});
+		const label = t("search.dateLiteral");
+		if (button.textContent !== label) button.setText(label);
+		button.disabled = false;
+		nodes.line.addClass("has-date-action");
+	} else if (nodes.dateButton) {
+		nodes.dateButton.remove();
+		nodes.dateButton = undefined;
+		nodes.line.removeClass("has-date-action");
+	}
+	const date = summary.searchDateFeedback;
+	if (!date) {
+		nodes.dateDetails?.remove();
+		nodes.dateDetails = undefined;
+		return;
+	}
+	const details = nodes.dateDetails ??= element.createDiv({ cls: "knomo-search-date-feedback", attr: { role: "status" } });
+	const message = [date.feedback, date.conflict].filter(Boolean).join(t("filterSummary.separator"));
+	if (details.textContent !== message) details.setText(message);
 }
 
 export function renderResultCountSummary(container: HTMLElement, summary: ResultCountSummary): HTMLElement {

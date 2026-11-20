@@ -112,7 +112,7 @@ export class TimeBuoyViewController {
 		return true;
 	}
 
-	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = []): boolean {
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], preserveWindow = false): boolean {
 		if (!inserted.some(memo => memo.catalog?.timeBuoyDates.length)
 			&& ![...this.snapshot.today, ...this.snapshot.upcoming, ...this.snapshot.past]
 				.some(item => changes.has(item.memo.id))) return false;
@@ -132,7 +132,8 @@ export class TimeBuoyViewController {
 		this.cancelPendingQuery();
 		this.requestId++;
 		this.refreshing = false;
-		this.snapshot = { ...this.snapshot, today, upcoming, past, nextCursor: null, todayCursor: null, loading: false, loadingMore: false };
+		this.snapshot = { ...this.snapshot, today, upcoming, past, nextCursor: preserveWindow ? this.snapshot.nextCursor : null,
+			todayCursor: preserveWindow ? this.snapshot.todayCursor : null, loading: false, loadingMore: false };
 		return true;
 	}
 

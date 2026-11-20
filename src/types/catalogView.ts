@@ -1,3 +1,4 @@
+import type { FavoriteQueryCursor, FavoriteQueryProgress } from "./favorite";
 import type {
 	CatalogCoverage,
 	CatalogCapabilities,
@@ -10,7 +11,6 @@ import type {
 	ResolvedMemo,
 } from "./catalog";
 import type { KnomoCurrentConfigStatus } from "./knomoConfig";
-import type { LegacyMigrationStatus } from "./legacyMigration";
 import type { KnomoSettingsLoadStatus } from "./settings";
 
 export type CatalogReadState = "ready" | "history_building" | "storage_unavailable";
@@ -40,8 +40,6 @@ export interface KnomoRuntimeAttentionSnapshot {
 	catalogLifecycle: CatalogStoreLifecycle;
 	currentConfiguration: KnomoCurrentConfigStatus;
 	monthly: MonthlyProjectionState;
-	legacyMigration: LegacyMigrationStatus;
-	legacyCleanupPending?: boolean;
 }
 
 export interface CatalogMemoItem {
@@ -87,11 +85,13 @@ export interface MemoSaveOperation {
 }
 
 export interface CatalogFeatureCursor {
-	catalog: CatalogCursor;
+	catalog: CatalogCursor | null;
 	relationsVersion?: number;
+	favorites?: FavoriteQueryCursor;
 }
 
 export interface CatalogMemoPage {
+	favoriteProgress?: FavoriteQueryProgress;
 	items: CatalogMemoItem[];
 	nextCursor: CatalogFeatureCursor | null;
 	catalogRevision: number;
@@ -134,6 +134,8 @@ export type CatalogRecordStatsFilter =
 	| { type: "tag"; startDate: string; endDateExclusive: string; tagKey: string; tagLabel: string }
 	| { type: "references"; startDate: string; endDateExclusive: string }
 	| { type: "referenced"; startDate: string; endDateExclusive: string }
+	| { type: "things"; startDate: string; endDateExclusive: string }
+	| { type: "favorites"; startDate: string; endDateExclusive: string }
 	| { type: "max-daily-notes"; dates: string[] }
 	| { type: "max-daily-words"; dates: string[] }
 	| { type: "hour"; startDate: string; endDateExclusive: string; hour: number };

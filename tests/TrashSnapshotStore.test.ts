@@ -51,13 +51,15 @@ test("摘要不克隆正文，显示窗口仅克隆选中条目且不能改写�
 
 test("单文件完整六字段、批量保存、同文独立、同 ID 同内容重试，state count 同源且不可被调用方改写", async () => {
 	const f = await fixture();
+	f.setFolder("Memos/Archive");
+	const archivePath = "Memos/Archive/knomo-trash.json";
 	assert.equal(f.store.getState().count, null);
 	assert.deepEqual(await f.store.query(), { items: [], errors: [] });
-	assert.equal(f.vault.read(PATH), null);
+	assert.equal(f.vault.read(archivePath), null);
 	await f.store.saveAll([snapshot(), snapshot("s2")]);
 	await f.store.save(snapshot());
-	assert.deepEqual(JSON.parse(f.vault.read(PATH)!), { kind: "knomo-trash", items: [snapshot(), snapshot("s2")] });
-	assert.deepEqual(f.vault.paths(), [PATH]);
+	assert.deepEqual(JSON.parse(f.vault.read(archivePath)!), { kind: "knomo-trash", items: [snapshot(), snapshot("s2")] });
+	assert.deepEqual(f.vault.paths(), [archivePath]);
 	const state = f.store.getState();
 	assert.equal(state.status, "ready");
 	assert.equal(state.count, 2);
@@ -239,13 +241,13 @@ function deferred<T>() {
 }
 
 
-test("文件及父目录事件失效；Daily、Monthly、开发残留不触发 Trash 读取", async () => {
+test("集合文件及父目录事件使状态失效，其他文件事件不触发 Trash 读取", async () => {
  const f = await fixture({ [PATH]: encode([snapshot()]) });
  let reads = 0; const read = f.vault.app.vault.read.bind(f.vault.app.vault);
  f.vault.app.vault.read = async (file) => { reads++; return read(file); };
  await f.store.query(); let notifications = 0;
  const unsubscribe = f.store.subscribe(() => { notifications++; });
- for (const path of ["Daily/2026-09-09.md", "Monthly/Memos-2026-09.md", "_knomo-data/trash/s1.json", "Monthly/knomo-trash.json.bak"]) f.store.handleFileChange(path);
+ for (const path of ["Daily/2026-09-09.md", "Monthly/Memos-2026-09.md", "Notes/backup.json", "Monthly/knomo-trash.json.bak"]) f.store.handleFileChange(path);
  await f.store.query(); assert.equal(reads, 1); assert.equal(notifications, 0);
  for (const [path, oldPath] of [[PATH], [PATH], [PATH], ["Moved.json", PATH], [PATH, "Moved.json"], ["Moved", "Monthly"], ["Monthly"]]) {
   f.store.handleFileChange(path!, oldPath);

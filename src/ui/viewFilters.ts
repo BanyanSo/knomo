@@ -1,10 +1,12 @@
 import { t } from "../i18n";
+import type { SearchDate } from "../types/search";
 import type { CatalogRecordStatsFilter } from "../types/catalogView";
 import { parseMemoCalendarDate } from "../utils/date";
 import type { TagSummary } from "../utils/tagTree";
 import { formatTimeBuoyDate } from "../utils/timeBuoyDate";
 import type { SidebarNav } from "./viewNavigation";
 import type { ResultCountSummary } from "./ResultCountSummary";
+import type { AcceptedSearch } from "./SearchSession";
 
 export type ScopeFilter =
 	| "all"
@@ -26,9 +28,12 @@ export type RecordStatsSearchFilter = CatalogRecordStatsFilter;
 
 export type RegularFilterCondition =
 	| { type: "things"; text: string }
+	| { type: "favorites"; text: string }
 	| { type: "tag"; text: string }
 	| { type: "search"; text: string; query: string }
 	| { type: "date"; text: string; filter: SearchDateFilter }
+	| { type: "input-date"; text: string }
+	| { type: "all"; text: string }
 	| { type: "record-stats"; text: string }
 	| { type: "scope"; text: string; filter: SummaryScopeFilter };
 
@@ -104,12 +109,32 @@ function getRegularFilterSummaryTemplate(conditions: RegularFilterCondition[]): 
 	return { template: key, params: { conditions: conditionText } };
 }
 
-export function getRegularFilterCopy(state: RegularFilterState, count: number | null, pending = false): RegularFilterCopy | null {
-	const conditions = getRegularFilterConditions(state);
+export function getRegularFilterCopy(state: RegularFilterState, count: number | null, pending = false,
+	search?: AcceptedSearch | null, actionsEnabled = false): RegularFilterCopy | null {
+	const query = search?.dateRange
+		? search.input.slice(0, search.dateRange.from) + search.input.slice(search.dateRange.to)
+		: search?.input ?? state.searchQuery;
+	const conditions = getRegularFilterConditions({
+		...state, ...search?.source, searchQuery: query, searchDateFilter: search ? null : state.searchDateFilter,
+	});
+	const date = search?.searchDate;
+	if (date) {
+		const label = formatSearchDate(date);
+		conditions.push({ type: "input-date", text: search.shortcut === null ? label
+			: t("search.shortcutSummary", { shortcut: getSearchDateLabel(search.shortcut), date: label }) });
+	}
 	if (conditions.length === 0) return null;
+	if (search && (date || search.input.trim()) && !conditions.some(condition => condition.type !== "search" && condition.type !== "input-date"))
+		conditions.unshift({ type: "all", text: t("nav.allNotes") });
+	const feedback = search?.dateFallback ? t("search.dateFallback") : undefined;
+	const conflict = search?.dateConflict ? t("search.dateConflict") : undefined;
+	const dateLiteral = actionsEnabled && search?.dateOrigin === "input";
 	return {
-		summary: { ...getRegularFilterSummaryTemplate(conditions), count, pending: count === null && pending },
-		emptyTitle: formatRegularFilterEmptyTitle(conditions, formatRegularFilterSummary(conditions, count ?? 0)),
+		summary: { ...getRegularFilterSummaryTemplate(conditions), count, pending: count === null && pending,
+			...(feedback || conflict ? { searchDateFeedback: { feedback, conflict } } : {}),
+			...(dateLiteral ? { dateLiteral } : {}) },
+		emptyTitle: count === 0 && (feedback || conflict || dateLiteral) ? t("search.noResults")
+			: formatRegularFilterEmptyTitle(conditions, formatRegularFilterSummary(conditions, count ?? 0)),
 	};
 }
 
@@ -119,6 +144,7 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 	}
 	const condition = conditions[0];
 	if (condition.type === "things") return t("empty.generic");
+	if (condition.type === "favorites") return t("favorite.empty.title");
 	if (condition.type === "tag") {
 		return t("filterEmpty.tag", { tag: condition.text });
 	}
@@ -128,15 +154,25 @@ export function formatRegularFilterEmptyTitle(conditions: RegularFilterCondition
 	if (condition.type === "date") {
 		return getSearchDateEmptyTitle(condition.filter);
 	}
+	if (condition.type === "input-date" || condition.type === "all") return summary;
 	if (condition.type === "record-stats") {
 		return t("recordStats.filter.empty", { label: condition.text });
 	}
 	return getScopeEmptyTitle(condition.filter);
 }
 
+function formatSearchDate(date: SearchDate): string {
+	if (date.kind === "month-day") return date.fromMonthDay === date.toMonthDay ? date.fromMonthDay
+		: t("search.dateRange", { from: date.fromMonthDay, to: date.toMonthDay });
+	const end = date.granularity === "year" ? 4 : date.granularity === "month" ? 7 : 10;
+	const from = date.fromDate.slice(0, end), to = date.toDate.slice(0, end);
+	return from === to ? from : t("search.dateRange", { from, to });
+}
+
 export function getRegularFilterConditions(state: RegularFilterState): RegularFilterCondition[] {
 	const conditions: RegularFilterCondition[] = [];
 	if (state.activeNav === "things") conditions.push({ type: "things", text: t("nav.things") });
+	if (state.activeNav === "favorites") conditions.push({ type: "favorites", text: t("favorite.title") });
 	const tag = state.activeTag?.trim() || state.activeTagKey || "";
 	if (state.activeTagKey !== null && tag.length > 0) {
 		conditions.push({ type: "tag", text: formatTagFilterText(tag) });
@@ -237,7 +273,7 @@ export function getRecordStatsSearchFilterLabel(filter: RecordStatsSearchFilter)
 	if (filter.type === "month") {
 		return t("recordStats.filter.month", { month: filter.month });
 	}
-	if (filter.type === "range") {
+	if (filter.type === "range" || filter.type === "things" || filter.type === "favorites") {
 		return t("recordStats.filter.range", {
 			startDate: filter.startDate,
 			endDate: getInclusiveEndDate(filter.endDateExclusive),
@@ -292,7 +328,7 @@ export function getRecordStatsSearchFilterKey(filter: RecordStatsSearchFilter | 
 	}
 	if (filter.type === "day") return `day:${filter.date}`;
 	if (filter.type === "month") return `month:${filter.month}`;
-	if (filter.type === "range") return `range:${filter.startDate}:${filter.endDateExclusive}`;
+	if (filter.type === "range" || filter.type === "things" || filter.type === "favorites") return `${filter.type}:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "with-tag") return `with-tag:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "no-tag") return `no-tag:${filter.startDate}:${filter.endDateExclusive}`;
 	if (filter.type === "with-image") return `with-image:${filter.startDate}:${filter.endDateExclusive}`;

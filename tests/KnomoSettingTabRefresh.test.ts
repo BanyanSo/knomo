@@ -165,7 +165,7 @@ test("重建与 Monthly 重试结果在需要处理区域消失及重绘后仍�
 	await ensureObsidianStub();
 	const { KnomoSettingTab } = await import("../src/ui/KnomoSettingTab");
 	const { Notice } = await import("obsidian"); const notices = (Notice as unknown as { messages: string[] }).messages;
-	for (const action of ["rebuild", "rebuild-incomplete", "monthly", "monthly-failed", "legacy", "legacy-partial", "legacy-failed"] as const) {
+	for (const action of ["rebuild", "rebuild-incomplete", "monthly", "monthly-failed"] as const) {
 		const dom = setupDom(); const root = dom.window.document.getElementById("settings")!;
 		const tab = Object.create(KnomoSettingTab.prototype) as InstanceType<typeof KnomoSettingTab>;
 		Object.assign(tab, { containerEl: root, settingsSession: 0, selectedTab: "record", getAttentionKinds: () => [],
@@ -173,21 +173,18 @@ test("重建与 Monthly 重试结果在需要处理区域消失及重绘后仍�
 			memoCommandService: { rebuildLocalCatalog: async () => {} },
 			catalogReadService: { getLibraryIndexes: async () => ({ complete: action !== "rebuild-incomplete", invalidated: false }) },
 			monthlyProjectionCoordinator: { run: async () => ({ failed: action === "monthly-failed" ? 1 : 0 }), getProjectionState: () => "ready" },
-			legacyTrashMigrationService: { run: async (mode: string) => { assert.equal(mode, "manual"); }, getReport: () => ({ status: action === "legacy-failed" ? "recovery_required" : "ready",
-				cleanupCandidate: action === "legacy-partial" ? { legacySystemRoot: "Old/_knomo-system" } : null, diagnostics: [] }) },
 			refreshOpenKnomoViews: async () => { throw new Error("view render unavailable"); },
 		});
 		tab.display(); const button = { setDisabled: () => {}, setButtonText: () => {} };
-		const internal = tab as unknown as { runRebuildIndex(button: object): Promise<void>; runMonthlyRetry(button: object): Promise<void>; runLegacyMigration(button: object): Promise<void>; refreshSettingTab(): void };
+		const internal = tab as unknown as { runRebuildIndex(button: object): Promise<void>; runMonthlyRetry(button: object): Promise<void>; refreshSettingTab(): void };
 		notices.length = 0;
 		if (action.startsWith("rebuild")) await internal.runRebuildIndex(button);
-		else if (action.startsWith("legacy")) await internal.runLegacyMigration(button);
 		else await internal.runMonthlyRetry(button);
 		internal.refreshSettingTab();
 		const result = root.querySelector<HTMLElement>(".knomo-setting-operation-result")!;
 		assert.equal(result.hidden, false); assert.equal(result.getAttribute("role"), "status");
 		assert.equal(result.getAttribute("aria-live"), "off", "相同结果重绘不再次播报");
-		assert.ok(result.textContent?.length); assert.equal(result.classList.contains("is-error"), ["monthly-failed", "rebuild-incomplete", "legacy-partial", "legacy-failed"].includes(action));
+		assert.ok(result.textContent?.length); assert.equal(result.classList.contains("is-error"), ["monthly-failed", "rebuild-incomplete"].includes(action));
 		assert.equal(root.querySelector<HTMLElement>(".knomo-settings-attention")?.hidden, true);
 		assert.deepEqual(notices, []); dom.window.close();
 	}

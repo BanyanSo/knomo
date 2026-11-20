@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 import type { MemoViewItem } from "../src/types/memoView";
 import type { CatalogFeatureQuery, CatalogMemoCountResult, CatalogMemoPage } from "../src/types/catalogView";
-import { createCatalogCapabilities, createResolvedMemoCapabilities } from "../src/services/MemoCapabilityModel";
+import { createCatalogCapabilities } from "../src/services/MemoCapabilityModel";
 import { KnomoViewStateController } from "../src/ui/KnomoViewStateController";
+import { catalogCoverageKey } from "../src/ui/KnomoViewStateKeys";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 
 test("移动查询保留普通列表数组及其 occurrence，接受结果只属于移动会话", async () => {
@@ -67,6 +68,154 @@ test("移动 Catalog 适配只返回本页及原始句柄，不读取或写入 V
 		controller.abort();
 		await assert.rejects(h.view.loadCatalogMobileSearchResults({}, null, controller.signal));
 	} finally { h.close(); }
+});
+
+test("移动统计钻取保留统计页，拾星只查询当前期间内仍有收藏的 Memo", async () => {
+	const h = await createHarness();
+	try {
+		const favorite = h.items[1]!;
+		const source = favorite.observationHandle.sourcePath;
+		const outside = "Daily/2026-10-26.md";
+		const resolved: string[] = [];
+		const collection = {
+			status: "ready", revision: 1, persistedCount: 2,
+			paths: () => [source, outside],
+			getDate: (path: string) => path.slice(-13, -3),
+			countAt: () => 1,
+			resolve: async (path: string) => {
+				resolved.push(path);
+				return { status: "ready", revision: favorite.observationHandle.sourceRevision,
+					bindings: new Map([["star", favorite.observationHandle]]) };
+			},
+		};
+		h.view.favoriteService = collection;
+		h.view.catalogReadService = {
+			relations: { revision: 0 },
+			getFileSourceRevision: async () => favorite.observationHandle.sourceRevision,
+			query: async (request: CatalogFeatureQuery) => {
+				h.queries.push(request);
+				return { ...h.page(), items: request.matchNone ? [] : [favorite], nextCursor: null };
+			},
+		};
+		h.search.isOpen = false;
+		h.search.searchQuery = "";
+		h.view.viewStateController.activeNav = "record-stats";
+		const dates = { startDate: "2026-10-19", endDateExclusive: "2026-10-26" };
+		h.search.searchRecordStatsFilter = { type: "favorites", ...dates };
+		h.search.isOpen = true;
+		await h.search.refreshAppliedResults();
+		assert.deepEqual(resolved, [source]);
+		assert.equal(h.queries[0]?.matchNone, true);
+		assert.equal(h.queries[1]?.fromDate, "2026-10-19");
+		assert.equal(h.queries[1]?.observationKeys?.length, 1);
+		assert.deepEqual(h.search.getDisplayedMemos().map(memo => memo.id), [favorite.key]);
+		assert.equal(h.search.getDisplayedCount(), 1);
+		assert.equal(h.view.activeNav, "record-stats");
+
+		const beforeShortcut = h.queries.length;
+		h.search.setDateFilter("week");
+		await settle();
+		assert.deepEqual(h.search.searchRecordStatsFilter, { type: "favorites", ...dates });
+		assert.equal(h.queries[beforeShortcut]?.matchNone, true, "日期快捷项仍走拾星查询");
+		const favoriteReads = [...resolved];
+
+		h.search.closePage();
+		assert.equal(h.search.searchRecordStatsFilter, null);
+		assert.equal(h.view.activeNav, "record-stats");
+		assert.equal(h.restores(), 1);
+
+		h.search.searchRecordStatsFilter = { type: "things", ...dates };
+		h.search.isOpen = true;
+		await h.search.refreshAppliedResults();
+		const query = h.queries.at(-1);
+		assert.equal(query?.hasTask, true);
+		assert.equal(query?.fromDate, "2026-10-19");
+		assert.equal(query?.toDate, "2026-10-25");
+		h.search.setDateFilter("week");
+		await settle();
+		assert.deepEqual(h.search.searchRecordStatsFilter, { type: "things", ...dates });
+		assert.equal(h.queries.at(-1)?.hasTask, true);
+		assert.deepEqual(resolved, favoriteReads);
+	} finally { h.close(); }
+});
+
+test("移动拾星统计钻取接纳新版 Catalog 后可继续分页", async () => {
+	const h = await createHarness();
+	try {
+		const source = h.items[0]!.observationHandle;
+		let revision = 7;
+		h.view.favoriteService = {
+			status: "ready", revision: 1, persistedCount: h.items.length,
+			paths: () => [source.sourcePath], getDate: () => "2026-10-19", countAt: () => h.items.length,
+			resolve: async () => ({ status: "ready", revision: source.sourceRevision,
+				bindings: new Map(h.items.map(item => [item.key, item.observationHandle])) }),
+		};
+		h.view.catalogReadService = {
+			relations: { revision: 0 },
+			getFileSourceRevision: async () => source.sourceRevision,
+			query: async (request: CatalogFeatureQuery) => {
+				h.queries.push(request);
+				const page = h.page(request.cursor != null);
+				const cursor = page.nextCursor?.catalog;
+				return { ...page, catalogRevision: revision,
+					coverage: revision === 7 ? h.coverage : { ...h.coverage, coveredFileCount: 2, totalFileCount: 2 },
+					items: request.matchNone ? [] : page.items,
+					nextCursor: !request.matchNone && cursor ? { catalog: { ...cursor, catalogRevision: revision } } : null };
+			},
+		};
+		h.search.isOpen = false;
+		h.search.searchQuery = "";
+		h.view.viewStateController.activeNav = "record-stats";
+		h.search.searchRecordStatsFilter = { type: "favorites", startDate: "2026-10-19", endDateExclusive: "2026-10-26" };
+		h.search.isOpen = true;
+		await h.search.refreshAppliedResults();
+		assert.equal(h.search.getDisplayedMemos().length, 50);
+
+		revision++;
+		await h.search.refreshAppliedResults();
+		assert.equal(h.search.session.result?.catalogRevision, revision);
+		h.search.searchVisibleCount = 50;
+		h.search.loadMore();
+		await settle();
+		assert.equal(h.queries.at(-1)?.cursor?.catalog?.catalogRevision, revision);
+		assert.equal(h.search.getDisplayedMemos().length, 51);
+		assert.equal(h.search.getDisplayedCount(), 51);
+	} finally { h.close(); }
+});
+
+test("手机主列表按文字搜索转到移动搜索框并把光标放在右引号后", async () => {
+	const h = await createHarness();
+	const dom = new JSDOM('<main><button data-search-date-action="literal"></button></main><input id="mobile"><input id="compact" hidden>');
+	try {
+		const doc = dom.window.document;
+		const input = doc.querySelector<HTMLInputElement>("#mobile")!;
+		const state: KnomoViewStateController = h.view.viewStateController;
+		state.activeNav = "things";
+		state.activeTag = "Work";
+		state.activeTagKey = "work";
+		state.setSearchQuery("memo 2026-10-19 same");
+		h.view.commitDesktopSearchResult(h.view.buildCatalogActiveQuery(true), 7, catalogCoverageKey(h.coverage), new Date());
+		h.search.isOpen = false;
+		Object.assign(h.search, { inputEl: input });
+		Object.assign(h.view, {
+			cardFlowEl: doc.querySelector("main"), compactInlineSearchInputEl: doc.querySelector("#compact"),
+			cancelPendingQuickCommand: () => {}, clearSearchDebounce: () => {}, catalogDesktopQueryRun: 0,
+		});
+		h.service.query = async request => {
+			h.queries.push(request);
+			return { ...h.page(), items: [], nextCursor: null };
+		};
+
+		await h.view.handleRootClick({ target: doc.querySelector("button") } as unknown as MouseEvent);
+		assert.equal(h.search.isOpen, true);
+		assert.equal(doc.activeElement, input);
+		assert.equal(input.value, 'memo "2026-10-19" same');
+		const caret = 'memo "2026-10-19"'.length;
+		assert.deepEqual([input.selectionStart, input.selectionEnd], [caret, caret]);
+		await settle();
+		assert.equal(h.queries.length, 1);
+		assert.deepEqual(h.search.session.result?.filter, { hasTask: true, tags: ["work"], textTerms: ["memo", "2026-10-19", "same"] });
+	} finally { h.close(); dom.window.close(); }
 });
 
 for (const invalidation of ["cancel", "context", "close"] as const) {
@@ -370,15 +519,14 @@ async function createHarness() {
 	await ensureObsidianStub();
 	const { KnomoView } = await import("../src/ui/KnomoView");
 	const { DiaryMemoParser } = await import("../src/services/DiaryMemoParser");
-	const { toCatalogMemoItem } = await import("../src/services/CatalogReadService");
+	const { toParsedCatalogMemoItem } = await import("../src/services/CatalogReadService");
 	const coverage = { kind: "complete" as const, configurationComplete: true, coveredFromDate: null,
 		pendingFileCount: 0, coveredFileCount: 1, totalFileCount: 1 };
 	const capabilities = createCatalogCapabilities(coverage);
 	const parser = new DiaryMemoParser(async bytes => createHash("sha256").update(bytes).digest("hex"));
 	const parsed = await parser.parse({ sourcePath: "Daily/2026-10-19.md", logicalDate: "2026-10-19",
 		bytes: Buffer.from("## Memos\n" + "- 09:00 memo same\n".repeat(51)) });
-	const items = parsed.observations.map(observation => toCatalogMemoItem({ kind: "observation", observation,
-		capabilities: createResolvedMemoCapabilities() }, capabilities));
+	const items = parsed.observations.map(observation => toParsedCatalogMemoItem(observation, capabilities));
 	const cursor = { catalog: { catalogRevision: 7, createdAtKey: items[49].createdAt, observationKey: items[49].key } };
 	const status = { content: "ready" as const, catalog: "complete" as const, projection: "ready" as const };
 	const lifecycle = { state: "ready" as const, persistent: true, writable: true, reason: null };

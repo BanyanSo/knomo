@@ -727,7 +727,10 @@ export function createCatalogQueryMatcher(
 }
 
 export function compareCatalogObservations(left: CatalogObservation, right: CatalogObservation): number {
-	return right.createdAtKey.localeCompare(left.createdAtKey) || right.observationKey.localeCompare(left.observationKey);
+	// 排序与 IndexedDB 的字符串键及游标比较使用同一顺序。
+	if (left.createdAtKey !== right.createdAtKey) return left.createdAtKey > right.createdAtKey ? -1 : 1;
+	if (left.observationKey === right.observationKey) return 0;
+	return left.observationKey > right.observationKey ? -1 : 1;
 }
 
 export function clampPageLimit(limit: number): number {

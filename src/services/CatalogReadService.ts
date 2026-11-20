@@ -8,7 +8,9 @@ import type {
 	CatalogStoreLifecycle,
 	ResolvedMemo,
 	ObservationHandle,
+	MemoObservation,
 } from "../types/catalog";
+import { catalogObservationKey } from "../types/catalog";
 import type {
 	CatalogFeatureCursor,
 	CatalogFeatureFilter,
@@ -26,7 +28,6 @@ import type {
 	MonthlyProjectionState,
 	CatalogTagFacet,
 } from "../types/catalogView";
-import type { LegacyMigrationStatus } from "../types/legacyMigration";
 import type { KnomoStartupBootstrapSnapshot } from "./KnomoStartupBootstrapService";
 import type { KnomoCurrentConfigStatus } from "../types/knomoConfig";
 import type { MemoViewItem } from "../types/memoView";
@@ -45,6 +46,7 @@ import {
 	createResolvedMemoCapabilities,
 } from "./MemoCapabilityModel";
 import type { CatalogChangeCursor, MemoCatalogService } from "./MemoCatalogService";
+import { buildCatalogObservation } from "./MemoCatalogService";
 import { CATALOG_OBSERVATION_READ_BATCH_LIMIT, CatalogQueryCancelledError, createCatalogCountAbortError } from "./MemoCatalogStore";
 import { getCatalogQueryKey, narrowCatalogQuery } from "./SearchMatching";
 import type { DailyRecordStats, PreparedRecordStats } from "./RecordStatsService";
@@ -59,8 +61,6 @@ export interface CatalogReadServiceOptions {
 	catalog: MemoCatalogService;
 	requestObservationScan?: () => void | Promise<void>;
 	getProjectionState?: () => MonthlyProjectionState;
-	getLegacyImportStatus?: () => LegacyMigrationStatus;
-	getLegacyCleanupPending?: () => boolean;
 	getCurrentConfigurationStatus?: () => KnomoCurrentConfigStatus;
 	getSettingsStatus?: () => KnomoSettingsLoadStatus;
 	getScanSnapshot?: () => CatalogScanSnapshot;
@@ -143,17 +143,9 @@ export class CatalogReadService {
 			// 故障提示无法读取 Catalog 状态时，按可恢复的降级状态处理。
 		}
 		let currentConfiguration: KnomoRuntimeAttentionSnapshot["currentConfiguration"] = "unavailable";
-		let legacyMigration: KnomoRuntimeAttentionSnapshot["legacyMigration"] = "pending";
-		let legacyCleanupPending = false;
 		let settings: KnomoSettingsLoadStatus = "ready";
 		try {
 			currentConfiguration = this.options.getCurrentConfigurationStatus?.() ?? "missing";
-		} catch {
-			// 保留 unavailable。
-		}
-		try {
-			legacyMigration = this.options.getLegacyImportStatus?.() ?? "idle";
-			legacyCleanupPending = this.options.getLegacyCleanupPending?.() ?? false;
 		} catch {
 			// 保留 unavailable。
 		}
@@ -167,8 +159,6 @@ export class CatalogReadService {
 			catalogLifecycle,
 			currentConfiguration,
 			monthly: this.getProjectionState(),
-			legacyMigration,
-			legacyCleanupPending,
 		};
 	}
 
@@ -482,7 +472,7 @@ export class CatalogReadService {
 	private async readMemoHandles(handles: readonly ObservationHandle[], signal?: AbortSignal): Promise<Array<CatalogMemoItem | null>> {
 		signal?.throwIfAborted();
 		if (handles.length === 0) return [];
-		const snapshot = await this.readObservationSnapshots(handles.map(handle => handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0")), signal);
+		const snapshot = await this.readObservationSnapshots(handles.map(catalogObservationKey), signal);
 		const capabilities = createCatalogCapabilities(snapshot.coverage);
 		return handles.map((handle, index) => {
 			const observation = snapshot.observations[index];
@@ -815,6 +805,11 @@ export class CatalogReadService {
 	}
 }
 
+export function toParsedCatalogMemoItem(observation: MemoObservation, capabilities: CatalogCapabilities): CatalogMemoItem {
+	return toCatalogMemoItem({ kind: "observation", observation: buildCatalogObservation(observation),
+		capabilities: createResolvedMemoCapabilities() }, capabilities);
+}
+
 export function toCatalogMemoItem(resolved: ResolvedMemo, catalogCapabilities: CatalogCapabilities): CatalogMemoItem {
 	const observation = resolved.observation as CatalogObservation;
 	return {
@@ -897,6 +892,7 @@ export function buildRecordStatsCatalogQuery(filter: CatalogRecordStatsFilter): 
 	if (filter.type === "hour") query.hour = filter.hour;
 	if (filter.type === "references") query.hasReference = true;
 	if (filter.type === "referenced") query.hasReferrers = true;
+	if (filter.type === "things") query.hasTask = true;
 	return { query, fromDate, toDate };
 }
 
@@ -907,7 +903,7 @@ function applyReferrerFilter<T extends CatalogFeatureFilter>(request: T, snapsho
 		const node = snapshot.nodes.get(key);
 		if (!node || !referrers.length || (request.fromDate !== undefined && node.logicalDate < request.fromDate)
 			|| (request.toDate !== undefined && node.logicalDate > request.toDate)) continue;
-		const observationKey = node.handle.sourcePath + "\0" + String(node.handle.startLine).padStart(10, "0");
+		const observationKey = catalogObservationKey(node.handle);
 		if (selected === null || selected.has(observationKey)) observationKeys.push(observationKey);
 	}
 	return { ...request, hasReferrers: undefined, observationKeys };

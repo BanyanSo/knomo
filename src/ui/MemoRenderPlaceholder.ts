@@ -20,7 +20,8 @@ export function makeReadonlyMemoCard(card: HTMLElement): HTMLElement {
 }
 
 // 只保存本次重绘期间的静态显示，不复用旧 occurrence 句柄或交互监听。
-export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewItem; card: HTMLElement }[]) {
+export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewItem; card: HTMLElement }[],
+	changes?: ReadonlyMap<string, MemoViewItem | null>) {
 	const selectors = [".knomo-card-content", ".knomo-source-reference-content"] as const;
 	const snapshots = new Map<string, (HTMLElement | null)[]>();
 	const key = (memo: MemoViewItem) => JSON.stringify([memo.dailyRef.path, memo.contentSnapshot]);
@@ -35,7 +36,7 @@ export function createMemoRenderPlaceholders(entries: readonly { memo: MemoViewI
 		});
 		if (sections.some(section => section !== null)) snapshots.set(key(memo), sections);
 		const region = card.querySelector<HTMLElement>(".knomo-memo-referrers");
-		if (region) referrers.set(referrerKey(memo), region);
+		if (region) referrers.set(referrerKey(changes?.get(memo.id) ?? memo), region);
 	}
 	return (memo: MemoViewItem, card: HTMLElement): void => {
 		const previousSections = snapshots.get(key(memo));

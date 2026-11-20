@@ -967,6 +967,30 @@ test("Daily 事件直接失效 Monthly，不经过 Catalog 扫描或 coverage", 
 	assert.match(fixture.replica.read(MONTHLY_PATH) ?? "", /changed directly/u);
 });
 
+test("非 Markdown 文件不写 checkpoint，Daily 改为无扩展名后移除旧投影", async (t) => {
+	const daily = "Daily/2026-08-02.md", extensionless = "Daily/2026-08-02";
+	const store = new InMemoryMemoCatalogStore();
+	const writes = t.mock.method(store, "setMeta");
+	const f = createFixture({ [daily]: "- 09:00 original memo\n", "other.md": "- 10:00 unrelated\n" },
+		undefined, { checkpointStore: store });
+	await f.coordinator.initialize();
+	const unrelated = f.replica.app.vault.getAbstractFileByPath("other.md");
+	assert.ok(unrelated instanceof TFile);
+	const before = writes.mock.callCount();
+	await invokeVaultChanged(f.coordinator, unrelated);
+	assert.equal(writes.mock.callCount(), before);
+	await f.coordinator.run(true);
+	assert.match(f.replica.read(MONTHLY_PATH)!, /original memo/u);
+
+	f.replica.remove(daily);
+	const moved = await f.replica.app.vault.create(extensionless, "- 09:00 original memo\n");
+	await (f.coordinator as unknown as { handleFileRenamed(file: TFile, oldPath: string): Promise<void> })
+		.handleFileRenamed(moved, daily);
+	await f.coordinator.run(true);
+	assert.doesNotMatch(f.replica.read(MONTHLY_PATH)!, /original memo/u);
+	assert.deepEqual(await f.inputBuilder.listDailyPeriods(), []);
+});
+
 test("Daily inventory 中的源暂不可读时保留旧 Monthly，文件事件后再收敛", async () => {
 	const missingPath = "Daily/2026-08-02.md";
 	const fixture = createFixture({

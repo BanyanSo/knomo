@@ -18,15 +18,19 @@ export class PluginDataStore {
 	}
 
 	async mutate<T>(
-		mutation: (savedData: unknown) => PluginDataMutation<T> | Promise<PluginDataMutation<T>>,
+		mutation: (savedData: unknown) => PluginDataMutation<T>,
+		prepare?: () => Promise<() => boolean>,
 	): Promise<T> {
 		return this.runWriteExclusive(async () => {
-			const savedData: unknown = await this.plugin.loadData();
-			const { nextData, result } = await mutation(savedData);
-			if (nextData !== null) {
-				await this.plugin.saveData(nextData);
+			for (;;) {
+				// 先完成异步核对。若读取期间收到源变化通知，重新核对并重新读取配置。
+				const isPrepared = prepare ? await prepare() : undefined;
+				const savedData: unknown = await this.plugin.loadData();
+				if (isPrepared && !isPrepared()) continue;
+				const { nextData, result } = mutation(savedData);
+				if (nextData !== null) await this.plugin.saveData(nextData);
+				return result;
 			}
-			return result;
 		});
 	}
 

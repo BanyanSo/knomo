@@ -20,68 +20,73 @@ export interface ShareCardSnapshot {
 	readonly sourcePath: string;
 }
 
-const markdown = new MarkdownIt({ html: true, breaks: true, linkify: false, typographer: false });
-// 只扩展宿主常用的静态语法；不执行 Markdown post processor 或第三方查询。
-markdown.inline.ruler.before("image", "share_wiki", (state, silent) => {
-	const rest = state.src.slice(state.pos);
-	const match = /^(!?)\[\[([^\]\n]+)\]\]/u.exec(rest);
-	if (!match) return false;
-	if (!silent) {
-		const token = state.push(match[1] ? "image" : "text", match[1] ? "img" : "", 0);
-		if (match[1]) {
-			const image = parseMarkdownImages(match[0])[0];
-			if (!image) throw new ShareCardError("unsupported");
-			token.attrSet("src", image.path);
-			token.content = image.altText;
-		} else {
-			const [target, ...alias] = match[2].split("|");
-			token.content = alias.length ? alias.join("|") : target;
-		}
-	}
-	state.pos += match[0].length;
-	return true;
-});
-markdown.inline.ruler.before("emphasis", "share_mark", (state, silent) => {
-	if (state.src.slice(state.pos, state.pos + 2) !== "==") return false;
-	const end = state.src.indexOf("==", state.pos + 2);
-	if (end < 0) return false;
-	if (!silent) {
-		state.push("mark_open", "mark", 1);
-		const inline = state.push("inline", "", 0);
-		inline.children = [];
-		markdown.inline.parse(state.src.slice(state.pos + 2, end), markdown, state.env, inline.children);
-		state.push("mark_close", "mark", -1);
-	}
-	state.pos = end + 2;
-	return true;
-});
+let markdown: ReturnType<typeof createShareMarkdown> | undefined;
 
-// 转义字符仍是独立 token 时检查公式，避免将普通美元文本重新解释为公式。
-markdown.core.ruler.before("text_join", "share_math", state => {
-	const check = (tokens: readonly Token[]): void => {
-		let text = "";
-		const flush = (): void => {
-			if (/\$\$|\$(?!\s)[^$\n]*\S\$/u.test(text)) throw new ShareCardError("unsupported", "math");
-			text = "";
-		};
-		const visit = (items: readonly Token[]): void => {
-			for (const token of items) {
-				if (token.type === "text" || token.type === "text_special") {
-					// 转义和实体产生的美元符号是普通字符；强调标记不切断公式区间。
-					text += token.type === "text" ? token.content : token.content.replace(/\$/gu, "＄");
-				} else if (token.type === "inline") visit(token.children ?? []);
-				else if (token.nesting === 0) { flush(); if (token.children) check(token.children); }
+function createShareMarkdown() {
+	const markdown = new MarkdownIt({ html: true, breaks: true, linkify: false, typographer: false });
+	// 只扩展宿主常用的静态语法；不执行 Markdown post processor 或第三方查询。
+	markdown.inline.ruler.before("image", "share_wiki", (state, silent) => {
+		const rest = state.src.slice(state.pos);
+		const match = /^(!?)\[\[([^\]\n]+)\]\]/u.exec(rest);
+		if (!match) return false;
+		if (!silent) {
+			const token = state.push(match[1] ? "image" : "text", match[1] ? "img" : "", 0);
+			if (match[1]) {
+				const image = parseMarkdownImages(match[0])[0];
+				if (!image) throw new ShareCardError("unsupported");
+				token.attrSet("src", image.path);
+				token.content = image.altText;
+			} else {
+				const [target, ...alias] = match[2].split("|");
+				token.content = alias.length ? alias.join("|") : target;
 			}
+		}
+		state.pos += match[0].length;
+		return true;
+	});
+	markdown.inline.ruler.before("emphasis", "share_mark", (state, silent) => {
+		if (state.src.slice(state.pos, state.pos + 2) !== "==") return false;
+		const end = state.src.indexOf("==", state.pos + 2);
+		if (end < 0) return false;
+		if (!silent) {
+			state.push("mark_open", "mark", 1);
+			const inline = state.push("inline", "", 0);
+			inline.children = [];
+			markdown.inline.parse(state.src.slice(state.pos + 2, end), markdown, state.env, inline.children);
+			state.push("mark_close", "mark", -1);
+		}
+		state.pos = end + 2;
+		return true;
+	});
+
+	// 转义字符仍是独立 token 时检查公式，避免将普通美元文本重新解释为公式。
+	markdown.core.ruler.before("text_join", "share_math", state => {
+		const check = (tokens: readonly Token[]): void => {
+			let text = "";
+			const flush = (): void => {
+				if (/\$\$|\$(?!\s)[^$\n]*\S\$/u.test(text)) throw new ShareCardError("unsupported", "math");
+				text = "";
+			};
+			const visit = (items: readonly Token[]): void => {
+				for (const token of items) {
+					if (token.type === "text" || token.type === "text_special") {
+						// 转义和实体产生的美元符号是普通字符；强调标记不切断公式区间。
+						text += token.type === "text" ? token.content : token.content.replace(/\$/gu, "＄");
+					} else if (token.type === "inline") visit(token.children ?? []);
+					else if (token.nesting === 0) { flush(); if (token.children) check(token.children); }
+				}
+			};
+			visit(tokens);
+			flush();
 		};
-		visit(tokens);
-		flush();
-	};
-	for (const token of state.tokens) if (token.children) check(token.children);
-});
+		for (const token of state.tokens) if (token.children) check(token.children);
+	});
+	return markdown;
+}
 
 export function shareCardTokens(text: string): Token[] {
 	const environment: MarkdownIt.Env = {};
-	const tokens = markdown.parse(text, environment);
+	const tokens = (markdown ??= createShareMarkdown()).parse(text, environment);
 	if (Object.keys(environment.references ?? {}).some(key => key.startsWith("^"))) throw new ShareCardError("unsupported", "footnote");
 	const check = (items: readonly Token[]): void => {
 		for (const token of items) {

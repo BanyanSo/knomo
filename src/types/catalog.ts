@@ -22,6 +22,15 @@ export interface ObservationHandle {
 	rawBlockHash: string;
 }
 
+export function sameObservationHandle(left: ObservationHandle, right: ObservationHandle): boolean {
+	return left.sourcePath === right.sourcePath && left.sourceRevision === right.sourceRevision
+		&& left.startLine === right.startLine && left.endLine === right.endLine && left.rawBlockHash === right.rawBlockHash;
+}
+
+export function catalogObservationKey(handle: Pick<ObservationHandle, "sourcePath" | "startLine">): string {
+	return handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0");
+}
+
 // 当前 raw block（LF 规范化）的临时源范围，不是永久身份或写入权限。
 export interface MemoBlockAnchor {
 	blockId: string;

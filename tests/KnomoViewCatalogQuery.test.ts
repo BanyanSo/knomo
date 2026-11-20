@@ -140,7 +140,7 @@ test("当前查询仅默认流使用近期窗口；标签、搜索、汇总筛�
 	assert.deepEqual(exact.textTerms, ["needle"]);
 	state.recordStatsSearchFilter = null;
 	state.searchQuery = " historical text ";
-	assert.deepEqual(view.buildCatalogActiveQuery(false), { textTerms: ["historical text"] });
+	assert.deepEqual(view.buildCatalogActiveQuery(false), { textTerms: ["historical", "text"] });
 	state.searchQuery = "";
 	for (const [scope, expected] of [["with-link", { hasLink: true }], ["with-image", { hasImage: true }], ["no-tag", { hasTag: false }], ["referenced", { hasReferrers: true }]] as const) {
 		state.scopeFilter = scope;

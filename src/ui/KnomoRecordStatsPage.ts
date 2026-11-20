@@ -11,6 +11,7 @@ import type {
 import { formatTagFilterText } from "./viewFilters";
 import type { CardFlowHeader } from "./KnomoCardFlowPresenter";
 import { renderKnomoActionableListSummary, renderKnomoCardFlowHeaders } from "./KnomoFeed";
+import type { RecordStatsCounts } from "./RecordStatsCountsController";
 
 export interface RenderKnomoRecordStatsPageOptions {
 	snapshot: RecordStatsSnapshot;
@@ -20,10 +21,11 @@ export interface RenderKnomoRecordStatsPageOptions {
 	canRetreat: boolean;
 	createHiddenText: (container: HTMLElement, name: string, text: string) => string;
 	pending?: { visible: boolean; blocked: boolean; headers: CardFlowHeader[] };
+	counts?: RecordStatsCounts;
 }
 
 interface MetricItem {
-	name?: string;
+	name?: "referenced" | keyof RecordStatsCounts;
 	label: string;
 	value: number | string;
 	action?: string;
@@ -80,7 +82,7 @@ function renderLoadingState(container: HTMLElement, visible: boolean): void {
 	range.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
 	const metrics = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
 	metrics.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
-	renderSkeletonGrid(metrics, 10);
+	renderSkeletonGrid(metrics, 12);
 	const hours = range.createDiv({ cls: "knomo-record-stats-skeleton-group" });
 	hours.createDiv({ cls: "knomo-record-stats-skeleton-subtitle" });
 	hours.createDiv({ cls: "knomo-record-stats-skeleton-chart" });
@@ -135,7 +137,7 @@ function renderSelectedRange(container: HTMLElement, options: RenderKnomoRecordS
 	renderViewControls(section, options.view);
 	renderRangeNavigation(section, selected, options.canRetreat, options.canAdvance);
 	renderTrendChart(section, options.view, selected, options.createHiddenText);
-	renderRangeMetrics(section, options.view, selected, options.snapshot, options.pending?.blocked ?? false);
+	renderRangeMetrics(section, selected, options);
 	renderActiveHours(section, selected, options.createHiddenText);
 	renderCommonTags(section, selected);
 }
@@ -237,9 +239,9 @@ function renderTrendChart(
 	}
 }
 
-function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selected: SelectedRecordStats, snapshot: RecordStatsSnapshot, blocked: boolean): void {
+function renderRangeMetrics(container: HTMLElement, selected: SelectedRecordStats, options: RenderKnomoRecordStatsPageOptions): void {
 	const section = container.createDiv({ cls: "knomo-record-stats-metrics-section" });
-	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: getRangeStatsTitle(view) });
+	section.createEl("h3", { cls: "knomo-record-stats-subtitle", text: getRangeStatsTitle(options.view) });
 	renderMetricGrid(section, [
 		{
 			label: t("recordStats.metric.notes"),
@@ -273,7 +275,7 @@ function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selec
 			action: "record-stats-filter-references",
 			ariaLabel: t("recordStats.action.filterReferences", { count: selected.range.referenceMemoCount }),
 		},
-		getReferencedMetric(selected, snapshot, blocked),
+		getReferencedMetric(selected, options.snapshot, options.pending?.blocked),
 		{
 			label: t("recordStats.metric.maxDailyNotes"),
 			value: selected.range.maxDailyMemoCount,
@@ -286,7 +288,35 @@ function renderRangeMetrics(container: HTMLElement, view: RecordStatsView, selec
 			action: "record-stats-filter-max-daily-words",
 			ariaLabel: t("recordStats.action.filterMaxDailyWords"),
 		},
+		...getCountMetrics(options.counts),
 	], "knomo-record-stats-range-grid");
+}
+
+function getCountMetrics(counts?: RecordStatsCounts): MetricItem[] {
+	return (["things", "favorites"] as const).map(name => {
+		const count = counts?.[name];
+		const label = t(name === "things" ? "nav.things" : "favorite.title");
+		const enabled = typeof count === "number" && count > 0;
+		return {
+			name,
+			label,
+			value: count ?? "—",
+			action: enabled ? `record-stats-filter-${name}` : undefined,
+			ariaLabel: enabled
+				? t(name === "things" ? "recordStats.action.filterThings" : "recordStats.action.filterFavorites", { count })
+				: `${label}: ${count ?? "—"}`,
+			description: count === undefined ? t("recordStats.counts.pending") : count === null
+				? t(name === "things" ? "recordStats.counts.thingsUnavailable" : "recordStats.counts.favoritesUnavailable")
+				: undefined,
+			descriptionStatus: count === null,
+		};
+	});
+}
+
+export function syncKnomoRecordStatsCounts(container: HTMLElement, counts: RecordStatsCounts): void {
+	for (const item of getCountMetrics(counts)) {
+		syncInteractiveMetric(container, item);
+	}
 }
 
 function getReferencedMetric(selected: SelectedRecordStats, snapshot: RecordStatsSnapshot, blocked = false): MetricItem {
@@ -305,13 +335,22 @@ function getReferencedMetric(selected: SelectedRecordStats, snapshot: RecordStat
 
 // 关系接续只修改这个指标，保留其它统计内容、滚动位置和当前控件。
 export function syncKnomoReferencedMetric(container: HTMLElement, selected: SelectedRecordStats, snapshot: RecordStatsSnapshot, blocked = false): void {
-	const metric = container.querySelector<HTMLElement>("[data-record-stats-metric='referenced']");
+	syncInteractiveMetric(container, getReferencedMetric(selected, snapshot, blocked));
+}
+
+function syncInteractiveMetric(container: HTMLElement, item: MetricItem): void {
+	const metric = container.querySelector<HTMLElement>(`[data-record-stats-metric='${item.name}']`);
 	if (!metric) return;
-	const item = getReferencedMetric(selected, snapshot, blocked);
 	if (item.action) { metric.dataset.action = item.action; metric.classList.add("is-interactive"); metric.removeAttribute("aria-disabled"); }
 	else { metric.removeAttribute("data-action"); metric.classList.remove("is-interactive"); if (metric.tagName === "BUTTON") metric.setAttribute("aria-disabled", "true"); }
-	if (metric.tagName === "BUTTON") metric.setAttribute("aria-label", item.ariaLabel!);
-	metric.querySelector(".knomo-record-stats-metric-value")!.textContent = typeof item.value === "number" ? formatNumber(item.value) : item.value;
+	if (metric.tagName === "BUTTON") metric.setAttribute("aria-label", item.ariaLabel ?? item.label);
+	syncMetricContents(metric, item);
+}
+
+function syncMetricContents(metric: HTMLElement, item: MetricItem): void {
+	const valueEl = metric.querySelector(".knomo-record-stats-metric-value")!;
+	const value = typeof item.value === "number" ? formatNumber(item.value) : item.value;
+	if (valueEl.textContent !== value) valueEl.textContent = value;
 	let description = metric.querySelector<HTMLElement>(".knomo-record-stats-metric-description");
 	if (item.description) {
 		description ??= metric.createDiv({ cls: "knomo-record-stats-metric-description" });
@@ -441,7 +480,7 @@ function renderMetricGrid(container: HTMLElement, items: MetricItem[], cls: stri
 	const grid = container.createDiv({ cls: `knomo-record-stats-metric-grid ${cls}` });
 	for (const item of items) {
 		const action = typeof item.value === "number" && item.value <= 0 ? null : item.action ?? null;
-		const metric = action !== null || item.name === "referenced"
+		const metric = action !== null || item.name !== undefined
 			? grid.createEl("button", {
 				cls: action ? "knomo-record-stats-metric is-interactive" : "knomo-record-stats-metric",
 				attr: {
@@ -451,7 +490,7 @@ function renderMetricGrid(container: HTMLElement, items: MetricItem[], cls: stri
 				},
 			})
 			: grid.createDiv({ cls: "knomo-record-stats-metric" });
-		if (item.name === "referenced") {
+		if (item.name !== undefined) {
 			// 保留已聚焦按钮；原生键盘／触控产生的 click 在禁用时不可继续冒泡。
 			metric.addEventListener("click", event => {
 				if (metric.getAttribute("aria-disabled") !== "true") return;

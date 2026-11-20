@@ -2,6 +2,7 @@ import type { KnomoSettings } from "../types/settings";
 import type { ShuffleDayHistoryEntry } from "./shuffleDay";
 import { isRecord } from "./object";
 import { normalizeShuffleDayHistory } from "./shuffleDay";
+import type { BeaconReference } from "../types/beacon";
 
 const SETTINGS_KEY = "settings";
 const RANDOM_REUNION_REVIEW_STATES_KEY = "randomReunionReviewStates";
@@ -54,8 +55,30 @@ function isStructuredPluginData(value: unknown): value is Record<string, unknown
 		SETTINGS_KEY in value ||
 		RANDOM_REUNION_REVIEW_STATES_KEY in value ||
 		SHUFFLE_DAY_HISTORY_KEY in value ||
+		"beacon" in value ||
+		// 仅按字段存在识别数据结构，保存时原样保留旧完成标记。
 		"legacyMigration" in value
 	);
+}
+
+export function getBeaconData(savedData: unknown): unknown {
+	return isRecord(savedData) ? savedData.beacon : undefined;
+}
+
+export function parseBeaconReference(value: unknown): BeaconReference | null {
+	if (!isRecord(value) || typeof value.sourcePath !== "string" || value.sourcePath.length === 0
+		|| !value.sourcePath.endsWith(".md") || value.sourcePath.startsWith("/")
+		|| /(?:^|\/)\.\.?(?:\/|$)|[\\:\u0000-\u001f]|\/\//u.test(value.sourcePath)
+		|| typeof value.blockId !== "string" || !/^[A-Za-z0-9-]+$/u.test(value.blockId)
+		|| typeof value.memoTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/u.test(value.memoTime)) return null;
+	return { sourcePath: value.sourcePath, blockId: value.blockId, memoTime: value.memoTime };
+}
+
+export function buildPluginDataWithBeacon(savedData: unknown, beacon: BeaconReference | undefined): Record<string, unknown> {
+	const nextData = getStructuredPluginData(savedData);
+	if (beacon === undefined) delete nextData.beacon;
+	else nextData.beacon = beacon;
+	return nextData;
 }
 
 function normalizeShuffleDayHistoryEntry(value: unknown): ShuffleDayHistoryEntry | null {
@@ -66,22 +89,4 @@ function normalizeShuffleDayHistoryEntry(value: unknown): ShuffleDayHistoryEntry
 		date: value.date,
 		shownAt: value.shownAt,
 	};
-}
-
-export interface LegacyMigrationCompletion {
-	completed: true;
-	legacySystemRoot: string;
-	sourceRevision: string;
-}
-
-export function extractLegacyMigration(savedData: unknown): LegacyMigrationCompletion | null {
-	if (!isRecord(savedData) || savedData.legacyMigration === undefined) return null;
-	const value = savedData.legacyMigration;
-	if (!isRecord(value) || value.completed !== true || typeof value.legacySystemRoot !== "string"
-		|| typeof value.sourceRevision !== "string" || !/^[a-f0-9]{64}$/u.test(value.sourceRevision)) throw new Error("Invalid legacy migration completion.");
-	return { completed: true, legacySystemRoot: value.legacySystemRoot, sourceRevision: value.sourceRevision };
-}
-
-export function buildPluginDataWithLegacyMigration(savedData: unknown, completion: LegacyMigrationCompletion): Record<string, unknown> {
-	return { ...getStructuredPluginData(savedData), legacyMigration: completion };
 }

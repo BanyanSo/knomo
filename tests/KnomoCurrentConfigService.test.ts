@@ -3,11 +3,11 @@ import test from "node:test";
 import { ensureObsidianStub } from "./helpers/obsidianStub";
 import { initializeCatalogRuntime } from "../src/services/CatalogStartup";
 
-test("正式旧插件设置直接保存为当前值并校验，设备偏好不成为迁移完成条件", async () => {
+test("旧版扁平设置可通过常规保存保留当前配置，设备偏好仍保存在本机", async () => {
 	const f = await fixture();
 	f.setSaved({ monthlyMemoFolder: "Legacy", dailyHeading: "## Old", memoTimeFormat: "HH:mm", desktopSidebarWidth: 333 });
 	await f.settings.loadSettings();
-	await f.settings.persistLegacyConfiguration();
+	await f.settings.saveSettings(f.settings.getSettings());
 	const saved = f.saved() as { settings: Record<string, unknown> };
 	assert.equal(saved.settings.monthlyMemoFolder, "Legacy");
 	assert.equal(saved.settings.dailyHeading, "## Old");
@@ -15,16 +15,15 @@ test("正式旧插件设置直接保存为当前值并校验，设备偏好不�
 	assert.equal(saved.settings.desktopSidebarWidth, undefined);
 	assert.equal(f.local().desktopSidebarWidth, 333);
 	f.setSaved({ monthlyMemoFolder: "External" });
-	await assert.rejects(() => f.settings.persistLegacyConfiguration(), /externally/u);
+	await assert.rejects(() => f.settings.saveSettings(f.settings.getSettings()), /externally/u);
 });
 
-test("Catalog 启动不等待配置、Identity/Trash/迁移；自身失败与取消仍生效", async () => {
+test("Catalog 启动不等待配置，自身失败与取消仍生效", async () => {
 	const calls: string[] = [];
 	const options = {
 		initializeCatalog: async () => { calls.push("catalog"); }, primeCatalog: async () => { calls.push("query"); },
 		initializeConfiguration: () => new Promise<void>(() => undefined), initializeMonthly: async () => { calls.push("monthly"); },
-		initializeRecovery: async () => { throw new Error("Identity/Trash unavailable"); },
-		isCancelled: () => false, onAuxiliaryError: () => { calls.push("recovery-error"); },
+		isCancelled: () => false, onAuxiliaryError: () => { calls.push("configuration-error"); },
 	};
 	assert.equal(await initializeCatalogRuntime(options), true);
 	await Promise.resolve();
@@ -34,7 +33,7 @@ test("Catalog 启动不等待配置、Identity/Trash/迁移；自身失败与取
 	assert.equal(await initializeCatalogRuntime({ ...options, isCancelled: () => true }), false);
 });
 
-test("无 config segments 时当前值可用，locale 固定，设备偏好只写本地", async () => {
+test("当前配置可用，locale 固定，设备偏好只写本地", async () => {
 	const f = await fixture();
 	await f.current.initialize();
 	assert.equal(f.current.getStatus(), "ready");
@@ -222,7 +221,6 @@ test("配置失败不阻断 Catalog prime；慢 inventory 不阻断配置启动"
 		initializeCatalog: () => inventory.promise,
 		initializeConfiguration: async () => { calls.push("configuration"); configured.resolve(); throw new Error("configuration failed"); },
 		initializeMonthly: async () => { calls.push("monthly"); },
-		initializeRecovery: async () => { calls.push("recovery"); },
 		primeCatalog: async () => { calls.push("prime"); },
 		isCancelled: () => false, onAuxiliaryError: () => { calls.push("error"); },
 	});

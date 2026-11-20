@@ -12,7 +12,7 @@ import { getCatalogQueryKey } from "../services/SearchMatching";
 import { CatalogQueryCancelledError, compareCatalogObservations } from "../services/MemoCatalogStore";
 import { SearchSession } from "./SearchSession";
 import { logContinuationFailure } from "../utils/continuationDiagnostics";
-import { buildSearchSourceScope } from "./SearchSourceScope";
+import { buildSearchSourceScope, getSearchSourceKey, type SearchSourceContext } from "./SearchSourceScope";
 import { bindSearchInput } from "./SearchInputBinding";
 import {
 	getRegularFilterCopy,
@@ -31,7 +31,7 @@ import { catalogCoverageKey } from "./KnomoViewStateKeys";
 import { renderResultCountSummary, syncResultCountSummary, type ResultCountSummary } from "./ResultCountSummary";
 
 type MobileSearchSurface = "mobile-search";
-type ThingsSearchContext = { activeNav: "things"; activeTag: string | null; activeTagKey: string | null };
+type ScopedSearchContext = { activeNav: "things" | "favorites"; activeTag: string | null; activeTagKey: string | null };
 
 export type MobileSearchPage = Omit<CatalogMemoPage, "items"> & {
 	items: MemoRecord[];
@@ -46,18 +46,23 @@ interface MobileSearchControllerOptions {
 	scheduleRenderTask?: (callback: () => void) => number;
 	cancelRenderTask?: (id: number) => void;
 	prioritizeMarkdown?: (root: HTMLElement, scrollTop: number) => void;
-	getResultStatus?: (filter: CatalogQueryFilter) => { headers: CardFlowHeader[]; complete: boolean; blocked: boolean };
-	getThingsContext?: () => ThingsSearchContext | undefined;
+	getResultStatus?: (filter: CatalogQueryFilter, result: { hasMemos: boolean; accepted: boolean }) => {
+		headers: CardFlowHeader[]; complete: boolean; blocked: boolean; loadingTitle?: string;
+	};
+	getScopedContext?: () => ScopedSearchContext | undefined;
 	getSourceScope?: () => ScopeFilter;
-	syncThingsSearch?: (query: string, date: SearchDateFilter | null) => void;
+	syncScopedSearch?: (query: string, date: SearchDateFilter | null) => void;
 	getCatalogRevision?: () => number;
+	getFavoriteQueryState?: () => { revision: number; status: "ready" | "loading" | "conflict" | "error" } | undefined;
 	getRelationRevision?: () => number;
 	getCoverageKey?: () => string;
 	getQueryContextKey?: () => string;
 	projectResults?: (memos: readonly MemoRecord[], filter: CatalogQueryFilter) => MemoRecord[];
-	hasPendingConfirmedMemos?: () => boolean;
+	hasPendingMembershipChanges?: () => boolean;
 	prepareResultsAcceptance?: () => (consume?: boolean) => void;
-	onResultsAccepted?: (page: Omit<MobileSearchPage, "items" | "nextCursor">) => void;
+	onReadingWindowChanged?: () => void;
+	matchReadingWindow?: (before: readonly MemoRecord[], after: readonly MemoRecord[]) => ReadonlyMap<string, MemoRecord | null> | undefined;
+	onResultsAccepted?: (page: Omit<MobileSearchPage, "items">) => void;
 	batchSize: number;
 	debounceMs: number;
 	getWindow: () => Window;
@@ -99,8 +104,9 @@ export class MobileSearchController {
 	private inputEl: HTMLInputElement | null = null;
 	private resultsEl: HTMLElement | null = null;
 	readonly session = new SearchSession();
-	private displayedContext: { things: ThingsSearchContext | undefined; scope: ScopeFilter; stats: RecordStatsSearchFilter | null; queryContextKey: string } | null = null;
+	private displayedQueryContextKey = "";
 	private displayedMemos: MemoRecord[] | null = null;
+	private revokedResults: { key: string; memos: Map<string, MemoRecord> } | null = null;
 	private displayedCount: number | null = null;
 	private summaryPresentation: { key: string; summary: ResultCountSummary } | null = null;
 	private pendingQueryKey: string | null = null;
@@ -120,6 +126,7 @@ export class MobileSearchController {
 		this.session.applied.shortcut = filter;
 		if (filter !== null || this.session.applied.dateOrigin === "shortcut") {
 			this.session.applied.date = null;
+			this.session.applied.dateRange = undefined;
 			this.session.applied.dateOrigin = filter === null ? null : "shortcut";
 		}
 	}
@@ -128,6 +135,7 @@ export class MobileSearchController {
 	private open = false;
 	private renderGeneration = 0;
 	private debounceTimeoutId: number | null = null;
+	private favoritePageCount = 0;
 
 	private renderTaskId: number | null = null;
 	private renderedRevisions: string[] = [];
@@ -143,6 +151,8 @@ export class MobileSearchController {
 	private renderedPending = false;
 	private readonly loadingIndicator: DelayedLoadingIndicator;
 	private pendingScrollTop: number | null = null;
+	private pendingFavoriteRevision?: number;
+	private displayedFavoriteRevision?: number;
 	private renderedCards: Array<{ memo: MemoRecord; card: HTMLElement }> = [];
 	private imageHandoff: ReadyCardImageHandoff | undefined;
 	private seedPlaceholder: ReturnType<typeof createMemoRenderPlaceholders> | null = null;
@@ -259,6 +269,16 @@ export class MobileSearchController {
 			onClose: () => this.closePage(),
 		});
 		this.options.registerDomEvent(this.resultsEl, "click", (event) => {
+			if ((event.target as Element | null)?.closest?.("[data-search-date-action]")) {
+				if (!this.canApplySearchDateAction()) return;
+				this.readInputDraft();
+				if (this.session.searchDateAsText()) {
+					this.invalidateDraft();
+					this.submitDraft();
+					this.focusInputNow();
+				}
+				return;
+			}
 			this.options.handleMarkdownInternalLinkClick(event);
 		});
 		this.options.registerDomEvent(this.resultsEl, "click", (event) => {
@@ -283,6 +303,7 @@ export class MobileSearchController {
 			if (this.layoutScrollTop !== null && this.resultsEl && Math.abs(this.resultsEl.scrollTop - this.layoutScrollTop) > 0.5) onScrollIntent();
 			this.layoutScrollTop = this.resultsEl?.scrollTop ?? null;
 			this.queueMarkdownPriority();
+			this.options.onReadingWindowChanged?.();
 		});
 	}
 
@@ -322,13 +343,13 @@ export class MobileSearchController {
 		const scrollTop = this.options.getCardFlowScrollTop();
 		this.open = false;
 		this.options.closeCardMenu();
-		if (this.options.getThingsContext?.()) {
+		if (this.options.getScopedContext?.()) {
 			this.cancelPendingRequest();
 			this.cancelRender();
 			this.clearDebounce();
 			this.session.close();
 			if (!composing) this.flushQuery();
-			this.options.syncThingsSearch?.(this.query, this.dateFilter);
+			this.options.syncScopedSearch?.(this.query, this.dateFilter);
 		} else {
 			this.resetState(true);
 		}
@@ -389,6 +410,7 @@ export class MobileSearchController {
 		this.clearDebounce();
 		this.session.close();
 		this.open = false;
+		this.revokedResults = null;
 		this.pageEl?.detach();
 		this.pageEl = null;
 		this.inputEl = null;
@@ -430,8 +452,8 @@ export class MobileSearchController {
 		this.clearDebounce();
 		if (!this.open || !this.session.submit()) { this.syncControls(); return; }
 		this.syncInput();
-		if (this.options.getThingsContext?.()) this.options.syncThingsSearch?.(this.query, this.dateFilter);
-		this.visibleCount = this.options.batchSize;
+		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
+		if (this.getDisplayedRequestKey() !== this.getViewStateKey()) this.visibleCount = this.options.batchSize;
 		void this.refreshRemoteResults(true, "view-scope-change", true);
 	}
 
@@ -443,16 +465,25 @@ export class MobileSearchController {
 
 	private syncControls(): void {
 		this.syncDateButtons();
+		if (!this.session.canApplyDateAction()) {
+			this.resultsEl?.querySelectorAll<HTMLButtonElement>("[data-search-date-action]").forEach(button => { button.disabled = true; });
+		}
+	}
+
+	private getSearchSourceContext(): SearchSourceContext {
+		const context = this.options.getScopedContext?.();
+		const stats = this.recordStatsFilter;
+		return {
+			activeNav: context?.activeNav ?? (stats?.type === "things" || stats?.type === "favorites" ? stats.type : "all"),
+			scopeFilter: this.options.getSourceScope?.() ?? "all",
+			activeTag: context?.activeTag ?? null, activeTagKey: context?.activeTagKey ?? null,
+			recordStatsSearchFilter: stats,
+		};
 	}
 
 	getAppliedFilter(): CatalogQueryFilter {
-		const context = this.options.getThingsContext?.();
-		const source = buildSearchSourceScope({
-			activeNav: context?.activeNav ?? "all", scopeFilter: this.options.getSourceScope?.() ?? "all",
-			activeTag: context?.activeTag ?? null, activeTagKey: context?.activeTagKey ?? null,
-			recordStatsSearchFilter: this.recordStatsFilter,
-		});
-		return this.session.getFilter(source);
+		const today = new Date();
+		return this.session.getFilter(buildSearchSourceScope(this.getSearchSourceContext(), today), today);
 	}
 
 	getDisplayedFilter(): CatalogQueryFilter { return this.session.result?.filter ?? this.getAppliedFilter(); }
@@ -467,10 +498,9 @@ export class MobileSearchController {
 
 	setDateFilter(filter: SearchDateFilter): void {
 		this.clearDebounce();
-		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
+		this.readInputDraft();
 		if (!this.session.toggleShortcut(filter)) { this.syncControls(); return; }
-		this.recordStatsFilter = null;
-		if (this.options.getThingsContext?.()) this.options.syncThingsSearch?.(this.query, this.dateFilter);
+		if (this.options.getScopedContext?.()) this.options.syncScopedSearch?.(this.query, this.dateFilter);
 		this.invalidateDraft();
 		this.syncInput();
 		this.visibleCount = this.options.batchSize;
@@ -485,8 +515,9 @@ export class MobileSearchController {
 		if (!preserveImages) this.clearImageCache();
 		this.clearDebounce();
 		this.session.reset();
-		this.displayedContext = null;
+		this.displayedQueryContextKey = "";
 		this.displayedMemos = null;
+		this.revokedResults = null;
 		this.acceptedWindow = null;
 		this.displayedCount = null;
 		this.summaryPresentation = null;
@@ -505,20 +536,27 @@ export class MobileSearchController {
 
 	flushQuery(): void {
 		this.clearDebounce();
-		if (this.inputEl) this.session.updateDraft(this.inputEl.value);
+		this.readInputDraft();
 		this.session.submit();
+	}
+
+	private readInputDraft(): void {
+		const input = this.inputEl;
+		if (input) this.session.updateDraft(input.value, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length);
 	}
 
 	loadMore(): void {
 		if (this.session.requestStatus === "pending" || this.getDisplayedRequestKey() !== this.getRequestKey(this.getAppliedFilter())) return;
 		if (this.acceptedResultsInvalidated
+			|| this.options.getFavoriteQueryState?.()?.revision !== this.displayedFavoriteRevision
 			|| (this.options.getCatalogRevision?.() ?? this.session.result?.catalogRevision) !== this.session.result?.catalogRevision
 			|| (this.options.getCoverageKey?.() ?? this.session.result?.coverageKey) !== this.session.result?.coverageKey) {
 			void this.refreshAppliedResults();
 			return;
 		}
-		this.visibleCount += this.options.batchSize;
 		const matchedCount = this.getMatchedMemos().length;
+		if (this.cursor?.favorites) this.visibleCount = Math.min(this.visibleCount, matchedCount);
+		this.visibleCount += this.options.batchSize;
 		if (this.visibleCount >= matchedCount && this.cursor !== null) {
 			void this.refreshRemoteResults(false);
 			return;
@@ -531,10 +569,11 @@ export class MobileSearchController {
 		if (!this.hasSearchConditions()) {
 			this.cancelPendingRequest();
 			this.displayedMemos = null;
+			this.revokedResults = null;
 			this.acceptedWindow = null;
 			this.displayedCount = null;
 			this.summaryPresentation = null;
-			this.displayedContext = null;
+			this.displayedQueryContextKey = "";
 			this.session.result = null;
 			this.session.requestStatus = "idle";
 			this.pendingQueryKey = null;
@@ -542,21 +581,37 @@ export class MobileSearchController {
 			this.renderResults(changeIntent);
 			return;
 		}
-		const context = { things: this.options.getThingsContext?.(), scope: this.options.getSourceScope?.() ?? "all", stats: this.recordStatsFilter,
-			queryContextKey: this.options.getQueryContextKey?.() ?? "" };
-		const filter = this.getAppliedFilter();
+		const queryContextKey = this.options.getQueryContextKey?.() ?? "";
+		const source = this.getSearchSourceContext(), today = new Date();
+		const sourceFilter = buildSearchSourceScope(source, today);
+		const filter = this.session.getFilter(sourceFilter, today);
 		const key = this.getRequestKey(filter);
+		const favorites = this.options.getFavoriteQueryState?.();
+		const favoriteRevision = favorites?.revision, favoriteStatus = favorites?.status;
+		const favoriteCurrent = () => favoriteRevision === this.options.getFavoriteQueryState?.()?.revision;
+		if (reset && changeIntent === "content-change" && favorites && this.pendingQueryKey === key
+			&& this.pendingFavoriteRevision === favoriteRevision) return;
 		const revision = this.options.getCatalogRevision?.() ?? 0;
 		const coverageKey = this.options.getCoverageKey?.() ?? "";
-		if (deduplicate && (this.pendingQueryKey === key || (this.session.requestStatus === "ready" && !this.acceptedResultsInvalidated
-			&& this.getDisplayedRequestKey() === key && this.session.result?.catalogRevision === revision
-			&& this.session.result.coverageKey === coverageKey))) {
+		const accepted = this.session.result;
+		if (deduplicate && this.session.requestStatus === "ready" && !this.acceptedResultsInvalidated
+			&& this.getDisplayedRequestKey() === key && accepted?.catalogRevision === revision && accepted.coverageKey === coverageKey
+			&& this.isAcceptedSourceCurrent()
+			&& (this.displayedCount !== null || !this.options.countRemoteResults || !!favorites)) {
+			this.displayedQueryContextKey = queryContextKey;
+			this.session.commitResult(filter, revision, coverageKey, {
+				source, sourceFilter, today, favoriteRevision, relationRevision: accepted.relationRevision,
+			});
+			this.summaryPresentation = null;
 			this.syncControls();
-			if (this.session.requestStatus === "ready") this.renderResults("content-change");
+			this.renderResults("content-change", false, true);
 			return;
 		}
 		const sameScope = this.getDisplayedRequestKey() === key;
-		if (!sameScope || changeIntent === "view-scope-change") this.acceptedWindow = null;
+		if (!sameScope || changeIntent === "view-scope-change") {
+			this.acceptedWindow = null;
+			this.revokedResults = null;
+		}
 		if (this.acceptedResultsInvalidated || !sameScope) reset = true;
 		const windowSize = reset && sameScope ? Math.max(Math.min(this.visibleCount, this.displayedMemos?.length ?? 0),
 			this.acceptedWindow?.key === key ? this.acceptedWindow.count : 0) : 0;
@@ -575,6 +630,7 @@ export class MobileSearchController {
 		this.queryController = controller;
 		const run = ++this.queryRun, version = this.session.version;
 		this.pendingQueryKey = key;
+		this.pendingFavoriteRevision = reset ? favoriteRevision : undefined;
 		this.session.beginRequest();
 		this.queryError = null;
 		this.syncControls();
@@ -584,7 +640,7 @@ export class MobileSearchController {
 			let page = await this.options.loadRemoteResults(filter, reset ? null : this.cursor, controller.signal);
 			controller.signal.throwIfAborted();
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-			if (key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
+			if (!favoriteCurrent() || key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
 			const pageCoverageKey = catalogCoverageKey(page.coverage);
 			const currentCoverageKey = this.options.getCoverageKey?.() ?? coverageKey;
 			const currentRevision = this.options.getCatalogRevision?.() ?? revision;
@@ -596,12 +652,16 @@ export class MobileSearchController {
 				if (filter.hasReferrers) throw new CatalogDiscoveryInvalidatedError();
 				throw new Error(t("search.statusChanged"));
 			}
-			if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+			if (!page.favoriteProgress && page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 			const staged = new Map(page.items.map(memo => [getMemoRenderKey(memo), memo]));
 			const pageRevision = page.catalogRevision;
 			const relationsVersion = page.nextCursor?.relationsVersion ?? this.options.getRelationRevision?.();
+			if (filter.hasReferrers && this.options.getRelationRevision && this.options.getRelationRevision() !== relationsVersion)
+				throw new CatalogDiscoveryInvalidatedError();
 			const seenCursors = new Set<string>();
-			while (staged.size < windowSize && page.nextCursor !== null && page.status.relations?.complete !== false) {
+			const pageBudget = page.favoriteProgress ? Math.max(1, this.favoritePageCount) : Infinity;
+			let pages = 1;
+			while (staged.size < windowSize && pages < pageBudget && page.nextCursor !== null && page.status.relations?.complete !== false) {
 				const cursor = page.nextCursor;
 				const cursorKey = JSON.stringify(cursor);
 				if (seenCursors.has(cursorKey)) throw new Error(t("search.statusChanged"));
@@ -609,7 +669,7 @@ export class MobileSearchController {
 				page = await this.options.loadRemoteResults(filter, cursor, controller.signal);
 				controller.signal.throwIfAborted();
 				if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-				if (key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
+				if (!favoriteCurrent() || key !== this.getRequestKey(this.getAppliedFilter())) throw new CatalogQueryCancelledError();
 				if (page.invalidated || page.catalogRevision !== pageRevision || catalogCoverageKey(page.coverage) !== pageCoverageKey
 					|| currentRevision !== (this.options.getCatalogRevision?.() ?? revision)
 					|| currentCoverageKey !== (this.options.getCoverageKey?.() ?? coverageKey)
@@ -619,8 +679,18 @@ export class MobileSearchController {
 					if (filter.hasReferrers) throw new CatalogDiscoveryInvalidatedError();
 					throw new Error(t("search.statusChanged"));
 				}
-				if (page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
+				if (!page.favoriteProgress && page.readState === "storage_unavailable") throw new Error(t("empty.cardFlowFailed"));
 				for (const memo of page.items) staged.set(getMemoRenderKey(memo), memo);
+				pages++;
+			}
+			if (reset && sameScope && this.displayedMemos?.length && page.favoriteProgress
+				&& (favoriteStatus === "loading" || page.favoriteProgress.waiting > 0)) {
+				// 直到收藏来源和索引对齐，当前显示与摘要继续使用已接纳的结果。
+				acceptResults?.(false);
+				this.invalidateAcceptedResults();
+				this.session.requestStatus = "ready";
+				this.options.onResultsAccepted?.(page);
+				return;
 			}
 			if (filter.hasReferrers && page.status.relations?.complete === false && this.displayedMemos?.length
 				&& this.getDisplayedRequestKey() === key) {
@@ -638,23 +708,32 @@ export class MobileSearchController {
 				.map(memo => [getMemoRenderKey(memo), memo])).values()];
 			const projected = this.options.projectResults?.(items, filter) ?? [...items];
 			acceptResults?.();
-			this.displayedContext = context;
+			this.displayedQueryContextKey = queryContextKey;
 			this.displayedMemos = projected;
+			this.displayedFavoriteRevision = favoriteRevision;
+			this.revokedResults = null;
 			this.cursor = page.nextCursor;
-			if (reset) {
+			this.favoritePageCount = page.favoriteProgress ? (reset ? 0 : this.favoritePageCount) + pages : 0;
+			if (page.favoriteProgress) {
 				this.acceptedResultsInvalidated = false;
-				this.displayedCount = !this.options.hasPendingConfirmedMemos?.()
+				this.displayedCount = page.nextCursor === null && page.favoriteProgress.waiting === 0 && page.favoriteProgress.missing === 0
+					? page.favoriteProgress.matched : null;
+			} else if (reset) {
+				this.acceptedResultsInvalidated = false;
+				this.displayedCount = !this.options.hasPendingMembershipChanges?.()
 					&& page.status.relations?.complete !== false
 					&& page.nextCursor === null && isQueryCovered(page.coverage, filter) ? this.displayedMemos.length : null;
 			}
-			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey);
+			this.session.commitResult(filter, page.catalogRevision, pageCoverageKey, {
+				source, sourceFilter, today, favoriteRevision, relationRevision: filter.hasReferrers ? relationsVersion : undefined,
+			});
 			this.rememberAcceptedWindow();
 			this.options.onResultsAccepted?.(page);
-			if (reset && this.displayedCount === null && !this.options.hasPendingConfirmedMemos?.()
-				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, context.queryContextKey);
+			if (reset && !page.favoriteProgress && this.displayedCount === null && !this.options.hasPendingMembershipChanges?.()
+				&& isQueryCovered(page.coverage, filter)) void this.refreshCount(filter, queryContextKey);
 		} catch (error) {
 			if (!this.open || run !== this.queryRun || version !== this.session.version) return;
-			if (controller.signal.aborted || error instanceof CatalogQueryCancelledError) {
+			if (controller.signal.aborted || !favoriteCurrent() || error instanceof CatalogQueryCancelledError) {
 				this.session.requestStatus = this.session.result === null ? "idle" : "ready";
 				return;
 			}
@@ -674,6 +753,13 @@ export class MobileSearchController {
 					}
 					return;
 				}
+			}
+			if (error instanceof CatalogDiscoveryInvalidatedError) {
+				// 索引接续时保留已读窗口，等下一次索引通知再读取新结果。
+				this.cancelCount();
+				this.invalidateAcceptedResults();
+				this.session.requestStatus = this.session.result === null ? "idle" : "ready";
+				return;
 			}
 			logContinuationFailure("mobile-search", "query", error, run);
 			this.displayedCount = null;
@@ -727,16 +813,49 @@ export class MobileSearchController {
 	private rememberAcceptedWindow(): void {
 		const key = this.getDisplayedRequestKey();
 		if (key !== null && !this.acceptedResultsInvalidated) {
-			this.acceptedWindow = { key, count: Math.min(this.visibleCount, this.displayedMemos?.length ?? 0) };
+			this.acceptedWindow = { key, count: this.displayedMemos?.length ?? 0 };
 		}
 	}
 
 	suspendLoadingFeedback(): void { this.loadingIndicator.clear(); }
 
 	getDisplayedMemos(): readonly MemoRecord[] { return this.displayedMemos ?? []; }
+	forEachRenderedCard(action: (card: HTMLElement, memo: MemoRecord) => void): void {
+		for (const { card, memo } of this.renderedCards) action(card, memo);
+	}
+	getRevokedMemos(): MemoRecord[] {
+		return this.open && this.revokedResults?.key === this.getViewStateKey() ? [...this.revokedResults.memos.values()] : [];
+	}
 	getDisplayedCount(): number | null {
-		return this.getDisplayedFilter().hasReferrers && (this.acceptedResultsInvalidated || this.options.getResultStatus?.(this.getDisplayedFilter()).complete === false)
-			? null : this.displayedCount;
+		const favorites = this.options.getFavoriteQueryState?.();
+		if (favorites && (favorites.status !== "ready" || favorites.revision !== this.displayedFavoriteRevision || this.acceptedResultsInvalidated)) return null;
+		if (this.displayedCount === 0 || this.getDisplayedFilter().hasReferrers) {
+			if (this.acceptedResultsInvalidated || this.getResultStatus(!!this.displayedMemos?.length)?.complete === false) return null;
+		}
+		return this.displayedCount;
+	}
+
+	private isAcceptedSourceCurrent(): boolean {
+		const result = this.session.result;
+		const favorites = this.options.getFavoriteQueryState?.();
+		return (!favorites || (favorites.status === "ready" && favorites.revision === result?.favoriteRevision))
+			&& (!result?.filter.hasReferrers || this.options.getRelationRevision?.() === result.relationRevision)
+			&& this.getResultStatus(!!this.displayedMemos?.length)?.complete !== false;
+	}
+
+	private canApplySearchDateAction(): boolean {
+		const result = this.session.result;
+		return this.open && !!result?.searchDate && !!result.source && this.session.canApplyDateAction(result) && !this.acceptedResultsInvalidated
+			&& this.getDisplayedRequestKey() === this.getViewStateKey() && this.isAcceptedSourceCurrent()
+			&& getSearchSourceKey(result.source) === getSearchSourceKey(this.getSearchSourceContext())
+			&& (this.options.getCatalogRevision?.() ?? result.catalogRevision) === result.catalogRevision
+			&& (this.options.getCoverageKey?.() ?? result.coverageKey) === result.coverageKey
+			&& !this.options.hasPendingMembershipChanges?.();
+	}
+	private getResultStatus(hasMemos: boolean) {
+		return this.options.getResultStatus?.(this.getDisplayedFilter(), {
+			hasMemos, accepted: this.session.result !== null && !this.acceptedResultsInvalidated,
+		});
 	}
 
 	private getRequestKey(filter: CatalogQueryFilter): string {
@@ -744,7 +863,7 @@ export class MobileSearchController {
 	}
 
 	private getDisplayedRequestKey(): string | null {
-		return this.session.result === null ? null : JSON.stringify([this.session.result.key, this.displayedContext?.queryContextKey ?? ""]);
+		return this.session.result === null ? null : JSON.stringify([this.session.result.key, this.displayedQueryContextKey]);
 	}
 
 	private cancelCount(): void {
@@ -769,7 +888,7 @@ export class MobileSearchController {
 			&& (this.options.getCatalogRevision?.() ?? catalogRevision) === catalogRevision
 			&& (this.options.getCoverageKey?.() ?? coverageKey) === coverageKey
 			&& (!filter.hasReferrers || this.options.getRelationRevision?.() === relationsVersion)
-			&& !this.options.hasPendingConfirmedMemos?.();
+			&& !this.options.hasPendingMembershipChanges?.();
 		try {
 			// 计数属于查询快照，首屏之后启动，同一查询的后续分页不能使它失效。
 			await new Promise<void>(resolve => {
@@ -813,15 +932,33 @@ export class MobileSearchController {
 		}
 	}
 
-	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false, readonlyPresentation = false): void {
+	applyMemoChanges(changes: ReadonlyMap<string, MemoRecord | null>, inserted: readonly MemoRecord[] = [], created = false,
+		readonlyPresentation = false, anchorOnly = false): void {
 		if (!this.open || !this.hasSearchConditions()) return;
 		this.rememberAcceptedWindow();
 		const hadPendingQuery = this.pendingQueryKey !== null;
 		const resumeSearch = this.pendingQueryKey !== null && this.pendingQueryKey !== this.getDisplayedRequestKey();
-		this.cancelPendingRequest();
+		this.cancelPendingRequest(anchorOnly);
 		// 保存成功不证明新记录已被引用，已有成员由 changes 原位更新。
 		const filter = this.getDisplayedFilter();
 		const additions = filter.hasReferrers ? [] : this.options.filterMemos(inserted, filter);
+		if (readonlyPresentation) {
+			const key = this.getDisplayedRequestKey();
+			if (key !== null) {
+				if (this.revokedResults?.key !== key) this.revokedResults = { key, memos: new Map() };
+				for (const memo of this.displayedMemos ?? []) {
+					if (changes.get(memo.id) === null) this.revokedResults.memos.set(memo.id, memo);
+				}
+			}
+		} else if (anchorOnly) {
+			// 只使用已撤权窗口中有明确替换关系的成员，包括已读但尚未挂载的卡片。
+			for (const memo of this.getRevokedMemos()) {
+				if (!changes.has(memo.id)) continue;
+				this.revokedResults!.memos.delete(memo.id);
+				const current = changes.get(memo.id);
+				if (current) additions.push(current);
+			}
+		}
 		if (additions.length === 0 && !this.displayedMemos?.some(memo => changes.has(memo.id))) {
 			if (!hadPendingQuery) return;
 			this.session.requestStatus = this.session.result === null ? "idle" : "ready";
@@ -839,7 +976,7 @@ export class MobileSearchController {
 				? compareCatalogObservations(left.catalog.observation, right.catalog.observation)
 				: right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
 		const current = this.getMatchedMemos();
-		if (!areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
+		if (!anchorOnly && !areMemoListsUnchanged(previous, current, changes)) this.displayedCount = created && this.displayedCount !== null
 			? this.displayedCount + current.length - previous.length : null;
 		if (this.session.result) this.session.requestStatus = "ready";
 		if (readonlyPresentation && this.resultsEl) {
@@ -858,12 +995,12 @@ export class MobileSearchController {
 			focus.restore([]); focus.dispose();
 			this.syncControls(); return;
 		}
-		if (!this.reconcileCommittedCards(changes)) this.renderResults("content-change", true);
+		if (!this.reconcileCommittedCards(changes, anchorOnly)) this.renderResults("content-change", true);
 		// 提交通知使旧查询失效后，继续完成用户已提交的新搜索条件。
 		if (resumeSearch) void this.refreshAppliedResults();
 	}
 
-	private reconcileCommittedCards(changes: ReadonlyMap<string, MemoRecord | null>): boolean {
+	private reconcileCommittedCards(changes: ReadonlyMap<string, MemoRecord | null>, anchorOnly: boolean): boolean {
 		const root = this.resultsEl;
 		if (!root || this.options.isVisible?.() === false || this.renderedCards.length === 0
 			|| this.renderedViewKey !== this.getViewStateKey()) return false;
@@ -889,7 +1026,8 @@ export class MobileSearchController {
 		for (const [index, memo] of visible.entries()) {
 			const previous = retained.get(memo.id);
 			let card = previous?.card;
-			if (previous && previous.card.getAttribute("data-knomo-readonly-transition") === null && canRetainMemoCard(previous.memo, memo)) {
+			if (previous && previous.card.getAttribute("data-knomo-readonly-transition") === null
+				&& canRetainMemoCard(previous.memo, memo, anchorOnly && changes.has(previous.memo.id))) {
 				rebindMemoCard(previous.card, memo);
 				this.options.retainCard?.(previous.card, memo);
 			} else if (!previous || previous.memo !== memo) {
@@ -942,17 +1080,20 @@ export class MobileSearchController {
 		const memos = this.getMatchedMemos();
 		const visibleMemos = memos.slice(0, this.visibleCount);
 		const revisions = visibleMemos.map(memo => JSON.stringify([getMemoRenderRevision(memo), memo.catalog?.observationHandle]));
-		const readStatus = this.options.getResultStatus?.(this.getDisplayedFilter());
-		const waiting = this.hasSearchConditions() && this.session.requestStatus === "pending" && !readStatus?.blocked
+		const readStatus = this.getResultStatus(visibleMemos.length > 0);
+		const loadingTitle = this.queryError === null ? readStatus?.loadingTitle : undefined;
+		const noResult = this.session.result === null || (loadingTitle !== undefined && memos.length === 0);
+		const waiting = this.hasSearchConditions() && (this.session.requestStatus === "pending" || (loadingTitle !== undefined && noResult)) && !readStatus?.blocked
 			&& this.options.isVisible?.() !== false && this.options.getDocument().visibilityState !== "hidden";
-		const visible = waiting && this.session.result === null ? this.loadingIndicator.pending(viewKey, () => {
+		const visible = waiting && noResult ? this.loadingIndicator.pending(viewKey, () => {
 			if (this.open && this.options.isVisible?.() !== false && this.options.getDocument().visibilityState !== "hidden") this.renderResults("content-change", true, true);
 			else this.loadingIndicator.clear();
 		}) : false;
-		if (!waiting || this.session.result !== null) this.loadingIndicator.clear();
+		if (!waiting || !noResult) this.loadingIndicator.clear();
 		const headers: CardFlowHeader[] = this.queryError !== null ? [] : [...(readStatus?.headers ?? [])];
 		const relationQuery = !!this.getDisplayedFilter().hasReferrers;
-		if (!relationQuery && this.session.result !== null && readStatus?.complete === false && headers.length === 0) {
+		if (loadingTitle !== undefined && visible) headers.push({ type: "summary", text: loadingTitle, feedback: true });
+		if (loadingTitle === undefined && !relationQuery && this.session.result !== null && readStatus?.complete === false && headers.length === 0) {
 			headers.push({ type: "summary", text: t("catalog.incompleteResults") });
 		}
 		const status = this.queryError !== null ? (memos.length > 0 ? t("feedback.refreshFailed") : this.queryError)
@@ -961,7 +1102,7 @@ export class MobileSearchController {
 		this.syncControls();
 		if (sameView && this.readonlyPresentationKey === viewKey && this.acceptedResultsInvalidated) {
 			const reading = new MemoReadingPosition(resultsEl, this.renderedCards);
-			this.syncResultFeedback(resultsEl, status ?? t("feedback.sourceChanged"), headers, relationQuery, statusChanged);
+			this.syncResultFeedback(resultsEl, status, headers, relationQuery, statusChanged);
 			reading.restore(this.renderedCards);
 			this.layoutScrollTop = resultsEl.scrollTop;
 			return;
@@ -993,6 +1134,7 @@ export class MobileSearchController {
 		const previousByNode = new Map(sameResults ? this.renderedCards.map(item => [item.card, item]) : []);
 		const previousCards = sameResults ? Array.from(resultsEl.children).flatMap(child => previousByNode.get(child as HTMLElement) ?? []) : [];
 		const reconcile = previousCards.length > 0;
+		const readingChanges = reconcile ? this.options.matchReadingWindow?.(previousCards.map(item => item.memo), visibleMemos) : undefined;
 		const reading = reconcile ? new MemoReadingPosition(resultsEl, previousCards) : null;
 		const focus = reconcile ? new MemoFocusRestore(resultsEl, previousCards, true) : null;
 		const previousByKey = new Map(previousCards.map(item => [getMemoRenderKey(item.memo), item]));
@@ -1012,7 +1154,7 @@ export class MobileSearchController {
 		};
 		const startIndex = canAppend ? this.renderedRevisions.length : 0;
 		if (reconcile) {
-			const seed = createMemoRenderPlaceholders(previousCards);
+			const seed = createMemoRenderPlaceholders(previousCards, readingChanges);
 			this.cancelRender();
 			this.renderedCards = previousCards;
 			this.seedPlaceholder = seed;
@@ -1047,7 +1189,7 @@ export class MobileSearchController {
 		};
 		const restoreReading = () => {
 			if (!canAppend && scrollRevision === this.scrollRevision && this.pendingScrollTop !== null && !this.session.draft.composing) {
-				reading?.restore(mountedCards(), undefined, true);
+				reading?.restore(mountedCards(), readingChanges, true);
 			}
 			this.layoutScrollTop = resultsEl.scrollTop;
 		};
@@ -1057,7 +1199,7 @@ export class MobileSearchController {
 			this.seedPlaceholder = null;
 			this.imageHandoff = undefined;
 			if (!canAppend && target !== null && scrollRevision === this.scrollRevision && !this.session.draft.composing) {
-				reading?.restore(mountedCards(), undefined, true);
+				reading?.restore(mountedCards(), readingChanges, true);
 				const position = reading ? resultsEl.scrollTop : target;
 				this.options.restoreElementScrollTop(resultsEl, Math.max(0, position), () =>
 					this.open && this.options.isVisible?.() !== false && !this.session.draft.composing
@@ -1066,6 +1208,7 @@ export class MobileSearchController {
 			this.layoutScrollTop = resultsEl.scrollTop;
 			if (!this.session.draft.composing) focus?.restore(mountedCards());
 			focus?.dispose(); this.focusRestore = null;
+			this.options.onReadingWindowChanged?.();
 		};
 		if (reconcile && visibleMemos.length === 0) {
 			for (const card of departing) release(card);
@@ -1081,12 +1224,17 @@ export class MobileSearchController {
 			return;
 		}
 		this.syncResultFeedback(resultsEl, status, headers, relationQuery, statusChanged);
-		if (this.session.result === null && this.queryError === null) {
-			if (waiting) renderKnomoLoadingPlaceholder(resultsEl, visible, !relationQuery);
+		if (noResult && this.queryError === null) {
+			if (waiting && loadingTitle === undefined) renderKnomoLoadingPlaceholder(resultsEl, visible, !relationQuery);
 			completeRender();
 			return;
 		}
-		if (memos.length === 0 && status) { this.syncResultMetadata(0, 0, false, false); completeRender(); return; }
+		if (memos.length === 0 && status) {
+			const canContinueFavorites = !!this.cursor?.favorites && !readStatus?.blocked && this.queryError === null && !this.acceptedResultsInvalidated;
+			this.syncResultMetadata(0, 0, canContinueFavorites, this.getDisplayedCount() === 0);
+			completeRender();
+			return;
+		}
 		if (memos.length === 0 && relationQuery && (readStatus?.complete === false || this.acceptedResultsInvalidated)) { completeRender(); return; }
 		if (memos.length === 0) {
 			const confirmedEmpty = this.getDisplayedCount() === 0 && !this.acceptedResultsInvalidated;
@@ -1201,21 +1349,24 @@ export class MobileSearchController {
 		if (!results) return;
 		const total = matchedCount === 0 && this.acceptedResultsInvalidated ? null : this.getDisplayedCount();
 		const key = this.getDisplayedRequestKey();
-		const blocked = this.queryError !== null || this.options.getResultStatus?.(this.getDisplayedFilter()).blocked === true;
+		const blocked = this.queryError !== null || this.getResultStatus(visibleCount > 0)?.blocked === true;
 		const pending = !blocked && ((this.countController !== null && key === this.getRequestKey(this.getAppliedFilter()))
 			|| (this.queryController !== null && this.pendingQueryKey === key));
-		if (blocked || (total === 0 && !this.acceptedResultsInvalidated)) this.summaryPresentation = null;
+		const copy = key === null ? null : this.getResultCopy(total, pending);
+		if (total === null && this.summaryPresentation?.summary.count === 0) this.summaryPresentation = null;
+		if (blocked || (total === 0 && !copy?.summary?.searchDateFeedback && !copy?.summary?.dateLiteral)) this.summaryPresentation = null;
 		else if (updateSummary && key !== null) {
 			// 只允许同范围已展示的真实数量接续；新范围首批结果立即建立固定摘要。
 			const retained = this.summaryPresentation?.key === key && this.summaryPresentation.summary.count !== null;
 			if (total !== null || !retained) {
-				const summary = this.getResultCopy(total, pending)?.summary;
+				const summary = copy?.summary;
 				this.summaryPresentation = summary ? { key, summary } : null;
 			}
 		}
 		// 快照只接续已接纳范围的摘要，不能参与分页或当前查询计数。
-		const summary = this.summaryPresentation?.key === key ? this.summaryPresentation.summary
+		const snapshot = this.summaryPresentation?.key === key ? this.summaryPresentation.summary
 			: matchedCount > 0 && key !== null ? this.getResultCopy(null, pending)?.summary : null;
+		const summary = snapshot?.dateLiteral && !this.canApplySearchDateAction() ? { ...snapshot, dateLiteral: false } : snapshot;
 		if (!summary) results.find(".knomo-search-result-count")?.remove();
 		else {
 			const previous = results.find(".knomo-search-result-count");
@@ -1246,8 +1397,9 @@ export class MobileSearchController {
 	}
 
 	getStateKey(): string {
-		return JSON.stringify([this.open, this.getViewStateKey(), this.getVisibleMemos().map(getMemoRenderRevision),
-			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.acceptedResultsInvalidated, this.options.getResultStatus?.(this.getDisplayedFilter())]);
+		const visibleMemos = this.getVisibleMemos();
+		return JSON.stringify([this.open, this.getViewStateKey(), visibleMemos.map(getMemoRenderRevision),
+			this.session.result?.catalogRevision, this.session.result?.coverageKey, this.acceptedResultsInvalidated, this.getResultStatus(visibleMemos.length > 0)]);
 	}
 
 	getViewStateKey(): string { return this.getRequestKey(this.getAppliedFilter()); }
@@ -1267,22 +1419,20 @@ export class MobileSearchController {
 	}
 
 	private hasSearchConditions(): boolean {
-		return !!this.options.getThingsContext?.() || (this.options.getSourceScope?.() ?? "all") !== "all"
+		return !!this.options.getScopedContext?.() || (this.options.getSourceScope?.() ?? "all") !== "all"
 			|| this.session.hasConditions || this.recordStatsFilter !== null;
 	}
 
 	private getResultCopy(count: number | null, pending = false) {
-		const query = (this.session.result?.input ?? this.query).trim();
-		const date = this.session.result ? this.session.result.shortcut : this.dateFilter;
-		const context = this.displayedContext ? this.displayedContext.things : this.options.getThingsContext?.();
-		const scope = this.displayedContext ? this.displayedContext.scope : this.options.getSourceScope?.() ?? "all";
-		const stats = this.displayedContext ? this.displayedContext.stats : this.recordStatsFilter;
-		return context || scope !== "all" ? getRegularFilterCopy({
-			activeNav: "all", activeTag: null, activeTagKey: null, ...context,
-			searchQuery: query, searchDateFilter: date, recordStatsSearchFilter: stats, scopeFilter: scope,
-		}, count, pending) : {
-			summary: getMobileSearchResultSummary(query, date, count, pending, stats),
-			emptyTitle: formatMobileSearchEmptyTitle(query, date, stats),
+		const result = this.session.result;
+		const source = result?.source ?? this.getSearchSourceContext();
+		const query = (result?.input ?? this.query).trim();
+		const date = result ? result.shortcut : this.dateFilter;
+		return result || source.activeNav !== "all" || source.scopeFilter !== "all" ? getRegularFilterCopy({
+			...source, searchQuery: query, searchDateFilter: date,
+		}, count, pending, result, this.canApplySearchDateAction()) : {
+			summary: getMobileSearchResultSummary(query, date, count, pending, source.recordStatsSearchFilter),
+			emptyTitle: formatMobileSearchEmptyTitle(query, date, source.recordStatsSearchFilter),
 		};
 	}
 

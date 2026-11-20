@@ -1,4 +1,4 @@
-import type { MemoObservation, ObservationHandle } from "../types/catalog";
+import { catalogObservationKey, sameObservationHandle, type MemoObservation, type ObservationHandle } from "../types/catalog";
 import type { PreparedDailyWrite } from "./DailyMemoWriteGateway";
 import { getDailyBodyBoundary } from "./DiaryMemoParser";
 import { sha256Bytes } from "../utils/sha256";
@@ -12,11 +12,14 @@ export interface DailyMemoPresentationChange {
 	replacements: ReadonlyArray<{ before: ObservationHandle; after: ObservationHandle | null }>;
 	inserted: ObservationHandle | null;
 	changed: ObservationHandle | null;
+	// 原生引用锚点只刷新已有成员，不把目标补入其它视图的查询窗口。
+	updateExistingOnly?: true;
 }
 
 export interface ConfirmedDailyMemoPresentation {
 	change: DailyMemoPresentationChange;
 	observations: readonly MemoObservation[];
+	blockAnchors?: Readonly<Record<string, number>>;
 	bodyProof?: DailyMemoBodyProof;
 }
 
@@ -32,7 +35,7 @@ export async function createDailyMemoBodyProof(content: string): Promise<DailyMe
 }
 
 export function observationHandleKey(handle: Pick<ObservationHandle, "sourcePath" | "sourceRevision" | "startLine">): string {
-	return handle.sourcePath + "\0" + String(handle.startLine).padStart(10, "0") + "\0" + handle.sourceRevision;
+	return catalogObservationKey(handle) + "\0" + handle.sourceRevision;
 }
 
 export function buildDailyMemoPresentationChange(
@@ -66,8 +69,7 @@ export function buildDailyMemoPresentationChange(
 }
 
 function sameObservation(memo: MemoObservation, other: MemoObservation | null): boolean {
-	return other !== null && memo.sourcePath === other.sourcePath && memo.sourceRevision === other.sourceRevision
-		&& memo.startLine === other.startLine && memo.endLine === other.endLine && memo.rawBlockHash === other.rawBlockHash;
+	return other !== null && sameObservationHandle(memo, other);
 }
 
 function toHandleOrNull(memo: MemoObservation | null): ObservationHandle | null {
